@@ -13,7 +13,7 @@
       "request": "launch",
       "preLaunchTask": "build-desktop",
       // If you have changed target frameworks, make sure to update the program path.
-      "program": "${workspaceFolder}/Scone/bin/Debug/net9.0-desktop/Scone.dll",
+      "program": "${workspaceFolder}/Scone/bin/Debug/net10.0-desktop/Scone.dll",
       "args": [],
       "launchSettingsProfile": "Scone (Desktop)",
       "env": {
