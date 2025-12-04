@@ -58,7 +58,7 @@ jobs:
         run: dotnet publish ./Scone/Scone.csproj -c Release -r win-${{ matrix.arch }} /p:PublishProfile=win-${{ matrix.arch }}
 
       - name: Upload Windows ${{ matrix.arch }} Artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: scone-windows-${{ matrix.arch }}
           path: ./Scone/bin/Release/net10.0-desktop/win-${{ matrix.arch }}/publish/
@@ -85,7 +85,7 @@ jobs:
         run: dotnet publish ./Scone/Scone.csproj -c Release -r osx-${{ matrix.arch }} --self-contained
 
       - name: Upload macOS ${{ matrix.arch }} Artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: scone-macos-${{ matrix.arch }}
           path: ./Scone/bin/Release/net10.0-desktop/osx-${{ matrix.arch }}/publish/
@@ -112,7 +112,7 @@ jobs:
         run: dotnet publish ./Scone/Scone.csproj -c Release -r linux-${{ matrix.arch }} --self-contained
 
       - name: Upload Linux ${{ matrix.arch }} Artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: scone-linux-${{ matrix.arch }}
           path: ./Scone/bin/Release/net10.0-desktop/linux-${{ matrix.arch }}/publish/
