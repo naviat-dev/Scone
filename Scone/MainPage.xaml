@@ -1,17 +1,227 @@
 ﻿<Page x:Class="Scone.MainPage"
-      xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-      xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-      xmlns:local="using:Scone"
-      Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
-  <ScrollViewer IsTabStop="True">
-    <Grid>
-      <StackPanel
-        HorizontalAlignment="Center"
-        VerticalAlignment="Center">
-        <TextBlock AutomationProperties.AutomationId="HelloTextBlock"
-          Text="Hello Uno Platform!"
-          HorizontalAlignment="Center" />
-      </StackPanel>
-    </Grid>
-  </ScrollViewer>
+	  xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+	  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+	  xmlns:local="using:Scone">
+
+	<Grid>
+		<Grid.RowDefinitions>
+			<RowDefinition Height="Auto"/>
+			<RowDefinition Height="*"/>
+		</Grid.RowDefinitions>
+
+		<!-- Navbar -->
+		<Grid Grid.Row="0"
+				Background="{ThemeResource SystemControlAcrylicElementBrush}"
+				Padding="16,12">
+			<Grid.ColumnDefinitions>
+				<ColumnDefinition Width="Auto"/>
+				<ColumnDefinition Width="Auto"/>
+				<ColumnDefinition Width="*"/>
+			</Grid.ColumnDefinitions>
+
+			<!-- Logo Placeholder -->
+			<Border Grid.Column="0"
+					Width="40"
+					Height="40"
+					Background="{ThemeResource SystemAccentColor}"
+					CornerRadius="8"
+					Margin="0,0,12,0">
+				<TextBlock Text="S"
+						   FontSize="24"
+						   FontWeight="Bold"
+						   Foreground="White"
+						   HorizontalAlignment="Center"
+						   VerticalAlignment="Center"/>
+			</Border>
+
+			<!-- App Name -->
+			<TextBlock Grid.Column="1"
+					   Text="Scone"
+					   FontSize="24"
+					   FontWeight="SemiBold"
+					   VerticalAlignment="Center"/>
+		</Grid>
+
+		<!-- Main Content Area -->
+		<Grid Grid.Row="1">
+			<!-- Tasks List -->
+			<ScrollViewer Padding="16"
+					Margin="0,0,0,80">
+				<StackPanel Spacing="12">
+					<!-- Header -->
+					<TextBlock Text="Download Tasks"
+							   FontSize="20"
+							   FontWeight="SemiBold"
+							   Margin="0,8,0,16"/>
+
+					<!-- Task List -->
+					<ItemsControl x:Name="TasksList">
+						<ItemsControl.ItemTemplate>
+							<DataTemplate>
+								<Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+										BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+										BorderThickness="1"
+										CornerRadius="8"
+										Padding="16"
+										Margin="0,0,0,12">
+									<Grid>
+										<Grid.RowDefinitions>
+											<RowDefinition Height="Auto"/>
+											<RowDefinition Height="Auto"/>
+											<RowDefinition Height="Auto"/>
+										</Grid.RowDefinitions>
+
+										<!-- Task Name -->
+										<TextBlock Grid.Row="0"
+												   Text="{Binding TaskName}"
+												   FontSize="16"
+												   FontWeight="SemiBold"
+												   Margin="0,0,0,8"/>
+
+										<!-- Task Path -->
+										<TextBlock Grid.Row="1"
+												   Text="{Binding TaskPath}"
+												   FontSize="12"
+												   Opacity="0.7"
+												   Margin="0,0,0,8"
+												   TextTrimming="CharacterEllipsis"/>
+
+										<!-- Progress Bar and Status -->
+										<Grid Grid.Row="2">
+											<Grid.ColumnDefinitions>
+												<ColumnDefinition Width="*"/>
+												<ColumnDefinition Width="Auto"/>
+											</Grid.ColumnDefinitions>
+
+											<ProgressBar Grid.Column="0"
+														 Value="{Binding Progress}"
+														 Maximum="100"
+														 Height="8"
+														 VerticalAlignment="Center"
+														 Margin="0,0,12,0"/>
+
+											<TextBlock Grid.Column="1"
+													   Text="{Binding ProgressText}"
+													   FontSize="12"
+													   Opacity="0.7"
+													   VerticalAlignment="Center"/>
+										</Grid>
+									</Grid>
+								</Border>
+							</DataTemplate>
+						</ItemsControl.ItemTemplate>
+					</ItemsControl>
+
+					<!-- Empty State -->
+					<StackPanel x:Name="EmptyState"
+								HorizontalAlignment="Center"
+								VerticalAlignment="Center"
+								Margin="0,60,0,0"
+								Spacing="12">
+						<TextBlock Text="No active downloads"
+								   FontSize="18"
+								   Opacity="0.5"
+								   HorizontalAlignment="Center"/>
+						<TextBlock Text="Click the + button to add a new task"
+								   FontSize="14"
+								   Opacity="0.4"
+								   HorizontalAlignment="Center"/>
+					</StackPanel>
+				</StackPanel>
+			</ScrollViewer>
+
+			<!-- Floating Action Button (Bottom Left) -->
+			<Button x:Name="AddTaskButton"
+					Click="AddTaskButton_Click"
+					Width="56"
+					Height="56"
+					CornerRadius="28"
+					Background="{ThemeResource SystemAccentColor}"
+					HorizontalAlignment="Left"
+					VerticalAlignment="Bottom"
+					Margin="24,0,0,24"
+					Padding="0"
+					Shadow="{ThemeResource ThemeShadow}">
+				<FontIcon Glyph="&#xE710;"
+						  FontSize="24"
+						  Foreground="White"/>
+			</Button>
+		</Grid>
+
+		<!-- Add Task Dialog Overlay -->
+		<Grid x:Name="AddTaskOverlay"
+			  Grid.RowSpan="2"
+			  Background="#AA000000"
+			  Visibility="Collapsed">
+			<Border Background="{ThemeResource AcrylicBackgroundFillColorDefaultBrush}"
+					BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+					BorderThickness="1"
+					CornerRadius="12"
+					Padding="24"
+					MaxWidth="500"
+					HorizontalAlignment="Center"
+					VerticalAlignment="Center"
+					Shadow="{ThemeResource ThemeShadow}">
+				<StackPanel Spacing="16">
+					<!-- Dialog Title -->
+					<TextBlock Text="Add New Download Task"
+							   FontSize="20"
+							   FontWeight="SemiBold"/>
+
+					<!-- Folder Path Input -->
+					<StackPanel Spacing="8">
+						<TextBlock Text="Folder Path"
+								   FontSize="14"
+								   FontWeight="SemiBold"/>
+						<Grid>
+							<Grid.ColumnDefinitions>
+								<ColumnDefinition Width="*"/>
+								<ColumnDefinition Width="Auto"/>
+							</Grid.ColumnDefinitions>
+
+							<TextBox x:Name="FolderPathInput"
+									 Grid.Column="0"
+									 PlaceholderText="Enter folder path or browse..."
+									 Margin="0,0,8,0"/>
+
+							<Button Grid.Column="1"
+									Content="Browse"
+									Click="BrowseButton_Click"
+									MinWidth="80"/>
+						</Grid>
+					</StackPanel>
+
+					<!-- Task Name Input (Optional) -->
+					<StackPanel Spacing="8">
+						<TextBlock Text="Task Name (Optional)"
+								   FontSize="14"
+								   FontWeight="SemiBold"/>
+						<TextBox x:Name="TaskNameInput"
+								 PlaceholderText="Auto-generated from path if empty"/>
+					</StackPanel>
+
+					<!-- Action Buttons -->
+					<Grid Margin="0,8,0,0">
+						<Grid.ColumnDefinitions>
+							<ColumnDefinition Width="*"/>
+							<ColumnDefinition Width="*"/>
+						</Grid.ColumnDefinitions>
+
+						<Button Grid.Column="0"
+								Content="Cancel"
+								Click="CancelTaskButton_Click"
+								HorizontalAlignment="Stretch"
+								Margin="0,0,8,0"/>
+
+						<Button Grid.Column="1"
+								Content="Add Task"
+								Click="ConfirmTaskButton_Click"
+								Style="{StaticResource AccentButtonStyle}"
+								HorizontalAlignment="Stretch"
+								Margin="8,0,0,0"/>
+					</Grid>
+				</StackPanel>
+			</Border>
+		</Grid>
+	</Grid>
 </Page>
