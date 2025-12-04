@@ -7,4 +7,7 @@
   -->
   <ItemGroup>
   </ItemGroup>
+  <ItemGroup>
+    <PackageVersion Include="SharpGLTF.Toolkit" Version="1.0.5" />
+  </ItemGroup>
 </Project>

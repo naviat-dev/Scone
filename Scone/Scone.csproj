@@ -26,5 +26,8 @@
 			SkiaRenderer;
 		</UnoFeatures>
 	</PropertyGroup>
+	<ItemGroup>
+	  <PackageReference Include="SharpGLTF.Toolkit" />
+	</ItemGroup>
 
 </Project>
