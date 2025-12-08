@@ -12,31 +12,6 @@ public sealed partial class MainPage : Page
 		InitializeComponent();
 		TasksList.ItemsSource = tasks;
 		UpdateEmptyState();
-
-		// Add some sample tasks for demonstration
-		AddSampleTasks();
-	}
-
-	private void AddSampleTasks()
-	{
-		// Sample tasks - remove this method once you have real functionality
-		tasks.Add(new DownloadTask
-		{
-			TaskName = "Sample Project 1",
-			TaskPath = @"C:\Users\Example\Documents\Project1",
-			Progress = 45,
-			ProgressText = "45%"
-		});
-
-		tasks.Add(new DownloadTask
-		{
-			TaskName = "Sample Project 2",
-			TaskPath = @"C:\Users\Example\Downloads\LargeFolder",
-			Progress = 78,
-			ProgressText = "78%"
-		});
-
-		UpdateEmptyState();
 	}
 
 	private void AddTaskButton_Click(object sender, RoutedEventArgs e)
@@ -48,16 +23,16 @@ public sealed partial class MainPage : Page
 
 	private async void BrowseButton_Click(object sender, RoutedEventArgs e)
 	{
-        FolderPicker folderPicker = new()
+		FolderPicker folderPicker = new()
 
-        {
-            SuggestedStartLocation = PickerLocationId.DocumentsLibrary
-        };
-        folderPicker.FileTypeFilter.Add("*");
+		{
+			SuggestedStartLocation = PickerLocationId.DocumentsLibrary
+		};
+		folderPicker.FileTypeFilter.Add("*");
 
 		// Get the current window's handle
 		nint hwnd = WindowNative.GetWindowHandle(App.MainWindow);
-        InitializeWithWindow.Initialize(folderPicker, hwnd);
+		InitializeWithWindow.Initialize(folderPicker, hwnd);
 
 		StorageFolder folder = await folderPicker.PickSingleFolderAsync();
 		if (folder != null)
@@ -104,7 +79,7 @@ public sealed partial class MainPage : Page
 
 		// Add the new task
 		DownloadTask newTask = new()
-        {
+		{
 			TaskName = taskName,
 			TaskPath = folderPath,
 			Progress = 0,
@@ -131,7 +106,7 @@ public sealed partial class MainPage : Page
 	private async void ShowErrorDialog(string message)
 	{
 		ContentDialog dialog = new()
-        {
+		{
 			Title = "Error",
 			Content = message,
 			CloseButtonText = "OK",
@@ -147,16 +122,7 @@ public sealed partial class MainPage : Page
 		// This simulates progress for demonstration
 		await Task.Run(async () =>
 		{
-			for (int i = 0; i <= 100; i += 5)
-			{
-				await Task.Delay(500); // Simulate work
-
-				DispatcherQueue.TryEnqueue(() =>
-				{
-					task.Progress = i;
-					task.ProgressText = $"{i}%";
-				});
-			}
+			task._converter.ConvertScenery(task.TaskPath, App.AppConfig.OutputDirectory!);
 		});
 	}
 }
@@ -166,6 +132,8 @@ public class DownloadTask : INotifyPropertyChanged
 {
 	private string _taskName = string.Empty;
 	private string _taskPath = string.Empty;
+	public readonly SceneryConverter _converter = new();
+	private string _taskStatus = "";
 	private double _progress;
 	private string _progressText = "0%";
 

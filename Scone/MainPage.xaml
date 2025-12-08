@@ -16,6 +16,7 @@
 			<Grid.ColumnDefinitions>
 				<ColumnDefinition Width="Auto"/>
 				<ColumnDefinition Width="Auto"/>
+				<ColumnDefinition Width="Auto"/>
 				<ColumnDefinition Width="*"/>
 			</Grid.ColumnDefinitions>
 
@@ -118,7 +119,7 @@
 								VerticalAlignment="Center"
 								Margin="0,60,0,0"
 								Spacing="12">
-						<TextBlock Text="No active downloads"
+						<TextBlock Text="No active tasks"
 								   FontSize="18"
 								   Opacity="0.5"
 								   HorizontalAlignment="Center"/>
@@ -164,13 +165,13 @@
 					Shadow="{ThemeResource ThemeShadow}">
 				<StackPanel Spacing="16">
 					<!-- Dialog Title -->
-					<TextBlock Text="Add New Download Task"
+					<TextBlock Text="Convert New Scenery Folder"
 							   FontSize="20"
 							   FontWeight="SemiBold"/>
 
 					<!-- Folder Path Input -->
 					<StackPanel Spacing="8">
-						<TextBlock Text="Folder Path"
+						<TextBlock Text="Scenery Folder Path"
 								   FontSize="14"
 								   FontWeight="SemiBold"/>
 						<Grid>
