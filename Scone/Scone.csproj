@@ -27,6 +27,7 @@
 		</UnoFeatures>
 	</PropertyGroup>
 	<ItemGroup>
+	  <PackageReference Include="geometry3Sharp" />
 	  <PackageReference Include="Newtonsoft.Json" />
 	  <PackageReference Include="SharpGLTF.Toolkit" />
 	</ItemGroup>
