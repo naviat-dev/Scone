@@ -1,6 +1,4 @@
 using System.IO.Compression;
-using System.Text;
-using System.Text.RegularExpressions;
 using g3;
 
 namespace Scone;
@@ -231,72 +229,46 @@ public static class BtgParser
 
 public class Terrain
 {
-	private static readonly double[,] LatitudeIndex = { { 89, 12 }, { 86, 4 }, { 83, 2 }, { 76, 1 }, { 62, 0.5 }, { 22, 0.25 }, { 0, 0.125 } };
-	private static readonly HttpClientHandler handler = new() { ServerCertificateCustomValidationCallback = (message, cert, chain, errors) => true };
-	private static readonly HttpClient client = new(handler);
-	private static Dictionary<int, TileKey> tileCache = [];
+	private static readonly Dictionary<int, TileModel> TileCache = [];
 	private const double Wgs84A = 6_378_137.0;
 	private const double Wgs84E2 = 6.69437999014e-3;
 
 	public static double GetElevation(double latitude, double longitude)
 	{
-		int index = GetTileIndex(latitude, longitude);
-		string lonHemi = longitude >= 0 ? "e" : "w";
-		string latHemi = latitude >= 0 ? "n" : "s";
-		string terrainDir = $"Terrain/{lonHemi}{Math.Abs(Math.Floor(longitude / 10)) * 10:000}{latHemi}{Math.Abs(Math.Floor(latitude / 10)) * 10:00}/{lonHemi}{Math.Abs(Math.Floor(longitude)):000}{latHemi}{Math.Abs(Math.Floor(latitude)):00}";
-		string urlTopLevel = $"https://terramaster.flightgear.org/terrasync/ws3/{terrainDir}";
-		double elevation = 0;
-		try
+		if (Math.Abs(latitude) > 90 || Math.Abs(longitude) > 180)
 		{
-			if (!tileCache.ContainsKey(index))
-			{
-				byte[] stgData = client.GetByteArrayAsync($"{urlTopLevel}/{index}.stg").Result;
-				MatchCollection matches = new Regex(@"OBJECT (.+\.btg)", RegexOptions.Multiline).Matches(Encoding.UTF8.GetString(stgData));
-				Console.WriteLine($"Found {matches.Count} BTG files in index {index}");
-				List<BtgParseResult> meshes = [];
-				foreach (Match match in matches)
-				{
-					byte[] btgGzData = client.GetByteArrayAsync($"{urlTopLevel}/{match.Groups[1].Value}.gz").Result;
-					using MemoryStream compressedStream = new(btgGzData);
-					using GZipStream gzipStream = new(compressedStream, CompressionMode.Decompress);
-					using MemoryStream decompressedStream = new();
-					gzipStream.CopyTo(decompressedStream);
-					decompressedStream.ToArray();
-					byte[] btgData = decompressedStream.ToArray();
-					meshes.Add(BtgParser.Parse(btgData));
-				}
-				tileCache[index] = new TileKey()
-				{
-					Index = index,
-					Timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
-					Locked = false,
-					Meshes = meshes
-				};
-			}
-			tileCache[index].Locked = true;
-			foreach (BtgParseResult mesh in tileCache[index].Meshes)
-			{
-				double sinLat = Math.Sin(latitude * Math.PI / 180.0);
-				double cosLat = Math.Cos(latitude * Math.PI / 180.0);
-				double sinLon = Math.Sin(longitude * Math.PI / 180.0);
-				double cosLon = Math.Cos(longitude * Math.PI / 180.0);
-				double n = Wgs84A / Math.Sqrt(1 - Wgs84E2 * sinLat * sinLat);
-				double x = n * cosLat * cosLon;
-				double y = n * cosLat * sinLon;
-				double z = n * (1 - Wgs84E2) * sinLat;
-				Vector3d ecef = new(x, y, z);
-				Vector3d center = mesh.BoundingSphereCenter ?? Vector3d.Zero;
-				Vector3d queryPoint = ecef - center + new Vector3d(0, 0, 10000);
-				Console.WriteLine($"Query Point: {queryPoint}");
-				elevation = BtgRaycast.RaycastZ(mesh.Mesh, queryPoint);
-			}
+			Console.WriteLine("Latitude or longitude out of range");
+			return 0;
 		}
-		catch (AggregateException e)
+
+		TileInfo tile = GetTileInfo(latitude, longitude);
+		if (TileCache.TryGetValue(tile.Index, out TileModel cached))
 		{
-			Console.WriteLine($"Error fetching BTG data from {$"{urlTopLevel}/{index}.stg"}: {e.Message}");
+			return SampleAltitude(cached, latitude, longitude);
 		}
-		Console.WriteLine($"Elevation: {elevation} meters");
-		return 0 /* elevation */;
+
+		string? terrainRoot = App.AppConfig.TerraSyncTerrainPath;
+		if (string.IsNullOrWhiteSpace(terrainRoot))
+		{
+			Console.WriteLine("TerraSyncTerrainPath is not set. Cannot read BTG locally.");
+			return 0;
+		}
+
+		string gzPath = Path.Combine(terrainRoot, tile.RelativePath);
+		string btgPath = Path.Combine(terrainRoot, tile.RelativePath.Replace(".btg.gz", ".btg"));
+
+		byte[]? btgData = ReadBtgData(gzPath, btgPath);
+		if (btgData == null)
+		{
+			Console.WriteLine($"BTG file not found for tile {tile.Index}: {gzPath}");
+			return 0;
+		}
+
+		BtgParseResult parsed = BtgParser.Parse(btgData);
+		TileModel model = BuildTileModel(parsed);
+		TileCache[tile.Index] = model;
+
+		return SampleAltitude(model, latitude, longitude);
 	}
 
 	public static int GetTileIndex(double lat, double lon)
@@ -306,24 +278,7 @@ public class Terrain
 			Console.WriteLine("Latitude or longitude out of range");
 			return 0;
 		}
-		else
-		{
-			double lookup = Math.Abs(lat);
-			double tileWidth = 0;
-			for (int i = 0; i < LatitudeIndex.Length; i++)
-			{
-				if (lookup >= LatitudeIndex[i, 0])
-				{
-					tileWidth = LatitudeIndex[i, 1];
-					break;
-				}
-			}
-			int baseX = (int)Math.Floor(Math.Floor(lon / tileWidth) * tileWidth);
-			int x = (int)Math.Floor((lon - baseX) / tileWidth);
-			int baseY = (int)Math.Floor(lat);
-			int y = (int)Math.Truncate((lat - baseY) * 8);
-			return ((baseX + 180) << 14) + ((baseY + 90) << 6) + (y << 3) + x;
-		}
+		return GetTileInfo(lat, lon).Index;
 	}
 
 	public static (double lat, double lon) GetLatLon(int tileIndex)
@@ -336,16 +291,7 @@ public class Terrain
 		int baseX = (tileIndex >> 14) - 180; // remaining bits, then subtract 180
 
 		// Determine the tileWidth for this latitude band
-		double lookup = Math.Abs(baseY);
-		double tileWidth = 0;
-		for (int i = 0; i < LatitudeIndex.Length; i++)
-		{
-			if (lookup >= LatitudeIndex[i, 0])
-			{
-				tileWidth = LatitudeIndex[i, 1];
-				break;
-			}
-		}
+		double tileWidth = GetTileWidth(baseY);
 
 		// Reconstruct the coordinates (reverse of GetTileIndex coordinate calculation)
 		double lat = baseY + y / 8.0;
@@ -354,11 +300,201 @@ public class Terrain
 		return (lat, lon);
 	}
 
-	private class TileKey
+	private static TileInfo GetTileInfo(double lat, double lon)
 	{
-		public int Index;
-		public long Timestamp;
-		public bool Locked;
-		public List<BtgParseResult> Meshes;
+		int baseY = (int)Math.Floor(lat);
+		int y = (int)Math.Floor((lat - baseY) * 8);
+		double tileWidth = GetTileWidth(baseY);
+
+		int baseX = (int)Math.Floor(Math.Floor(lon / tileWidth) * tileWidth);
+		int x = (int)Math.Floor((lon - baseX) / tileWidth);
+
+		int tileId = ((baseX + 180) << 14) + ((baseY + 90) << 6) + (y << 3) + x;
+		string dir10 = $"{FormatLon(Math.Floor(baseX / 10.0) * 10)}{FormatLat(Math.Floor(baseY / 10.0) * 10)}";
+		string dir1 = $"{FormatLon(baseX)}{FormatLat(baseY)}";
+		string relPath = Path.Combine(dir10, dir1, $"{tileId}.btg.gz");
+
+		return new TileInfo(tileId, relPath, baseX, baseY, x, y, tileWidth);
 	}
+
+	private static double GetTileWidth(int baseY)
+	{
+		double absLat = Math.Abs(baseY);
+		if (absLat >= 89) return 360.0;
+		if (absLat >= 88) return 8.0;
+		if (absLat >= 86) return 4.0;
+		if (absLat >= 83) return 2.0;
+		if (absLat >= 76) return 1.0;
+		if (absLat >= 62) return 0.5;
+		if (absLat >= 22) return 0.25;
+		return 0.125;
+	}
+
+	private static string FormatLon(double deg)
+	{
+		string hemi = deg >= 0 ? "e" : "w";
+		return $"{hemi}{Math.Abs((int)deg):000}";
+	}
+
+	private static string FormatLat(double deg)
+	{
+		string hemi = deg >= 0 ? "n" : "s";
+		return $"{hemi}{Math.Abs((int)deg):00}";
+	}
+
+	private static byte[]? ReadBtgData(string gzPath, string btgPath)
+	{
+		if (File.Exists(gzPath))
+		{
+			using FileStream fs = new(gzPath, FileMode.Open, FileAccess.Read);
+			using GZipStream gzip = new(fs, CompressionMode.Decompress);
+			using MemoryStream ms = new();
+			gzip.CopyTo(ms);
+			return ms.ToArray();
+		}
+
+		if (File.Exists(btgPath))
+		{
+			return File.ReadAllBytes(btgPath);
+		}
+
+		return null;
+	}
+
+	private static TileModel BuildTileModel(BtgParseResult parsed)
+	{
+		DMesh3 mesh = parsed.Mesh;
+		Vector3d center = parsed.BoundingSphereCenter ?? Vector3d.Zero;
+
+		LlaVertex?[] vertices = new LlaVertex?[mesh.MaxVertexID];
+		for (int vid = 0; vid < mesh.MaxVertexID; vid++)
+		{
+			if (!mesh.IsVertex(vid)) continue;
+			Vector3d rel = mesh.GetVertex(vid);
+			Vector3d abs = center + rel;
+			LlaVertex lla = EcefToLla(abs.x, abs.y, abs.z);
+			vertices[vid] = lla;
+		}
+
+		List<TriangleModel> triangles = [];
+		for (int tid = 0; tid < mesh.MaxTriangleID; tid++)
+		{
+			if (!mesh.IsTriangle(tid)) continue;
+			Index3i tri = mesh.GetTriangle(tid);
+			if (tri.a < 0 || tri.b < 0 || tri.c < 0) continue;
+			if (tri.a >= vertices.Length || tri.b >= vertices.Length || tri.c >= vertices.Length) continue;
+			LlaVertex? v1 = vertices[tri.a];
+			LlaVertex? v2 = vertices[tri.b];
+			LlaVertex? v3 = vertices[tri.c];
+			if (v1 == null || v2 == null || v3 == null) continue;
+
+			double minLat = Math.Min(v1.Value.Lat, Math.Min(v2.Value.Lat, v3.Value.Lat));
+			double maxLat = Math.Max(v1.Value.Lat, Math.Max(v2.Value.Lat, v3.Value.Lat));
+			double minLon = Math.Min(v1.Value.Lon, Math.Min(v2.Value.Lon, v3.Value.Lon));
+			double maxLon = Math.Max(v1.Value.Lon, Math.Max(v2.Value.Lon, v3.Value.Lon));
+			triangles.Add(new TriangleModel(tri.a, tri.b, tri.c, minLat, maxLat, minLon, maxLon));
+		}
+
+		return new TileModel(vertices, triangles);
+	}
+
+	private static double SampleAltitude(TileModel model, double lat, double lon)
+	{
+		double? nearest = null;
+		double nearestDist = double.MaxValue;
+
+		foreach (TriangleModel tri in model.Triangles)
+		{
+			if (lat < tri.MinLat || lat > tri.MaxLat || lon < tri.MinLon || lon > tri.MaxLon)
+			{
+				continue;
+			}
+
+			LlaVertex v1 = model.Vertices[tri.A]!.Value;
+			LlaVertex v2 = model.Vertices[tri.B]!.Value;
+			LlaVertex v3 = model.Vertices[tri.C]!.Value;
+
+			if (TryBarycentric(lon, lat, v1.Lon, v1.Lat, v2.Lon, v2.Lat, v3.Lon, v3.Lat, out double u, out double v, out double w))
+			{
+				return (u * v1.Alt) + (v * v2.Alt) + (w * v3.Alt);
+			}
+		}
+
+		for (int i = 0; i < model.Vertices.Length; i++)
+		{
+			if (model.Vertices[i] == null) continue;
+			LlaVertex v = model.Vertices[i]!.Value;
+			double dx = lon - v.Lon;
+			double dy = lat - v.Lat;
+			double dist = (dx * dx) + (dy * dy);
+			if (dist < nearestDist)
+			{
+				nearestDist = dist;
+				nearest = v.Alt;
+			}
+		}
+
+		return nearest ?? 0;
+	}
+
+	private static bool TryBarycentric(
+		double px,
+		double py,
+		double ax,
+		double ay,
+		double bx,
+		double by,
+		double cx,
+		double cy,
+		out double u,
+		out double v,
+		out double w)
+	{
+		double v0x = bx - ax;
+		double v0y = by - ay;
+		double v1x = cx - ax;
+		double v1y = cy - ay;
+		double v2x = px - ax;
+		double v2y = py - ay;
+
+		double d00 = v0x * v0x + v0y * v0y;
+		double d01 = v0x * v1x + v0y * v1y;
+		double d11 = v1x * v1x + v1y * v1y;
+		double d20 = v2x * v0x + v2y * v0y;
+		double d21 = v2x * v1x + v2y * v1y;
+
+		double denom = d00 * d11 - d01 * d01;
+		if (Math.Abs(denom) < 1e-12)
+		{
+			u = v = w = 0;
+			return false;
+		}
+
+		v = (d11 * d20 - d01 * d21) / denom;
+		w = (d00 * d21 - d01 * d20) / denom;
+		u = 1 - v - w;
+		return u >= -1e-6 && v >= -1e-6 && w >= -1e-6;
+	}
+
+	private static LlaVertex EcefToLla(double x, double y, double z)
+	{
+		double a = Wgs84A;
+		double e2 = Wgs84E2;
+		double b = a * Math.Sqrt(1 - e2);
+		double ep2 = (a * a - b * b) / (b * b);
+		double p = Math.Sqrt((x * x) + (y * y));
+		double th = Math.Atan2(a * z, b * p);
+		double lon = Math.Atan2(y, x);
+		double lat = Math.Atan2(z + (ep2 * b * Math.Pow(Math.Sin(th), 3)), p - (e2 * a * Math.Pow(Math.Cos(th), 3)));
+		double sinLat = Math.Sin(lat);
+		double n = a / Math.Sqrt(1 - e2 * sinLat * sinLat);
+		double alt = (p / Math.Cos(lat)) - n;
+
+		return new LlaVertex(lat * 180 / Math.PI, lon * 180 / Math.PI, alt);
+	}
+
+	private readonly record struct TileInfo(int Index, string RelativePath, int BaseX, int BaseY, int X, int Y, double TileWidth);
+	private readonly record struct TriangleModel(int A, int B, int C, double MinLat, double MaxLat, double MinLon, double MaxLon);
+	private readonly record struct LlaVertex(double Lat, double Lon, double Alt);
+	private readonly record struct TileModel(LlaVertex?[] Vertices, List<TriangleModel> Triangles);
 }
