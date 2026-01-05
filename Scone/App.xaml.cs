@@ -12,6 +12,10 @@ public partial class App : Application
 	/// </summary>
 	public App()
 	{
+		// TODO: Temporary hardcoded TerraSync path; update/remove when config UI is added.
+		AppConfig.TerraSyncTerrainPath = @"/Users/apple/Library/Application Support/FlightGear/TerraSync/Terrain";
+
+
 		if (!Directory.Exists(TempPath))
 		{
 			Directory.CreateDirectory(TempPath);
