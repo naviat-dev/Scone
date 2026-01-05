@@ -229,6 +229,7 @@ public static class BtgParser
 
 public class Terrain
 {
+	private static readonly double[,] LatitudeIndex = { { 89, 12 }, { 86, 4 }, { 83, 2 }, { 76, 1 }, { 62, 0.5 }, { 22, 0.25 }, { 0, 0.125 } };
 	private static readonly Dictionary<int, TileModel> TileCache = [];
 	private const double Wgs84A = 6_378_137.0;
 	private const double Wgs84E2 = 6.69437999014e-3;
@@ -310,8 +311,10 @@ public class Terrain
 		int x = (int)Math.Floor((lon - baseX) / tileWidth);
 
 		int tileId = ((baseX + 180) << 14) + ((baseY + 90) << 6) + (y << 3) + x;
-		string dir10 = $"{FormatLon(Math.Floor(baseX / 10.0) * 10)}{FormatLat(Math.Floor(baseY / 10.0) * 10)}";
-		string dir1 = $"{FormatLon(baseX)}{FormatLat(baseY)}";
+		string lonHemi = baseX >= 0 ? "e" : "w";
+		string latHemi = baseY >= 0 ? "n" : "s";
+		string dir10 = $"{lonHemi}{Math.Abs(Math.Floor(baseX / 10.0)) * 10:000}{latHemi}{Math.Abs(Math.Floor(baseY / 10.0)) * 10:00}";
+		string dir1 = $"{lonHemi}{Math.Abs(Math.Floor(baseX)):000}{latHemi}{Math.Abs(Math.Floor(baseY)):00}";
 		string relPath = Path.Combine(dir10, dir1, $"{tileId}.btg.gz");
 
 		return new TileInfo(tileId, relPath, baseX, baseY, x, y, tileWidth);
@@ -319,27 +322,15 @@ public class Terrain
 
 	private static double GetTileWidth(int baseY)
 	{
-		double absLat = Math.Abs(baseY);
-		if (absLat >= 89) return 360.0;
-		if (absLat >= 88) return 8.0;
-		if (absLat >= 86) return 4.0;
-		if (absLat >= 83) return 2.0;
-		if (absLat >= 76) return 1.0;
-		if (absLat >= 62) return 0.5;
-		if (absLat >= 22) return 0.25;
+		double lookup = Math.Abs(baseY);
+		for (int i = 0; i < LatitudeIndex.Length; i++)
+		{
+			if (lookup >= LatitudeIndex[i, 0])
+			{
+				return LatitudeIndex[i, 1];
+			}
+		}
 		return 0.125;
-	}
-
-	private static string FormatLon(double deg)
-	{
-		string hemi = deg >= 0 ? "e" : "w";
-		return $"{hemi}{Math.Abs((int)deg):000}";
-	}
-
-	private static string FormatLat(double deg)
-	{
-		string hemi = deg >= 0 ? "n" : "s";
-		return $"{hemi}{Math.Abs((int)deg):00}";
 	}
 
 	private static byte[]? ReadBtgData(string gzPath, string btgPath)
