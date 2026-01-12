@@ -304,269 +304,268 @@ public class SceneryConverter : INotifyPropertyChanged
 					{
 						break;
 					}
-					List<ModelObject> modelObjects = [];
-					// Enter this model and get LOD info, GLB files, and mesh data
-					for (int i = 8; i < mdlBytes.Length; i += 4)
+					if (libraryObjects.TryGetValue(guid, out List<LibraryObject>? value))
 					{
-						string chunk = Encoding.ASCII.GetString(mdlBytes, i, Math.Min(4, mdlBytes.Length - i));
-						if (chunk == "GXML")
+						List<ModelObject> modelObjects = [];
+						// Enter this model and get LOD info, GLB files, and mesh data
+						for (int i = 8; i < mdlBytes.Length; i += 4)
 						{
-							int size = BitConverter.ToInt32(mdlBytes, i + 4);
-							string gxmlContent = Encoding.UTF8.GetString(mdlBytes, i + 8, size);
-							try
+							string chunk = Encoding.ASCII.GetString(mdlBytes, i, Math.Min(4, mdlBytes.Length - i));
+							if (chunk == "GXML")
 							{
-								XmlDocument xmlDoc = new();
-								xmlDoc.LoadXml(gxmlContent);
-								name = xmlDoc.GetElementsByTagName("ModelInfo")[0]?.Attributes?["name"]?.Value.Replace(".gltf", "") ?? "Unnamed_Model";
-								XmlNodeList lodNodes = xmlDoc.GetElementsByTagName("LOD");
-								foreach (XmlNode lodNode in lodNodes)
+								int size = BitConverter.ToInt32(mdlBytes, i + 4);
+								string gxmlContent = Encoding.UTF8.GetString(mdlBytes, i + 8, size);
+								try
 								{
-									string lodObjName = lodNode?.Attributes?["ModelFile"]?.Value.Replace(".gltf", "") ?? "Unnamed";
-									int minSize = 0;
-									try
+									XmlDocument xmlDoc = new();
+									xmlDoc.LoadXml(gxmlContent);
+									name = xmlDoc.GetElementsByTagName("ModelInfo")[0]?.Attributes?["name"]?.Value.Replace(".gltf", "") ?? "Unnamed_Model";
+									XmlNodeList lodNodes = xmlDoc.GetElementsByTagName("LOD");
+									foreach (XmlNode lodNode in lodNodes)
 									{
-										minSize = int.Parse(lodNode?.Attributes?["minSize"]?.Value ?? "0");
-									}
-									catch (FormatException)
-									{
-										continue;
-									}
-									if (lodObjName != "Unnamed")
-									{
-										lods.Add(new LodData
+										string lodObjName = lodNode?.Attributes?["ModelFile"]?.Value.Replace(".gltf", "") ?? "Unnamed";
+										int minSize = 0;
+										try
 										{
-											name = lodObjName,
-											minSize = minSize
-										});
-									}
-								}
-							}
-							catch (XmlException)
-							{
-								Console.WriteLine($"Failed to parse GXML for model {guid:X}");
-							}
-							i += size;
-						}
-						else if (chunk == "GLBD")
-						{
-							Console.WriteLine($"Processing GLBD chunk for model {name} ({guid})");
-							int size = BitConverter.ToInt32(mdlBytes, i + 4);
-							int glbIndex = 0; // for unique filenames per GLB in this chunk
-
-							// Scan GLBD payload and skip past each GLB block once processed
-							for (int j = i + 8; j < i + 8 + size;)
-							{
-								// Ensure there are at least 8 bytes for type + size
-								if (j + 8 > mdlBytes.Length) break;
-
-								string sig = Encoding.ASCII.GetString(mdlBytes, j, Math.Min(4, mdlBytes.Length - j));
-								if (sig == "GLB\0")
-								{
-									int glbSize = BitConverter.ToInt32(mdlBytes, j + 4);
-									// byte[] glbBytesPre = br.ReadBytes(glbSize);
-									byte[] glbBytes = mdlBytes[(j + 8)..(j + 8 + glbSize)];
-									byte[] glbBytesJson = mdlBytes[(j + 8)..(j + 8 + glbSize)]; // Copy this for additional safety in processing the JSON
-
-									// Fill the end of the JSON chunk with spaces, and replace non-printable characters with spaces.
-									uint JSONLength = BitConverter.ToUInt32(glbBytesJson, 0x0C);
-									for (int k = 0x14; k < 0x14 + JSONLength; k++)
-									{
-										if (glbBytesJson[k] < 0x20 || glbBytesJson[k] > 0x7E)
-										{
-											glbBytesJson[k] = 0x20;
+											minSize = int.Parse(lodNode?.Attributes?["minSize"]?.Value ?? "0");
 										}
-									}
-
-									uint binLength = BitConverter.ToUInt32(glbBytes, 0x14 + (int)JSONLength);
-									byte[] glbBinBytes = glbBytes[(0x14 + (int)JSONLength + 8)..(0x14 + (int)JSONLength + 8 + (int)binLength)];
-
-									JObject json = JObject.Parse(Encoding.UTF8.GetString(glbBytesJson, 0x14, (int)JSONLength).Trim());
-									JArray meshes = (JArray)json["meshes"]!;
-									JArray accessors = (JArray)json["accessors"]!;
-									JArray bufferViews = (JArray)json["bufferViews"]!;
-									JArray images = (JArray)json["images"]!;
-									JArray materials = (JArray)json["materials"]!;
-									JArray textures = (JArray)json["textures"]!;
-
-									SceneBuilder scene = new();
-									Dictionary<int, List<int>> meshIndexToSceneNodeIndex = [];
-									for (int k = 0; k < json["nodes"]!.Count(); k++)
-									{
-										JObject node = (JObject)json["nodes"]![k]!;
-										if (node["mesh"] != null)
+										catch (FormatException)
 										{
-											int meshIndex = node["mesh"]!.Value<int>();
-											if (!meshIndexToSceneNodeIndex.TryGetValue(meshIndex, out List<int>? valueMesh))
-											{
-												valueMesh = [];
-												meshIndexToSceneNodeIndex[meshIndex] = valueMesh;
-											}
-											meshIndexToSceneNodeIndex[meshIndex].Add(k);
-										}
-										else if (node["extensions"]?["ASOBO_macro_light"] != null)
-										{
-											LightObject light = new()
-											{
-												name = node["name"]?.Value<string>() ?? "Unnamed_Light",
-												position = new Vector3(
-													node["translation"] != null ? node["translation"]![0]!.Value<float>() : 0,
-													node["translation"] != null ? node["translation"]![1]!.Value<float>() : 0,
-													node["translation"] != null ? node["translation"]![2]!.Value<float>() : 0),
-
-												pitchDeg = node["rotation"] != null ? MathF.Asin(Math.Clamp(2 * (node["rotation"]![1]!.Value<float>() * node["rotation"]![3]!.Value<float>() - node["rotation"]![0]!.Value<float>() * node["rotation"]![2]!.Value<float>()), -1f, 1f)) * (180.0f / MathF.PI) : 0,
-												rollDeg = node["rotation"] != null ? MathF.Atan2(2 * (node["rotation"]![0]!.Value<float>() * node["rotation"]![3]!.Value<float>() + node["rotation"]![1]!.Value<float>() * node["rotation"]![2]!.Value<float>()), 1 - 2 * (node["rotation"]![0]!.Value<float>() * node["rotation"]![0]!.Value<float>() + node["rotation"]![1]!.Value<float>() * node["rotation"]![1]!.Value<float>())) * (180.0f / MathF.PI) : 0,
-												headingDeg = node["rotation"] != null ? MathF.Atan2(2 * (node["rotation"]![2]!.Value<float>() * node["rotation"]![3]!.Value<float>() + node["rotation"]![0]!.Value<float>() * node["rotation"]![1]!.Value<float>()), 1 - 2 * (node["rotation"]![1]!.Value<float>() * node["rotation"]![1]!.Value<float>() + node["rotation"]![2]!.Value<float>() * node["rotation"]![2]!.Value<float>())) * (180.0f / MathF.PI) : 0,
-												color = new Vector4(
-													node["extensions"]!["ASOBO_macro_light"]!["color"] != null ? node["extensions"]!["ASOBO_macro_light"]!["color"]![0]!.Value<float>() : 1,
-													node["extensions"]!["ASOBO_macro_light"]!["color"] != null ? node["extensions"]!["ASOBO_macro_light"]!["color"]![1]!.Value<float>() : 1,
-													node["extensions"]!["ASOBO_macro_light"]!["color"] != null ? node["extensions"]!["ASOBO_macro_light"]!["color"]![2]!.Value<float>() : 1,
-													1),
-												intensity = node["extensions"]!["ASOBO_macro_light"]!["intensity"] != null ? node["extensions"]!["ASOBO_macro_light"]!["intensity"]!.Value<float>() : 1,
-												cutoffAngle = node["extensions"]!["ASOBO_macro_light"]!["cone_angle"] != null ? node["extensions"]!["ASOBO_macro_light"]!["cone_angle"]!.Value<float>() : 45,
-												dayNightCycle = node["extensions"]!["ASOBO_macro_light"]!["day_night_cycle"] != null && node["extensions"]!["ASOBO_macro_light"]!["day_night_cycle"]!.Value<bool>(),
-												flashDuration = node["extensions"]!["ASOBO_macro_light"]!["flash_duration"] != null ? node["extensions"]!["ASOBO_macro_light"]!["flash_duration"]!.Value<float>() : 0,
-												flashFrequency = node["extensions"]!["ASOBO_macro_light"]!["flash_frequency"] != null ? node["extensions"]!["ASOBO_macro_light"]!["flash_frequency"]!.Value<float>() : 0,
-												flashPhase = node["extensions"]!["ASOBO_macro_light"]!["flash_phase"] != null ? node["extensions"]!["ASOBO_macro_light"]!["flash_phase"]!.Value<float>() : 0,
-												rotationSpeed = node["extensions"]!["ASOBO_macro_light"]!["rotation_speed"] != null ? node["extensions"]!["ASOBO_macro_light"]!["rotation_speed"]!.Value<float>() : 0,
-											};
-
-											if (light.cutoffAngle / 2.0f < 90.0f && light.cutoffAngle / 2.0f > 0.0f)
-											{
-												// Tunable constants:
-												float kBase = 0.1f;    // attenuation base constant
-												float visibleFraction = 0.01f;  // threshold (1%)
-												float eMin = 1.0f;    // minimum exponent
-												float eMax = 128.0f;  // maximum exponent
-												float p = 2.0f;    // exponent shaping power
-
-												//-----------------------------------------
-												// RANGE (meters)
-												//-----------------------------------------
-												float I0 = Math.Max(1e-6f, light.intensity);
-												float kq = kBase / I0;                        // quadratic attenuation coefficient
-
-												float f = Math.Clamp(visibleFraction, 1e-6f, 0.999f);
-
-												light.range_m = (float)Math.Sqrt(((1.0f / f) - 1.0f) / kq);
-
-												// n = normalized tightness factor (0..1)
-												float n = 1.0f - (light.cutoffAngle / 45.0f);
-												n = Math.Clamp(n, 0.0f, 1.0f);
-
-												// Focus exponent mapping
-												light.spot_exponent = eMin + (float)Math.Pow(n, p) * (eMax - eMin);
-												light.spot_exponent = Math.Clamp(light.spot_exponent, eMin, eMax);
-											}
-											lightObjects.Add(light);
-										}
-									}
-									foreach (JObject mesh in meshes.Cast<JObject>())
-									{
-										MeshBuilder<VertexPositionNormalTangent, VertexTexture2, VertexEmpty> meshBuilder = GlbBuilder.BuildMesh(inputPath, file, mesh, accessors, bufferViews, materials, textures, images, glbBinBytes);
-										Vector3 translationFinal = Vector3.Zero;
-										Quaternion rotationFinal = Quaternion.Identity;
-										Vector3 scaleFinal = Vector3.One;
-										foreach (int nodeIndex in meshIndexToSceneNodeIndex[meshes.IndexOf(mesh)])
-										{
-											NodeBuilder node = GlbBuilder.BuildNode(nodeIndex, (JArray)json["nodes"]!);
-											translationFinal += node.Translation == null ? Vector3.Zero : node.Translation.Value;
-											rotationFinal *= node.Rotation == null ? Quaternion.Identity : node.Rotation.Value;
-											scaleFinal *= node.Scale == null ? Vector3.One : node.Scale.Value;
-										}
-
-										// Normalize and sanitize transform components to avoid NaN/Infinity matrices
-										rotationFinal = Quaternion.Normalize(rotationFinal);
-
-										float avgScale = (scaleFinal.X + scaleFinal.Y + scaleFinal.Z) / 3.0f;
-										if (!float.IsFinite(avgScale) || avgScale <= 0f) avgScale = 1f;
-										scaleFinal = new Vector3(avgScale, avgScale, avgScale);
-
-										translationFinal = new Vector3(
-											float.IsFinite(translationFinal.X) ? translationFinal.X : 0f,
-											float.IsFinite(translationFinal.Y) ? translationFinal.Y : 0f,
-											float.IsFinite(translationFinal.Z) ? translationFinal.Z : 0f
-										);
-
-										Matrix4x4 transform = Matrix4x4.CreateScale(scaleFinal) *
-														Matrix4x4.CreateFromQuaternion(rotationFinal) *
-														Matrix4x4.CreateTranslation(translationFinal);
-
-										// Validate matrix before passing to SharpGLTF
-										if (!(float.IsFinite(transform.M11) && float.IsFinite(transform.M12) && float.IsFinite(transform.M13) && float.IsFinite(transform.M14)
-											&& float.IsFinite(transform.M21) && float.IsFinite(transform.M22) && float.IsFinite(transform.M23) && float.IsFinite(transform.M24)
-											&& float.IsFinite(transform.M31) && float.IsFinite(transform.M32) && float.IsFinite(transform.M33) && float.IsFinite(transform.M34)
-											&& float.IsFinite(transform.M41) && float.IsFinite(transform.M42) && float.IsFinite(transform.M43) && float.IsFinite(transform.M44)))
-										{
-											// Skip this mesh if transform is invalid to prevent runtime exception
 											continue;
 										}
-
-										scene.AddRigidMesh(meshBuilder, transform);
-									}
-
-									accessors = JObject.Parse(scene.ToGltf2().GetJsonPreview())["accessors"]!.Value<JArray>()!;
-									Vector3 min = new(float.MaxValue);
-									Vector3 max = new(float.MinValue);
-									foreach (JObject accessor in accessors!.Cast<JObject>())
-									{
-										if (accessor["min"] != null && accessor["max"] != null && accessor["name"]!.Value<string>() == "POSITION")
+										if (lodObjName != "Unnamed")
 										{
-											Vector3 accessorMin = new(
-												accessor["min"]![0]!.Value<float>(),
-												accessor["min"]![1]!.Value<float>(),
-												accessor["min"]![2]!.Value<float>());
-											Vector3 accessorMax = new(
-												accessor["max"]![0]!.Value<float>(),
-												accessor["max"]![1]!.Value<float>(),
-												accessor["max"]![2]!.Value<float>());
-
-											min = Vector3.Min(min, accessorMin);
-											max = Vector3.Max(max, accessorMax);
+											lods.Add(new LodData
+											{
+												name = lodObjName,
+												minSize = minSize
+											});
 										}
 									}
-									// Write GLB with unique filename (include index to avoid overwrites)
-									string safeName = name;
-									string outName = glbIndex < lods.Count ? lods[glbIndex].name : $"{safeName}_glb{glbIndex}";
-									modelObjects.Add(new ModelObject
-									{
-										name = outName.Replace(" ", "_"),
-										minSize = glbIndex < lods.Count ? lods[glbIndex].minSize : 0,
-										model = scene,
-										radius = (max - min).Length() / 2.0f,
-									});
-									glbIndex++;
-
-									// Advance j past this GLB record (type[4] + size[4] + payload[glbSize])
-									j += 8 + glbSize;
 								}
-								else
+								catch (XmlException)
 								{
-									// Not a GLB block; advance reasonably (try to skip unknown 8-byte header or 4-byte step)
-									// Prefer 4-byte alignment advance to find next signature
-									j += 4;
+									Console.WriteLine($"Failed to parse GXML for model {guid:X}");
 								}
+								i += size;
 							}
+							else if (chunk == "GLBD")
+							{
+								Console.WriteLine($"Processing GLBD chunk for model {name} ({guid})");
+								int size = BitConverter.ToInt32(mdlBytes, i + 4);
+								int glbIndex = 0; // for unique filenames per GLB in this chunk
 
-							// Advance i past the GLBD chunk payload
-							i += size;
+								// Scan GLBD payload and skip past each GLB block once processed
+								for (int j = i + 8; j < i + 8 + size;)
+								{
+									// Ensure there are at least 8 bytes for type + size
+									if (j + 8 > mdlBytes.Length) break;
+
+									string sig = Encoding.ASCII.GetString(mdlBytes, j, Math.Min(4, mdlBytes.Length - j));
+									if (sig == "GLB\0")
+									{
+										int glbSize = BitConverter.ToInt32(mdlBytes, j + 4);
+										// byte[] glbBytesPre = br.ReadBytes(glbSize);
+										byte[] glbBytes = mdlBytes[(j + 8)..(j + 8 + glbSize)];
+										byte[] glbBytesJson = mdlBytes[(j + 8)..(j + 8 + glbSize)]; // Copy this for additional safety in processing the JSON
+
+										// Fill the end of the JSON chunk with spaces, and replace non-printable characters with spaces.
+										uint JSONLength = BitConverter.ToUInt32(glbBytesJson, 0x0C);
+										for (int k = 0x14; k < 0x14 + JSONLength; k++)
+										{
+											if (glbBytesJson[k] < 0x20 || glbBytesJson[k] > 0x7E)
+											{
+												glbBytesJson[k] = 0x20;
+											}
+										}
+
+										uint binLength = BitConverter.ToUInt32(glbBytes, 0x14 + (int)JSONLength);
+										byte[] glbBinBytes = glbBytes[(0x14 + (int)JSONLength + 8)..(0x14 + (int)JSONLength + 8 + (int)binLength)];
+
+										JObject json = JObject.Parse(Encoding.UTF8.GetString(glbBytesJson, 0x14, (int)JSONLength).Trim());
+										JArray meshes = (JArray)json["meshes"]!;
+										JArray accessors = (JArray)json["accessors"]!;
+										JArray bufferViews = (JArray)json["bufferViews"]!;
+										JArray images = (JArray)json["images"]!;
+										JArray materials = (JArray)json["materials"]!;
+										JArray textures = (JArray)json["textures"]!;
+
+										SceneBuilder scene = new();
+										Dictionary<int, List<int>> meshIndexToSceneNodeIndex = [];
+										for (int k = 0; k < json["nodes"]!.Count(); k++)
+										{
+											JObject node = (JObject)json["nodes"]![k]!;
+											if (node["mesh"] != null)
+											{
+												int meshIndex = node["mesh"]!.Value<int>();
+												if (!meshIndexToSceneNodeIndex.TryGetValue(meshIndex, out List<int>? valueMesh))
+												{
+													valueMesh = [];
+													meshIndexToSceneNodeIndex[meshIndex] = valueMesh;
+												}
+												meshIndexToSceneNodeIndex[meshIndex].Add(k);
+											}
+											else if (node["extensions"]?["ASOBO_macro_light"] != null)
+											{
+												LightObject light = new()
+												{
+													name = node["name"]?.Value<string>() ?? "Unnamed_Light",
+													position = new Vector3(
+														node["translation"] != null ? node["translation"]![0]!.Value<float>() : 0,
+														node["translation"] != null ? node["translation"]![1]!.Value<float>() : 0,
+														node["translation"] != null ? node["translation"]![2]!.Value<float>() : 0),
+
+													pitchDeg = node["rotation"] != null ? MathF.Asin(Math.Clamp(2 * (node["rotation"]![1]!.Value<float>() * node["rotation"]![3]!.Value<float>() - node["rotation"]![0]!.Value<float>() * node["rotation"]![2]!.Value<float>()), -1f, 1f)) * (180.0f / MathF.PI) : 0,
+													rollDeg = node["rotation"] != null ? MathF.Atan2(2 * (node["rotation"]![0]!.Value<float>() * node["rotation"]![3]!.Value<float>() + node["rotation"]![1]!.Value<float>() * node["rotation"]![2]!.Value<float>()), 1 - 2 * (node["rotation"]![0]!.Value<float>() * node["rotation"]![0]!.Value<float>() + node["rotation"]![1]!.Value<float>() * node["rotation"]![1]!.Value<float>())) * (180.0f / MathF.PI) : 0,
+													headingDeg = node["rotation"] != null ? MathF.Atan2(2 * (node["rotation"]![2]!.Value<float>() * node["rotation"]![3]!.Value<float>() + node["rotation"]![0]!.Value<float>() * node["rotation"]![1]!.Value<float>()), 1 - 2 * (node["rotation"]![1]!.Value<float>() * node["rotation"]![1]!.Value<float>() + node["rotation"]![2]!.Value<float>() * node["rotation"]![2]!.Value<float>())) * (180.0f / MathF.PI) : 0,
+													color = new Vector4(
+														node["extensions"]!["ASOBO_macro_light"]!["color"] != null ? node["extensions"]!["ASOBO_macro_light"]!["color"]![0]!.Value<float>() : 1,
+														node["extensions"]!["ASOBO_macro_light"]!["color"] != null ? node["extensions"]!["ASOBO_macro_light"]!["color"]![1]!.Value<float>() : 1,
+														node["extensions"]!["ASOBO_macro_light"]!["color"] != null ? node["extensions"]!["ASOBO_macro_light"]!["color"]![2]!.Value<float>() : 1,
+														1),
+													intensity = node["extensions"]!["ASOBO_macro_light"]!["intensity"] != null ? node["extensions"]!["ASOBO_macro_light"]!["intensity"]!.Value<float>() : 1,
+													cutoffAngle = node["extensions"]!["ASOBO_macro_light"]!["cone_angle"] != null ? node["extensions"]!["ASOBO_macro_light"]!["cone_angle"]!.Value<float>() : 45,
+													dayNightCycle = node["extensions"]!["ASOBO_macro_light"]!["day_night_cycle"] != null && node["extensions"]!["ASOBO_macro_light"]!["day_night_cycle"]!.Value<bool>(),
+													flashDuration = node["extensions"]!["ASOBO_macro_light"]!["flash_duration"] != null ? node["extensions"]!["ASOBO_macro_light"]!["flash_duration"]!.Value<float>() : 0,
+													flashFrequency = node["extensions"]!["ASOBO_macro_light"]!["flash_frequency"] != null ? node["extensions"]!["ASOBO_macro_light"]!["flash_frequency"]!.Value<float>() : 0,
+													flashPhase = node["extensions"]!["ASOBO_macro_light"]!["flash_phase"] != null ? node["extensions"]!["ASOBO_macro_light"]!["flash_phase"]!.Value<float>() : 0,
+													rotationSpeed = node["extensions"]!["ASOBO_macro_light"]!["rotation_speed"] != null ? node["extensions"]!["ASOBO_macro_light"]!["rotation_speed"]!.Value<float>() : 0,
+												};
+
+												if (light.cutoffAngle / 2.0f < 90.0f && light.cutoffAngle / 2.0f > 0.0f)
+												{
+													// Tunable constants:
+													float kBase = 0.1f;    // attenuation base constant
+													float visibleFraction = 0.01f;  // threshold (1%)
+													float eMin = 1.0f;    // minimum exponent
+													float eMax = 128.0f;  // maximum exponent
+													float p = 2.0f;    // exponent shaping power
+
+													//-----------------------------------------
+													// RANGE (meters)
+													//-----------------------------------------
+													float I0 = Math.Max(1e-6f, light.intensity);
+													float kq = kBase / I0;                        // quadratic attenuation coefficient
+
+													float f = Math.Clamp(visibleFraction, 1e-6f, 0.999f);
+
+													light.range_m = (float)Math.Sqrt(((1.0f / f) - 1.0f) / kq);
+
+													// n = normalized tightness factor (0..1)
+													float n = 1.0f - (light.cutoffAngle / 45.0f);
+													n = Math.Clamp(n, 0.0f, 1.0f);
+
+													// Focus exponent mapping
+													light.spot_exponent = eMin + (float)Math.Pow(n, p) * (eMax - eMin);
+													light.spot_exponent = Math.Clamp(light.spot_exponent, eMin, eMax);
+												}
+												lightObjects.Add(light);
+											}
+										}
+										foreach (JObject mesh in meshes.Cast<JObject>())
+										{
+											MeshBuilder<VertexPositionNormalTangent, VertexTexture2, VertexEmpty> meshBuilder = GlbBuilder.BuildMesh(inputPath, file, mesh, accessors, bufferViews, materials, textures, images, glbBinBytes);
+											Vector3 translationFinal = Vector3.Zero;
+											Quaternion rotationFinal = Quaternion.Identity;
+											Vector3 scaleFinal = Vector3.One;
+											foreach (int nodeIndex in meshIndexToSceneNodeIndex[meshes.IndexOf(mesh)])
+											{
+												NodeBuilder node = GlbBuilder.BuildNode(nodeIndex, (JArray)json["nodes"]!);
+												translationFinal += node.Translation == null ? Vector3.Zero : node.Translation.Value;
+												rotationFinal *= node.Rotation == null ? Quaternion.Identity : node.Rotation.Value;
+												scaleFinal *= node.Scale == null ? Vector3.One : node.Scale.Value;
+											}
+
+											// Normalize and sanitize transform components to avoid NaN/Infinity matrices
+											rotationFinal = Quaternion.Normalize(rotationFinal);
+
+											float avgScale = (scaleFinal.X + scaleFinal.Y + scaleFinal.Z) / 3.0f;
+											if (!float.IsFinite(avgScale) || avgScale <= 0f) avgScale = 1f;
+											scaleFinal = new Vector3(avgScale, avgScale, avgScale);
+
+											translationFinal = new Vector3(
+												float.IsFinite(translationFinal.X) ? translationFinal.X : 0f,
+												float.IsFinite(translationFinal.Y) ? translationFinal.Y : 0f,
+												float.IsFinite(translationFinal.Z) ? translationFinal.Z : 0f
+											);
+
+											Matrix4x4 transform = Matrix4x4.CreateScale(scaleFinal) *
+															Matrix4x4.CreateFromQuaternion(rotationFinal) *
+															Matrix4x4.CreateTranslation(translationFinal);
+
+											// Validate matrix before passing to SharpGLTF
+											if (!(float.IsFinite(transform.M11) && float.IsFinite(transform.M12) && float.IsFinite(transform.M13) && float.IsFinite(transform.M14)
+												&& float.IsFinite(transform.M21) && float.IsFinite(transform.M22) && float.IsFinite(transform.M23) && float.IsFinite(transform.M24)
+												&& float.IsFinite(transform.M31) && float.IsFinite(transform.M32) && float.IsFinite(transform.M33) && float.IsFinite(transform.M34)
+												&& float.IsFinite(transform.M41) && float.IsFinite(transform.M42) && float.IsFinite(transform.M43) && float.IsFinite(transform.M44)))
+											{
+												// Skip this mesh if transform is invalid to prevent runtime exception
+												continue;
+											}
+
+											scene.AddRigidMesh(meshBuilder, transform);
+										}
+
+										accessors = JObject.Parse(scene.ToGltf2().GetJsonPreview())["accessors"]!.Value<JArray>()!;
+										Vector3 min = new(float.MaxValue);
+										Vector3 max = new(float.MinValue);
+										foreach (JObject accessor in accessors!.Cast<JObject>())
+										{
+											if (accessor["min"] != null && accessor["max"] != null && accessor["name"]!.Value<string>() == "POSITION")
+											{
+												Vector3 accessorMin = new(
+													accessor["min"]![0]!.Value<float>(),
+													accessor["min"]![1]!.Value<float>(),
+													accessor["min"]![2]!.Value<float>());
+												Vector3 accessorMax = new(
+													accessor["max"]![0]!.Value<float>(),
+													accessor["max"]![1]!.Value<float>(),
+													accessor["max"]![2]!.Value<float>());
+
+												min = Vector3.Min(min, accessorMin);
+												max = Vector3.Max(max, accessorMax);
+											}
+										}
+										// Write GLB with unique filename (include index to avoid overwrites)
+										string safeName = name;
+										string outName = glbIndex < lods.Count ? lods[glbIndex].name : $"{safeName}_glb{glbIndex}";
+										modelObjects.Add(new ModelObject
+										{
+											name = outName.Replace(" ", "_"),
+											minSize = glbIndex < lods.Count ? lods[glbIndex].minSize : 0,
+											model = scene,
+											radius = (max - min).Length() / 2.0f,
+										});
+										glbIndex++;
+
+										// Advance j past this GLB record (type[4] + size[4] + payload[glbSize])
+										j += 8 + glbSize;
+									}
+									else
+									{
+										// Not a GLB block; advance reasonably (try to skip unknown 8-byte header or 4-byte step)
+										// Prefer 4-byte alignment advance to find next signature
+										j += 4;
+									}
+								}
+
+								// Advance i past the GLBD chunk payload
+								i += size;
+							}
 						}
-					}
-					if (modelObjects.Count == 0)
-					{
-						bytesRead += (int)modelDataSize + 24;
-						objectsRead++;
-						continue;
-					}
-					ModelData current = new()
-					{
-						guid = guid,
-						name = name,
-						lightObjects = lightObjects,
-						modelObjects = modelObjects,
-					};
-
-					if (libraryObjects.TryGetValue(current.guid, out List<LibraryObject>? value))
-					{
+						if (modelObjects.Count == 0)
+						{
+							bytesRead += (int)modelDataSize + 24;
+							objectsRead++;
+							continue;
+						}
+						ModelData current = new()
+						{
+							guid = guid,
+							name = name,
+							lightObjects = lightObjects,
+							modelObjects = modelObjects,
+						};
 						int[] tileIndices = [.. value.Select(lo => Terrain.GetTileIndex(lo.latitude, lo.longitude)).Distinct()];
 						foreach (int tile in tileIndices)
 						{
@@ -578,7 +577,7 @@ public class SceneryConverter : INotifyPropertyChanged
 							{
 								_ = Directory.CreateDirectory(path);
 							}
-							foreach (ModelObject modelObj in current.modelObjects)
+							foreach (ModelObject modelObj in modelObjects)
 							{
 								string outGlbPath = Path.Combine(path, $"{modelObj.name}.gltf");
 								modelObj.model.ToGltf2().SaveGLTF(outGlbPath, new WriteSettings
@@ -611,12 +610,12 @@ public class SceneryConverter : INotifyPropertyChanged
 								}
 								File.WriteAllText(outGlbPath, gltfText.ToString());
 							}
-							float[] scales = [.. libraryObjects[current.guid].Select(lo => (float)lo.scale).Distinct()];
-							float[] scalesTrunc = [.. libraryObjects[current.guid].Where(lo => lo.scale != 1).Select(lo => (float)lo.scale).Distinct()];
-							ModelObject[] modelObjectsByLod = [.. current.modelObjects.OrderByDescending(mo => mo.minSize)];
+							float[] scales = [.. libraryObjects[guid].Select(lo => (float)lo.scale).Distinct()];
+							float[] scalesTrunc = [.. libraryObjects[guid].Where(lo => lo.scale != 1).Select(lo => (float)lo.scale).Distinct()];
+							ModelObject[] modelObjectsByLod = [.. modelObjects.OrderByDescending(mo => mo.minSize)];
 							bool hasXml = false;
-							Console.WriteLine($"Object count: {current.modelObjects.Count}, Scales: {string.Join(", ", scales)}, Lights: {current.lightObjects?.Count ?? 0}");
-							if (current.modelObjects.Count > 1 || scalesTrunc.Length > 0 || current.lightObjects?.Count > 0)
+							Console.WriteLine($"Object count: {modelObjects.Count}, Scales: {string.Join(", ", scales)}, Lights: {lightObjects?.Count ?? 0}");
+							if (modelObjects.Count > 1 || scalesTrunc.Length > 0 || lightObjects?.Count > 0)
 							{
 								hasXml = true;
 								foreach (float scale in scales)
@@ -624,7 +623,7 @@ public class SceneryConverter : INotifyPropertyChanged
 									XmlDocument doc = new();
 									XmlElement root = doc.CreateElement("PropertyList");
 									root.AppendChild(doc.CreateComment("Generated by Scone"));
-									for (int i = 0; i < current.modelObjects.Count; i++)
+									for (int i = 0; i < modelObjects.Count; i++)
 									{
 										ModelObject modelObj = modelObjectsByLod[i];
 										XmlElement objElem = doc.CreateElement("model");
@@ -636,7 +635,7 @@ public class SceneryConverter : INotifyPropertyChanged
 											root.AppendChild(CreateLodElement(doc, modelObj.radius, modelObj.minSize, i + 1 < modelObjectsByLod.Length ? modelObjectsByLod[i + 1].minSize : (int?)null));
 										}
 									}
-									foreach (LightObject light in current.lightObjects!)
+									foreach (LightObject light in lightObjects!)
 									{
 										root.AppendChild(CreateLightElement(doc, light));
 									}
@@ -644,7 +643,7 @@ public class SceneryConverter : INotifyPropertyChanged
 									{
 										root.AppendChild(CreateScaleElement(doc, scale, current));
 									}
-									File.WriteAllText(Path.Combine(path, $"{current.name}{(scale != 1 ? $"_{scale}" : string.Empty)}.xml"), root.OuterXml);
+									File.WriteAllText(Path.Combine(path, $"{name}{(scale != 1 ? $"_{scale}" : string.Empty)}.xml"), root.OuterXml);
 								}
 							}
 							if (!finalPlacementsByTile.ContainsKey(Terrain.GetTileIndex(value[0].latitude, value[0].longitude)))
@@ -653,7 +652,7 @@ public class SceneryConverter : INotifyPropertyChanged
 							}
 							foreach (LibraryObject libObj in value)
 							{
-								string activeName = hasXml ? $"{current.name}{(libObj.scale != 1 ? $"_{libObj.scale}" : string.Empty)}.xml" : $"{current.name}.gltf";
+								string activeName = hasXml ? $"{name}{(libObj.scale != 1 ? $"_{libObj.scale}" : string.Empty)}.xml" : $"{name}.gltf";
 								double headingStg = ((libObj.heading > 180 ? 540 : 180) - libObj.heading + 90) % 360;
 								string placementStr = $"OBJECT_STATIC {activeName} {libObj.longitude} {libObj.latitude} {libObj.altitude} {headingStg:F2} {libObj.pitch:F2} {libObj.bank:F2}";
 								if (!finalPlacementsByTile.ContainsKey(Terrain.GetTileIndex(libObj.latitude, libObj.longitude)))
@@ -663,6 +662,10 @@ public class SceneryConverter : INotifyPropertyChanged
 								finalPlacementsByTile[Terrain.GetTileIndex(libObj.latitude, libObj.longitude)].Add(placementStr);
 							}
 						}
+					}
+					else
+					{
+						Console.WriteLine($"No placements found for model {name} ({guid})");
 					}
 					bytesRead += (int)modelDataSize + 24;
 					objectsRead++;
