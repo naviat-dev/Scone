@@ -652,7 +652,8 @@ public class SceneryConverter : INotifyPropertyChanged
 							foreach (LibraryObject libObj in value)
 							{
 								string activeName = hasXml ? $"{current.name}{(libObj.scale != 1 ? $"_{libObj.scale}" : string.Empty)}.xml" : $"{current.name}.gltf";
-								string placementStr = $"OBJECT_STATIC {activeName} {libObj.longitude} {libObj.latitude} {libObj.altitude} {libObj.heading:F2} {libObj.pitch:F2} {libObj.bank:F2}";
+								double headingStg = ((libObj.heading > 180 ? 540 : 180) - libObj.heading + 90) % 360;
+								string placementStr = $"OBJECT_STATIC {activeName} {libObj.longitude} {libObj.latitude} {libObj.altitude} {headingStg:F2} {libObj.pitch:F2} {libObj.bank:F2}";
 								if (!finalPlacementsByTile.ContainsKey(Terrain.GetTileIndex(libObj.latitude, libObj.longitude)))
 								{
 									finalPlacementsByTile[Terrain.GetTileIndex(libObj.latitude, libObj.longitude)] = [];
@@ -682,6 +683,7 @@ public class SceneryConverter : INotifyPropertyChanged
 				File.WriteAllLines(placementFilePath, kvp.Value);
 			}
 		}
+		Console.WriteLine("Conversion complete.");
 	}
 
 	private XmlNode CreateLightElement(XmlDocument doc, LightObject light)
