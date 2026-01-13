@@ -7,21 +7,9 @@ using SharpGLTF.Materials;
 using SharpGLTF.Scenes;
 
 namespace Scone;
+
 public class GlbBuilder
 {
-	// Convert from Y-up to Z-up coordinate system
-	// X' = X, Y' = -Z, Z' = Y
-	static Vector3 ConvertYUpToZUp(Vector3 v)
-	{
-		return new Vector3(v.X, -v.Z, v.Y);
-	}
-
-	// Convert quaternion from Y-up to Z-up coordinate system
-	static Quaternion ConvertQuaternionYUpToZUp(Quaternion q)
-	{
-		// For Y-up to Z-up: (x, y, z, w) -> (x, -z, y, w)
-		return new Quaternion(q.X, -q.Z, q.Y, q.W);
-	}
 
 	public class PrimData
 	{
@@ -65,20 +53,17 @@ public class GlbBuilder
 		if (nodeJson["translation"] != null)
 		{
 			JArray translation = (JArray)nodeJson["translation"]!;
-			Vector3 trans = new Vector3(translation[0].Value<float>(), translation[1].Value<float>(), translation[2].Value<float>());
-			node.WithLocalTranslation(ConvertYUpToZUp(trans));
+			node.WithLocalTranslation(new Vector3(translation[0].Value<float>(), translation[1].Value<float>(), translation[2].Value<float>()));
 		}
 		if (nodeJson["rotation"] != null)
 		{
 			JArray rotation = (JArray)nodeJson["rotation"]!;
-			Quaternion rot = new Quaternion(rotation[0].Value<float>(), rotation[1].Value<float>(), rotation[2].Value<float>(), rotation[3].Value<float>());
-			node.WithLocalRotation(ConvertQuaternionYUpToZUp(rot));
+			node.WithLocalRotation(new Quaternion(rotation[0].Value<float>(), rotation[1].Value<float>(), rotation[2].Value<float>(), rotation[3].Value<float>()));
 		}
 		if (nodeJson["scale"] != null)
 		{
 			JArray scale = (JArray)nodeJson["scale"]!;
-			Vector3 scl = new Vector3(scale[0].Value<float>(), scale[1].Value<float>(), scale[2].Value<float>());
-			node.WithLocalScale(ConvertYUpToZUp(scl));
+			node.WithLocalScale(new Vector3(scale[0].Value<float>(), scale[1].Value<float>(), scale[2].Value<float>()));
 		}
 
 		return node;
@@ -160,22 +145,9 @@ public class GlbBuilder
 				int idx2 = baseVertex + data.Indices[startIndex + (i * 3) + 1];
 				int idx3 = baseVertex + data.Indices[startIndex + (i * 3) + 2];
 
-				// Convert positions, normals, and tangents from Y-up to Z-up
-				Vector3 pos1 = ConvertYUpToZUp(data.Positions[idx1]);
-				Vector3 pos2 = ConvertYUpToZUp(data.Positions[idx2]);
-				Vector3 pos3 = ConvertYUpToZUp(data.Positions[idx3]);
-
-				Vector3 norm1 = ConvertYUpToZUp(-data.Normals[idx1]);
-				Vector3 norm2 = ConvertYUpToZUp(-data.Normals[idx2]);
-				Vector3 norm3 = ConvertYUpToZUp(-data.Normals[idx3]);
-
-				Vector4 tang1 = data.Tangents.Length > 0 ? new Vector4(ConvertYUpToZUp(new Vector3(-data.Tangents[idx1].X, -data.Tangents[idx1].Y, -data.Tangents[idx1].Z)), data.Tangents[idx1].W) : Vector4.Zero;
-				Vector4 tang2 = data.Tangents.Length > 0 ? new Vector4(ConvertYUpToZUp(new Vector3(-data.Tangents[idx2].X, -data.Tangents[idx2].Y, -data.Tangents[idx2].Z)), data.Tangents[idx2].W) : Vector4.Zero;
-				Vector4 tang3 = data.Tangents.Length > 0 ? new Vector4(ConvertYUpToZUp(new Vector3(-data.Tangents[idx3].X, -data.Tangents[idx3].Y, -data.Tangents[idx3].Z)), data.Tangents[idx3].W) : Vector4.Zero;
-
-				VertexPositionNormalTangent geo1 = new(pos1, norm1, tang1);
-				VertexPositionNormalTangent geo2 = new(pos2, norm2, tang2);
-				VertexPositionNormalTangent geo3 = new(pos3, norm3, tang3);
+				VertexPositionNormalTangent geo1 = new(data.Positions[idx1], -data.Normals[idx1], data.Tangents.Length > 0 ? -data.Tangents[idx1] : Vector4.Zero);
+				VertexPositionNormalTangent geo2 = new(data.Positions[idx2], -data.Normals[idx2], data.Tangents.Length > 0 ? -data.Tangents[idx2] : Vector4.Zero);
+				VertexPositionNormalTangent geo3 = new(data.Positions[idx3], -data.Normals[idx3], data.Tangents.Length > 0 ? -data.Tangents[idx3] : Vector4.Zero);
 
 				MaterialBuilder mat = MaterialBuilder.CreateDefault();
 
@@ -595,8 +567,7 @@ public class GlbBuilder
 			Half u = BitConverter.ToHalf(binBytes, offset + (0 * componentSize));
 			Half v = BitConverter.ToHalf(binBytes, offset + (1 * componentSize));
 
-			// Flip V coordinate along y-axis for FlightGear compatibility
-			texCoords[i] = new Vector2((float)u, 1.0f - (float)v);
+			texCoords[i] = new Vector2((float)u, 1f - (float)v);
 		}
 
 		return texCoords;
