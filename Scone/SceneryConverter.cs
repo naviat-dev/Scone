@@ -510,7 +510,7 @@ public class SceneryConverter : INotifyPropertyChanged
 										accessors = JObject.Parse(scene.ToGltf2().GetJsonPreview())["accessors"]?.Value<JArray>()!;
 										Vector3 min = new(float.MaxValue);
 										Vector3 max = new(float.MinValue);
-										foreach (JObject accessor in accessors?.Cast<JObject>() ?? Enumerable.Empty<JObject>())
+										foreach (JObject accessor in accessors?.Cast<JObject>() ?? [])
 										{
 											if (accessor["min"] != null && accessor["max"] != null && accessor["name"]!.Value<string>() == "POSITION")
 											{

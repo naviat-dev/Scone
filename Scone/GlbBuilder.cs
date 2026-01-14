@@ -76,7 +76,8 @@ public class GlbBuilder
 		foreach (JObject primJson in ((JArray)meshJson["primitives"]!).Cast<JObject>())
 		{
 			JObject matJson = (JObject)matsJson[primJson["material"]!.Value<int>()];
-			if (matJson["extensions"]?["ASOBO_material_invisible"] != null) {
+			if (matJson["extensions"]?["ASOBO_material_invisible"] != null)
+			{
 				return null;
 			}
 			PrimitiveBuilder<MaterialBuilder, VertexPositionNormalTangent, VertexTexture2, VertexEmpty> prim = mesh.UsePrimitive(BuildMaterial(matJson, texJson, imgJson, srcPath, srcBgl));

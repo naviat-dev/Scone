@@ -237,7 +237,7 @@ public static class BtgParser
 				{
 					Console.WriteLine($"Warning: Read past element boundary. Position={br.BaseStream.Position}, Expected={elemEnd}");
 				}
-				
+
 				// Always seek to the correct end position
 				if (br.BaseStream.Position != elemEnd && elemEnd <= br.BaseStream.Length)
 				{
@@ -359,17 +359,17 @@ public class Terrain
 					meshes.Add(BtgParser.Parse(btgData));
 				}
 
-                value = new TileKey()
+				value = new TileKey()
 				{
 					Index = index,
 					Timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
 					Locked = false,
 					Models = [.. meshes.Select(BuildTileModel)]
-                };
+				};
                 tileCache[index] = value;
 			}
 
-            value.Locked = true;
+			value.Locked = true;
 			foreach (TileModel model in value.Models)
 			{
 				double elevationCur = SampleAltitude(model, latitude, longitude);
