@@ -912,44 +912,4 @@ public class SceneryConverter : INotifyPropertyChanged
 		public List<ModelObject> modelObjects;
 		public List<LightObject> lightObjects;
 	}
-
-	/// <summary>
-	/// Converts a BC5S (signed BC5) DDS normal map to DXT5 format for FlightGear compatibility.
-	/// BC5S stores XY in two channels. DXT5 can store normal data in the alpha and green channels.
-	/// </summary>
-	private static byte[] ConvertBC5SToDXT5(byte[] bc5sData, string fileName)
-	{
-		try
-		{
-			// DDS file structure:
-			// - Magic number "DDS " (4 bytes)
-			// - DDS_HEADER (124 bytes)
-			// - Optional DX10 header (20 bytes if present)
-			// - Pixel data
-
-			if (bc5sData.Length < 128)
-			{
-				Console.WriteLine($"Warning: DDS file {fileName} too small, skipping conversion");
-				return bc5sData;
-			}
-
-			// Copy header and modify the FOURCC
-			byte[] dxt5Data = new byte[bc5sData.Length];
-			Array.Copy(bc5sData, dxt5Data, bc5sData.Length);
-
-			// Modify the FOURCC at offset 84 from "BC5S" (0x53354342) to "DXT5" (0x35545844)
-			dxt5Data[84] = 0x44; // 'D'
-			dxt5Data[85] = 0x58; // 'X'
-			dxt5Data[86] = 0x54; // 'T'
-			dxt5Data[87] = 0x35; // '5'
-
-			Console.WriteLine($"Successfully converted BC5S to DXT5 for {fileName}");
-			return dxt5Data;
-		}
-		catch (Exception ex)
-		{
-			Console.WriteLine($"Error converting BC5S to DXT5 for {fileName}: {ex.Message}");
-			return bc5sData; // Return original on error
-		}
-	}
 }
