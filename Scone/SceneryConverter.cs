@@ -697,7 +697,7 @@ public class SceneryConverter : INotifyPropertyChanged
 		Console.WriteLine("Conversion complete.");
 	}
 
-	private XmlNode CreateLightElement(XmlDocument doc, LightObject light)
+	private static XmlNode CreateLightElement(XmlDocument doc, LightObject light)
 	{
 		XmlElement lightElem = doc.CreateElement("light");
 		lightElem.AppendChild(doc.CreateElement("name"))!.InnerText = light.name ?? "Unnamed_Light";
@@ -736,7 +736,7 @@ public class SceneryConverter : INotifyPropertyChanged
 		return lightElem;
 	}
 
-	private XmlNode CreateScaleElement(XmlDocument doc, float scale, ModelData model)
+	private static XmlNode CreateScaleElement(XmlDocument doc, float scale, ModelData model)
 	{
 		XmlElement scaleElem = doc.CreateElement("animation");
 		scaleElem.AppendChild(doc.CreateElement("type"))!.InnerText = "scale";
@@ -750,7 +750,7 @@ public class SceneryConverter : INotifyPropertyChanged
 		return scaleElem;
 	}
 
-	private XmlNode CreateLodElement(XmlDocument doc, float radius, int minSize, int? maxSize)
+	private static XmlNode CreateLodElement(XmlDocument doc, float radius, int minSize, int? maxSize)
 	{
 		XmlElement lodElem = doc.CreateElement("animation");
 		lodElem.AppendChild(doc.CreateElement("type"))!.InnerText = "range";

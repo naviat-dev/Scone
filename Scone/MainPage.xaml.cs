@@ -116,7 +116,7 @@ public sealed partial class MainPage : Page
 		await dialog.ShowAsync();
 	}
 
-	private async void StartDownloadTask(DownloadTask task)
+	private static async void StartDownloadTask(DownloadTask task)
 	{
 		// Placeholder for actual download logic
 		// This simulates progress for demonstration
