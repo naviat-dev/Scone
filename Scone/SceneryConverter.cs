@@ -462,49 +462,77 @@ public class SceneryConverter : INotifyPropertyChanged
 												lightObjects.Add(light);
 											}
 										}
+										
+										// Build parent map for nodes
+										JArray nodesArray = (JArray)json["nodes"]!;
+										int nodeCount = nodesArray.Count;
+										int[] parentMap = new int[nodeCount];
+										for (int n = 0; n < nodeCount; n++) parentMap[n] = -1;
+										for (int n = 0; n < nodeCount; n++)
+										{
+											JObject node = (JObject)nodesArray[n]!;
+											if (node["children"] != null)
+											{
+												foreach (var child in (JArray)node["children"]!)
+												{
+													int childIdx = child.Value<int>();
+													parentMap[childIdx] = n;
+												}
+											}
+										}
+
+										// Helper: Compute world transform for a node
+										Matrix4x4 GetWorldTransform(int nodeIdx)
+										{
+											Matrix4x4 result = Matrix4x4.Identity;
+											int? current = nodeIdx;
+											while (current != null && current >= 0)
+											{
+												JObject node = (JObject)nodesArray[current.Value]!;
+												// Build local transform
+												Vector3 t = node["translation"] != null ? new Vector3(
+													node["translation"]![0]!.Value<float>(),
+													node["translation"]![1]!.Value<float>(),
+													node["translation"]![2]!.Value<float>()) : Vector3.Zero;
+												Quaternion r = node["rotation"] != null ? new Quaternion(
+													node["rotation"]![0]!.Value<float>(),
+													node["rotation"]![1]!.Value<float>(),
+													node["rotation"]![2]!.Value<float>(),
+													node["rotation"]![3]!.Value<float>()) : Quaternion.Identity;
+												Vector3 s = node["scale"] != null ? new Vector3(
+													node["scale"]![0]!.Value<float>(),
+													node["scale"]![1]!.Value<float>(),
+													node["scale"]![2]!.Value<float>()) : Vector3.One;
+												float avgScale = (s.X + s.Y + s.Z) / 3.0f;
+												if (!float.IsFinite(avgScale) || avgScale <= 0f) avgScale = 1f;
+												s = new Vector3(avgScale, avgScale, avgScale);
+												Matrix4x4 local = Matrix4x4.CreateScale(s) * Matrix4x4.CreateFromQuaternion(Quaternion.Normalize(r)) * Matrix4x4.CreateTranslation(t);
+												result = local * result;
+												current = parentMap[current.Value] >= 0 ? parentMap[current.Value] : (int?)null;
+											}
+											return result;
+										}
+
 										foreach (JObject mesh in meshes.Cast<JObject>())
 										{
 											MeshBuilder<VertexPositionNormalTangent, VertexTexture2, VertexEmpty>? meshBuilder = GlbBuilder.BuildMesh(inputPath, file, mesh, accessors, bufferViews, materials, textures, images, glbBinBytes);
 											if (meshBuilder == null) continue;
-											Vector3 translationFinal = Vector3.Zero;
-											Quaternion rotationFinal = Quaternion.Identity;
-											Vector3 scaleFinal = Vector3.One;
-											foreach (int nodeIndex in meshIndexToSceneNodeIndex[meshes.IndexOf(mesh)])
+											int meshIdx = meshes.IndexOf(mesh);
+											if (!meshIndexToSceneNodeIndex.TryGetValue(meshIdx, out List<int>? nodeIndices)) continue;
+											foreach (int nodeIndex in nodeIndices)
 											{
-												NodeBuilder node = GlbBuilder.BuildNode(nodeIndex, (JArray)json["nodes"]!);
-												translationFinal += node.Translation == null ? Vector3.Zero : node.Translation.Value;
-												rotationFinal *= node.Rotation == null ? Quaternion.Identity : node.Rotation.Value;
-												scaleFinal *= node.Scale == null ? Vector3.One : node.Scale.Value;
+												Matrix4x4 transform = GetWorldTransform(nodeIndex);
+												// Validate matrix before passing to SharpGLTF
+												if (!(float.IsFinite(transform.M11) && float.IsFinite(transform.M12) && float.IsFinite(transform.M13) && float.IsFinite(transform.M14)
+													&& float.IsFinite(transform.M21) && float.IsFinite(transform.M22) && float.IsFinite(transform.M23) && float.IsFinite(transform.M24)
+													&& float.IsFinite(transform.M31) && float.IsFinite(transform.M32) && float.IsFinite(transform.M33) && float.IsFinite(transform.M34)
+													&& float.IsFinite(transform.M41) && float.IsFinite(transform.M42) && float.IsFinite(transform.M43) && float.IsFinite(transform.M44)))
+												{
+													// Skip this mesh if transform is invalid to prevent runtime exception
+													continue;
+												}
+												_ = scene.AddRigidMesh(meshBuilder, transform);
 											}
-
-											// Normalize and sanitize transform components to avoid NaN/Infinity matrices
-											rotationFinal = Quaternion.Normalize(rotationFinal);
-
-											float avgScale = (scaleFinal.X + scaleFinal.Y + scaleFinal.Z) / 3.0f;
-											if (!float.IsFinite(avgScale) || avgScale <= 0f) avgScale = 1f;
-											scaleFinal = new Vector3(avgScale, avgScale, avgScale);
-
-											translationFinal = new Vector3(
-												float.IsFinite(translationFinal.X) ? translationFinal.X : 0f,
-												float.IsFinite(translationFinal.Y) ? translationFinal.Y : 0f,
-												float.IsFinite(translationFinal.Z) ? translationFinal.Z : 0f
-											);
-
-											Matrix4x4 transform = Matrix4x4.CreateScale(scaleFinal) *
-															Matrix4x4.CreateFromQuaternion(rotationFinal) *
-															Matrix4x4.CreateTranslation(translationFinal);
-
-											// Validate matrix before passing to SharpGLTF
-											if (!(float.IsFinite(transform.M11) && float.IsFinite(transform.M12) && float.IsFinite(transform.M13) && float.IsFinite(transform.M14)
-												&& float.IsFinite(transform.M21) && float.IsFinite(transform.M22) && float.IsFinite(transform.M23) && float.IsFinite(transform.M24)
-												&& float.IsFinite(transform.M31) && float.IsFinite(transform.M32) && float.IsFinite(transform.M33) && float.IsFinite(transform.M34)
-												&& float.IsFinite(transform.M41) && float.IsFinite(transform.M42) && float.IsFinite(transform.M43) && float.IsFinite(transform.M44)))
-											{
-												// Skip this mesh if transform is invalid to prevent runtime exception
-												continue;
-											}
-
-											_ = scene.AddRigidMesh(meshBuilder, transform);
 										}
 
 										accessors = JObject.Parse(scene.ToGltf2().GetJsonPreview())["accessors"]?.Value<JArray>()!;
