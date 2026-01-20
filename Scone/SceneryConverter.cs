@@ -60,8 +60,7 @@ public class SceneryConverter : INotifyPropertyChanged
 		// Gather placements first
 		foreach (string file in allBglFiles)
 		{
-			using FileStream fs = new(file, FileMode.Open, FileAccess.Read);
-			using BinaryReader br = new(fs);
+			using BinaryReader br = new(new FileStream(file, FileMode.Open, FileAccess.Read));
 			Status = $"Looking for placements in {Path.GetFileName(file)}...";
 
 			// Read and validate BGL header
@@ -174,59 +173,15 @@ public class SceneryConverter : INotifyPropertyChanged
 			}
 		}
 
-		// This is only really for the UI
-		// There should be a better way to do this that doesn't have so much repetition, but that's the best I've got for now
-		foreach (string file in allBglFiles)
-		{
-			using FileStream fs = new(file, FileMode.Open, FileAccess.Read);
-			using BinaryReader br = new(fs);
-
-			// Read and validate BGL header
-			byte[] magicNumber1 = br.ReadBytes(4);
-			_ = br.BaseStream.Seek(0x10, SeekOrigin.Begin);
-			byte[] magicNumber2 = br.ReadBytes(4);
-			if (!magicNumber1.SequenceEqual(new byte[] { 0x01, 0x02, 0x92, 0x19 }) ||
-				!magicNumber2.SequenceEqual(new byte[] { 0x03, 0x18, 0x05, 0x08 }))
-			{
-				Console.WriteLine("Invalid BGL header");
-				continue;
-			}
-			_ = br.BaseStream.Seek(0x14, SeekOrigin.Begin);
-			uint recordCt = br.ReadUInt32();
-
-			// Skip 0x38-byte header
-			_ = br.BaseStream.Seek(0x38, SeekOrigin.Begin);
-
-			List<int> mdlDataOffsets = [];
-			List<int> sceneryObjectOffsets = [];
-			for (int i = 0; i < recordCt; i++)
-			{
-				long recordStartPos = br.BaseStream.Position;
-				uint recType = br.ReadUInt32();
-				_ = br.BaseStream.Seek(recordStartPos + 0x0C, SeekOrigin.Begin);
-				uint startSubsection = br.ReadUInt32();
-				_ = br.BaseStream.Seek(recordStartPos + 0x10, SeekOrigin.Begin);
-				uint recSize = br.ReadUInt32();
-				if (recType == 0x002B) // ModelData
-				{
-					mdlDataOffsets.Add((int)startSubsection);
-				}
-			}
-			List<(int offset, int size)> modelDataSubrecords = [];
-			foreach (int modelDataOffset in mdlDataOffsets)
-			{
-				_ = br.BaseStream.Seek(modelDataOffset + 8, SeekOrigin.Begin);
-				int subrecOffset = br.ReadInt32();
-				int size = br.ReadInt32();
-				BytesTotal += size;
-			}
-		}
+		// Models need to be written combined on a tile-by-tile basis to minimize RAM consumption
+		// We have all the placements and their GUIDs, so run through the model BGLs and create a Dictionary
+		// The key will be the tile index, and the value will be a list of access points of models (file, binary address, size)
+		// After the dictionary has been completed, we will go back through and write out each tile's models to the respective folder
 
 		// Look for models after placements have been gathered
 		foreach (string file in allBglFiles)
 		{
-			using FileStream fs = new(file, FileMode.Open, FileAccess.Read);
-			using BinaryReader br = new(fs);
+			using BinaryReader br = new(new FileStream(file, FileMode.Open, FileAccess.Read));
 			Status = $"Looking for models in {Path.GetFileName(file)}...";
 
 			// Read and validate BGL header
@@ -246,7 +201,6 @@ public class SceneryConverter : INotifyPropertyChanged
 			_ = br.BaseStream.Seek(0x38, SeekOrigin.Begin);
 
 			List<int> mdlDataOffsets = [];
-			List<int> sceneryObjectOffsets = [];
 			for (int i = 0; i < recordCt; i++)
 			{
 				long recordStartPos = br.BaseStream.Position;
