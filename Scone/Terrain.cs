@@ -345,7 +345,6 @@ public class Terrain
 			{
 				byte[] stgData = client.GetByteArrayAsync($"{urlTopLevel}/{index}.stg").Result;
 				MatchCollection matches = new Regex(@"OBJECT (.+\.btg)", RegexOptions.Multiline).Matches(Encoding.UTF8.GetString(stgData));
-				Console.WriteLine($"Found {matches.Count} BTG files in index {index}");
 				List<BtgParseResult> meshes = [];
 				foreach (Match match in matches)
 				{
@@ -374,7 +373,6 @@ public class Terrain
 			{
 				double elevationCur = SampleAltitude(model, latitude, longitude);
 				elevation = elevationCur > elevation ? elevationCur : elevation;
-				Console.WriteLine($"Sampled elevation from model at {longitude}, {latitude}: {elevation} meters");
 			}
 		}
 		catch (AggregateException e)
@@ -389,7 +387,6 @@ public class Terrain
 				Models = []
 			};
 		}
-		Console.WriteLine($"Elevation: {elevation} meters");
 		return elevation;
 	}
 
