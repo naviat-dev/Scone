@@ -1,6 +1,7 @@
 using Windows.Storage.Pickers;
 using WinRT.Interop;
 using System.Text.Json;
+using Microsoft.UI.Dispatching;
 
 namespace Scone;
 
@@ -262,15 +263,23 @@ public class DownloadTask : INotifyPropertyChanged
 	private bool _isRunning = false;
 	private double _progress = 0;
 	private string _progressText = "0%";
+	private readonly DispatcherQueue _dispatcher;
 
 	public DownloadTask()
 	{
-		// Subscribe to converter status changes
+		// Get the current dispatcher for UI thread marshaling
+		_dispatcher = DispatcherQueue.GetForCurrentThread();
+
+		// Subscribe to converter status changes and marshal to UI thread
 		_converter.PropertyChanged += (s, e) =>
 		{
 			if (e.PropertyName == nameof(SceneryConverter.Status))
 			{
-				OnPropertyChanged(nameof(Status));
+				// Marshal the property change notification to the UI thread
+				_dispatcher?.TryEnqueue(() =>
+				{
+					OnPropertyChanged(nameof(Status));
+				});
 			}
 		};
 	}
