@@ -605,19 +605,24 @@ public class SceneryConverter : INotifyPropertyChanged
 
 						// Return the URI that should appear in the glTF
 						return fileName;
+					},
+					JsonPostprocessor = (json) =>
+					{
+						// Fix for MSFT_texture_dds extension not being properly handled
+						JObject gltfText = JObject.Parse(json);
+						if (gltfText["textures"] != null)
+						{
+							foreach (JObject tex in gltfText["textures"]!.Cast<JObject>())
+							{
+								if (tex["extensions"]?["MSFT_texture_dds"] != null)
+								{
+									tex["source"] = tex["extensions"]?["MSFT_texture_dds"]?["source"];
+								}
+							}
+						}
+						return gltfText.ToString();
 					}
 				});
-				// Reopen the gltf file to fix the texture problem.
-				// This way isn't clean, but it's not messy and it works reliably.
-				JObject gltfText = JObject.Parse(File.ReadAllText(outGlbPath));
-				if (gltfText["textures"] != null)
-				{
-					foreach (JObject tex in gltfText["textures"]!.Cast<JObject>())
-					{
-						tex["source"] = tex["extensions"]?["MSFT_texture_dds"]?["source"];
-					}
-				}
-				File.WriteAllText(outGlbPath, gltfText.ToString());
 
 				bool hasXml = false;
 				string activeName = $"{tileIndex}.{(hasXml ? "xml" : "gltf")}";
