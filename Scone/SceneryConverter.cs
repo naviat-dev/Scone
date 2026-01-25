@@ -461,6 +461,10 @@ public class SceneryConverter : INotifyPropertyChanged
 								{
 									tex["source"] = tex["extensions"]?["MSFT_texture_dds"]?["source"];
 								}
+								else if (tex["extensions"]?["KHR_texture_basisu"] != null)
+								{
+									tex["source"] = tex["extensions"]?["KHR_texture_basisu"]?["source"];
+								}
 							}
 						}
 						return gltfText.ToString();
