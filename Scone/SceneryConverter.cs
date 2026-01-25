@@ -746,6 +746,7 @@ public class SceneryConverter : INotifyPropertyChanged
 		NoZTest = 6,
 	}
 
+#pragma warning disable CS0649
 	private struct LibraryObject
 	{
 		public int id;
@@ -810,4 +811,5 @@ public class SceneryConverter : INotifyPropertyChanged
 		public float flashPhase;
 		public float rotationSpeed;
 	}
+#pragma warning restore CS0649
 }
