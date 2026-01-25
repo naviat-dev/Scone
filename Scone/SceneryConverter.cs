@@ -403,6 +403,12 @@ public class SceneryConverter : INotifyPropertyChanged
 
 									// Advance j past this GLB record (type[4] + size[4] + payload[glbSize])
 									j += 8 + glbSize;
+									if (lods.Count > 1)
+									{
+										Console.WriteLine($"More than one LOD present for {name}; skipping remaining GLB in chunk.");
+										// The highest LOD is the first GLB; break after processing it
+										break;
+									}
 								}
 								else
 								{
