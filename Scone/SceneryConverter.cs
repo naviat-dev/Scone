@@ -408,7 +408,6 @@ public class SceneryConverter : INotifyPropertyChanged
 										Matrix4x4 transform = Matrix4x4.CreateScale(scale) * Matrix4x4.CreateFromQuaternion(rotation) * Matrix4x4.CreateTranslation(translation);
 										_ = scene.AddScene(sceneLocal, transform);
 									}
-									sceneLocal.TryDispose();
 									glbIndex++;
 
 									// Advance j past this GLB record (type[4] + size[4] + payload[glbSize])
