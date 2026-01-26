@@ -94,6 +94,13 @@ public sealed partial class MainPage : Page
 					App.AppConfig = config.Value;
 				}
 			}
+
+			// Set default output directory if not configured
+			if (string.IsNullOrWhiteSpace(App.AppConfig.OutputDirectory))
+			{
+				App.AppConfig.OutputDirectory = Config.GetDefaultOutputDirectory();
+				SaveConfig(); // Save the default
+			}
 		}
 		catch { /* Ignore errors loading config */ }
 	}
