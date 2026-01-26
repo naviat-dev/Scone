@@ -7,6 +7,7 @@ using SharpGLTF.Geometry.VertexTypes;
 using SharpGLTF.Memory;
 using SharpGLTF.Scenes;
 using SharpGLTF.Schema2;
+using Uno.Disposables;
 
 namespace Scone;
 
@@ -407,11 +408,12 @@ public class SceneryConverter : INotifyPropertyChanged
 										Matrix4x4 transform = Matrix4x4.CreateScale(scale) * Matrix4x4.CreateFromQuaternion(rotation) * Matrix4x4.CreateTranslation(translation);
 										_ = scene.AddScene(sceneLocal, transform);
 									}
+									sceneLocal.TryDispose();
 									glbIndex++;
 
 									// Advance j past this GLB record (type[4] + size[4] + payload[glbSize])
 									j += 8 + glbSize;
-									if (lods.Count > 1)
+									if (glbIndex >= 1)
 									{
 										Console.WriteLine($"More than one LOD present for {name}; skipping remaining GLB in chunk.");
 										// The highest LOD is the first GLB; break after processing it
@@ -445,6 +447,7 @@ public class SceneryConverter : INotifyPropertyChanged
 				}
 
 				string outGlbPath = Path.Combine(path, $"{tileIndex}.gltf");
+				Status = "Saving model to disk...";
 				scene.ToGltf2().SaveGLTF(outGlbPath, new WriteSettings
 				{
 					ImageWriting = ResourceWriteMode.SatelliteFile,
