@@ -472,7 +472,7 @@ public class SceneryConverter : INotifyPropertyChanged
 					Dictionary<string, int> imageUriToIndex = [];
 					JArray images = [];
 					// Assign proper sources for textures using extensions
-					foreach (JObject mat in gltfText["materials"]!.Cast<JObject>())
+					foreach (JObject mat in gltfText["materials"]?.Cast<JObject>() ?? [])
 					{
 						if (mat["pbrMetallicRoughness"]?["baseColorTexture"] != null)
 						{
