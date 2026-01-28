@@ -1,4 +1,3 @@
-
 using System.Numerics;
 using Newtonsoft.Json.Linq;
 using SharpGLTF.Geometry;
@@ -10,7 +9,7 @@ namespace Scone;
 
 public class GlbBuilder
 {
-
+	public static readonly string DummyTexPath = Path.Combine(AppContext.BaseDirectory, "Assets", "dummy_tex.dds");
 	public class PrimData
 	{
 		public Vector3[] Positions { get; set; } = [];
@@ -187,7 +186,8 @@ public class GlbBuilder
                 "MASK" => AlphaMode.MASK,
                 _ => AlphaMode.OPAQUE,
             },
-            DoubleSided = matJson["doubleSided"]?.Value<bool>() ?? false
+            DoubleSided = matJson["doubleSided"]?.Value<bool>() ?? false,
+            Extras = new System.Text.Json.Nodes.JsonObject()
         };
         if (matJson["pbrMetallicRoughness"] != null)
 		{
@@ -229,10 +229,11 @@ public class GlbBuilder
 
 					if (!string.IsNullOrEmpty(mostLikelyMatch))
 					{
+						material.Extras["baseColorTexture"] = mostLikelyMatch;
 						_ = material.UseChannel(KnownChannel.BaseColor)
-								.UseTexture()
-								.WithPrimaryImage(mostLikelyMatch)
-								.WithCoordinateSet(texCoordSet);
+							.UseTexture()
+							.WithPrimaryImage(DummyTexPath)
+							.WithCoordinateSet(texCoordSet);
 					}
 				}
 			}
@@ -273,9 +274,10 @@ public class GlbBuilder
 
 					if (!string.IsNullOrEmpty(mostLikelyMatch))
 					{
+						material.Extras["metallicRoughnessTexture"] = mostLikelyMatch;
 						_ = material.UseChannel(KnownChannel.MetallicRoughness)
 							.UseTexture()
-							.WithPrimaryImage(mostLikelyMatch)
+							.WithPrimaryImage(DummyTexPath)
 							.WithCoordinateSet(texCoordSet);
 					}
 				}
@@ -310,9 +312,10 @@ public class GlbBuilder
 
 				if (!string.IsNullOrEmpty(mostLikelyMatch))
 				{
+					material.Extras["normalTexture"] = mostLikelyMatch;
 					_ = material.UseChannel(KnownChannel.Normal)
 						.UseTexture()
-						.WithPrimaryImage(mostLikelyMatch)
+						.WithPrimaryImage(DummyTexPath)
 						.WithCoordinateSet(texCoordSet);
 				}
 			}
@@ -346,9 +349,10 @@ public class GlbBuilder
 
 				if (!string.IsNullOrEmpty(mostLikelyMatch))
 				{
+					material.Extras["occlusionTexture"] = mostLikelyMatch;
 					_ = material.UseChannel(KnownChannel.Occlusion)
 						.UseTexture()
-						.WithPrimaryImage(mostLikelyMatch)
+						.WithPrimaryImage(DummyTexPath)
 						.WithCoordinateSet(texCoordSet);
 				}
 			}
@@ -382,9 +386,10 @@ public class GlbBuilder
 
 				if (!string.IsNullOrEmpty(mostLikelyMatch))
 				{
+					material.Extras["emissiveTexture"] = mostLikelyMatch;
 					_ = material.UseChannel(KnownChannel.Emissive)
 						.UseTexture()
-						.WithPrimaryImage(mostLikelyMatch)
+						.WithPrimaryImage(DummyTexPath)
 						.WithCoordinateSet(texCoordSet);
 				}
 			}

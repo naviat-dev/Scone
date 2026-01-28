@@ -25,7 +25,7 @@ public class SceneryConverter : INotifyPropertyChanged
 	public bool AbortAndCancel { get; set; } = false;
 	public bool AbortAndSave { get; set; } = false;
 	public event PropertyChangedEventHandler? PropertyChanged;
-	private readonly MemoryImage Fallback = new("Assets\\tex-fallback.png");
+	private readonly MemoryImage Fallback = new("Assets/tex-fallback.png");
 	public void ConvertScenery(string inputPath, string outputPath)
 	{
 		if (!Directory.Exists(inputPath))
@@ -463,37 +463,174 @@ public class SceneryConverter : INotifyPropertyChanged
 				ImageWriting = ResourceWriteMode.SatelliteFile,
 				ImageWriteCallback = (context, assetName, image) =>
 				{
-					string fileName = string.IsNullOrEmpty(image.SourcePath) ? assetName : image.SourcePath.Split(Path.DirectorySeparatorChar).Last();
-					fileName = fileName.Replace(" ", "_");
-					string finalPath = Path.Combine(path, fileName);
-
-					// Only write the image once
-					if (!File.Exists(finalPath) && !image.Content.Span.SequenceEqual(Fallback.Content.Span))
-					{
-						File.WriteAllBytes(finalPath, image.Content.ToArray());
-					}
-
-					// Return the URI that should appear in the glTF
-					return fileName;
+					// This name doesn't matter; we will fix up the URIs in the postprocessor
+					return "";
 				},
 				JsonPostprocessor = (json) =>
 				{
-					// Fix for MSFT_texture_dds extension not being properly handled
 					JObject gltfText = JObject.Parse(json);
-					if (gltfText["textures"] != null)
+					Dictionary<string, int> imageUriToIndex = [];
+					JArray images = [];
+					// Assign proper sources for textures using extensions
+					foreach (JObject mat in gltfText["materials"]!.Cast<JObject>())
 					{
-						foreach (JObject tex in gltfText["textures"]!.Cast<JObject>())
+						if (mat["pbrMetallicRoughness"]?["baseColorTexture"] != null)
 						{
-							if (tex["extensions"]?["MSFT_texture_dds"] != null)
+							string baseColorTex = mat["extras"]!["baseColorTexture"]!.Value<string>() ?? "";
+							int texIndex = mat["pbrMetallicRoughness"]!["baseColorTexture"]!["index"]!.Value<int>();
+							JObject currentTexture = new()
 							{
-								tex["source"] = tex["extensions"]?["MSFT_texture_dds"]?["source"];
-							}
-							else if (tex["extensions"]?["KHR_texture_basisu"] != null)
+								["extensions"] = new JObject
+								{
+									["MSFT_texture_dds"] = new JObject
+									{
+										["source"] = images.Count
+									}
+								},
+								["source"] = images.Count
+							};
+							if (imageUriToIndex.TryGetValue(baseColorTex, out int existingIndex))
 							{
-								tex["source"] = tex["extensions"]?["KHR_texture_basisu"]?["source"];
+								currentTexture["source"] = existingIndex;
+								currentTexture["extensions"]!["MSFT_texture_dds"]!["source"] = existingIndex;
 							}
+							else
+							{
+								imageUriToIndex[baseColorTex] = images.Count;
+								images.Add(new JObject
+								{
+									["uri"] = Path.GetFileName(baseColorTex)
+								});
+							}
+							gltfText["textures"]?[texIndex] = currentTexture;
+							File.Copy(baseColorTex, Path.Combine(path, Path.GetFileName(baseColorTex)), true);
+						}
+						if (mat["pbrMetallicRoughness"]?["metallicRoughnessTexture"] != null)
+						{
+							string metallicRoughnessTex = mat["extras"]!["metallicRoughnessTexture"]!.Value<string>() ?? "";
+							int texIndex = mat["pbrMetallicRoughness"]!["metallicRoughnessTexture"]!["index"]!.Value<int>();
+							JObject currentTexture = new()
+							{
+								["extensions"] = new JObject
+								{
+									["MSFT_texture_dds"] = new JObject
+									{
+										["source"] = images.Count
+									}
+								},
+								["source"] = images.Count
+							};
+							if (imageUriToIndex.TryGetValue(metallicRoughnessTex, out int existingIndex))
+							{
+								currentTexture["source"] = existingIndex;
+								currentTexture["extensions"]!["MSFT_texture_dds"]!["source"] = existingIndex;
+							}
+							else
+							{
+								imageUriToIndex[metallicRoughnessTex] = images.Count;
+								images.Add(new JObject
+								{
+									["uri"] = Path.GetFileName(metallicRoughnessTex)
+								});
+							}
+							gltfText["textures"]?[texIndex] = currentTexture;
+							File.Copy(metallicRoughnessTex, Path.Combine(path, Path.GetFileName(metallicRoughnessTex)), true);
+						}
+						if (mat["normalTexture"] != null)
+						{
+							string normaTex = mat["extras"]!["normalTexture"]!.Value<string>() ?? "";
+							int texIndex = mat["normalTexture"]!["index"]!.Value<int>();
+							JObject currentTexture = new()
+							{
+								["extensions"] = new JObject
+								{
+									["MSFT_texture_dds"] = new JObject
+									{
+										["source"] = images.Count
+									}
+								},
+								["source"] = images.Count
+							};
+							if (imageUriToIndex.TryGetValue(normaTex, out int existingIndex))
+							{
+								currentTexture["source"] = existingIndex;
+								currentTexture["extensions"]!["MSFT_texture_dds"]!["source"] = existingIndex;
+							}
+							else
+							{
+								imageUriToIndex[normaTex] = images.Count;
+								images.Add(new JObject
+								{
+									["uri"] = Path.GetFileName(normaTex)
+								});
+							}
+							gltfText["textures"]?[texIndex] = currentTexture;
+							File.Copy(normaTex, Path.Combine(path, Path.GetFileName(normaTex)), true);
+						}
+						if (mat["occlusionTexture"] != null)
+						{
+							string occlusionTex = mat["extras"]!["occlusionTexture"]!.Value<string>() ?? "";
+							int texIndex = mat["occlusionTexture"]!["index"]!.Value<int>();
+							JObject currentTexture = new()
+							{
+								["extensions"] = new JObject
+								{
+									["MSFT_texture_dds"] = new JObject
+									{
+										["source"] = images.Count
+									}
+								},
+								["source"] = images.Count
+							};
+							if (imageUriToIndex.TryGetValue(occlusionTex, out int existingIndex))
+							{
+								currentTexture["source"] = existingIndex;
+								currentTexture["extensions"]!["MSFT_texture_dds"]!["source"] = existingIndex;
+							}
+							else
+							{
+								imageUriToIndex[occlusionTex] = images.Count;
+								images.Add(new JObject
+								{
+									["uri"] = Path.GetFileName(occlusionTex)
+								});
+							}
+							gltfText["textures"]?[texIndex] = currentTexture;
+							File.Copy(occlusionTex, Path.Combine(path, Path.GetFileName(occlusionTex)), true);
+						}
+						if (mat["emissiveTexture"] != null)
+						{
+							string emissiveTex = mat["extras"]!["emissiveTexture"]!.Value<string>() ?? "";
+							int texIndex = mat["emissiveTexture"]!["index"]!.Value<int>();
+							JObject currentTexture = new()
+							{
+								["extensions"] = new JObject
+								{
+									["MSFT_texture_dds"] = new JObject
+									{
+										["source"] = images.Count
+									}
+								},
+								["source"] = images.Count
+							};
+							if (imageUriToIndex.TryGetValue(emissiveTex, out int existingIndex))
+							{
+								currentTexture["source"] = existingIndex;
+								currentTexture["extensions"]!["MSFT_texture_dds"]!["source"] = existingIndex;
+							}
+							else
+							{
+								imageUriToIndex[emissiveTex] = images.Count;
+								images.Add(new JObject
+								{
+									["uri"] = Path.GetFileName(emissiveTex)
+								});
+							}
+							gltfText["textures"]?[texIndex] = currentTexture;
+							File.Copy(emissiveTex, Path.Combine(path, Path.GetFileName(emissiveTex)), true);
 						}
 					}
+					gltfText["images"] = images;
 					return gltfText.ToString();
 				}
 			});
