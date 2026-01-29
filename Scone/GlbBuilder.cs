@@ -178,18 +178,18 @@ public class GlbBuilder
 
 	private static MaterialBuilder BuildMaterial(JObject matJson, JArray texJson, JArray imgJson, string srcPath, string sourceBgl)
 	{
-        MaterialBuilder material = new(matJson["name"]?.Value<string>() ?? "UnnamedMaterial")
-        {
-            AlphaMode = matJson["alphaMode"]?.Value<string>() switch
-            {
-                "BLEND" => AlphaMode.BLEND,
-                "MASK" => AlphaMode.MASK,
-                _ => AlphaMode.OPAQUE,
-            },
-            DoubleSided = matJson["doubleSided"]?.Value<bool>() ?? false,
-            Extras = new System.Text.Json.Nodes.JsonObject()
-        };
-        if (matJson["pbrMetallicRoughness"] != null)
+		MaterialBuilder material = new(matJson["name"]?.Value<string>() ?? "UnnamedMaterial")
+		{
+			AlphaMode = matJson["alphaMode"]?.Value<string>() switch
+			{
+				"BLEND" => AlphaMode.BLEND,
+				"MASK" => AlphaMode.MASK,
+				_ => AlphaMode.OPAQUE,
+			},
+			DoubleSided = matJson["doubleSided"]?.Value<bool>() ?? false,
+			Extras = new System.Text.Json.Nodes.JsonObject()
+		};
+		if (matJson["pbrMetallicRoughness"] != null)
 		{
 			JObject pbr = (JObject)matJson["pbrMetallicRoughness"]!;
 			if (pbr["baseColorFactor"] != null)
@@ -207,7 +207,7 @@ public class GlbBuilder
 				string mostLikelyMatch = "";
 				if (texIndex >= 0 && texIndex < texJson.Count)
 				{
-					string imgUri = imgJson[texJson[texIndex]["extensions"]!["MSFT_texture_dds"]!["source"]!.Value<int>()]["uri"]!.Value<string>() ?? "";
+					string imgUri = imgJson[texJson[texIndex]["extensions"]!["MSFT_texture_dds"]!["source"]!.Value<int>()]["uri"]!.Value<string>()?.Split('\\').Last()?.Split('/').Last() ?? "";
 					if (imgUri != null)
 					{
 						string[] imageMatches = [.. Directory.GetFiles(srcPath, "*", SearchOption.AllDirectories).Where(f => string.Equals(Path.GetFileName(f), imgUri, StringComparison.OrdinalIgnoreCase))];
@@ -237,13 +237,10 @@ public class GlbBuilder
 					}
 				}
 			}
-			if (pbr["metallicFactor"] != null || pbr["roughnessFactor"] != null)
-			{
-				// Use sane defaults per glTF PBR: metallic=0 (non-metal), roughness=1 (fully rough)
-				float metallic = Math.Clamp(pbr["metallicFactor"]?.Value<float>() ?? 0f, 0f, 1f);
-				float roughness = Math.Clamp(pbr["roughnessFactor"]?.Value<float>() ?? 1f, 0f, 1f);
-				_ = material.WithMetallicRoughness(metallic, roughness);
-			}
+			// Use sane defaults per glTF PBR: metallic=0 (non-metal), roughness=1 (fully rough)
+			float metallic = Math.Clamp(pbr["metallicFactor"]?.Value<float>() ?? 0f, 0f, 1f);
+			float roughness = Math.Clamp(pbr["roughnessFactor"]?.Value<float>() ?? 1f, 0f, 1f);
+			_ = material.WithMetallicRoughness(metallic, roughness);
 			if (pbr["metallicRoughnessTexture"] != null)
 			{
 				int texIndex = pbr["metallicRoughnessTexture"]!["index"]!.Value<int>();
@@ -251,7 +248,7 @@ public class GlbBuilder
 				string mostLikelyMatch = "";
 				if (texIndex >= 0 && texIndex < texJson.Count)
 				{
-					string imgUri = imgJson[texJson[texIndex]["extensions"]!["MSFT_texture_dds"]!["source"]!.Value<int>()]["uri"]!.Value<string>() ?? "";
+					string imgUri = imgJson[texJson[texIndex]["extensions"]!["MSFT_texture_dds"]!["source"]!.Value<int>()]["uri"]!.Value<string>()?.Split('\\').Last()?.Split('/').Last() ?? "";
 					if (imgUri != null)
 					{
 						string[] imageMatches = [.. Directory.GetFiles(srcPath, "*", SearchOption.AllDirectories).Where(f => string.Equals(Path.GetFileName(f), imgUri, StringComparison.OrdinalIgnoreCase))];
@@ -290,7 +287,7 @@ public class GlbBuilder
 			string mostLikelyMatch = "";
 			if (texIndex >= 0 && texIndex < imgJson.Count)
 			{
-				string imgUri = imgJson[texJson[texIndex]["extensions"]!["MSFT_texture_dds"]!["source"]!.Value<int>()]["uri"]!.Value<string>() ?? "";
+				string imgUri = imgJson[texJson[texIndex]["extensions"]!["MSFT_texture_dds"]!["source"]!.Value<int>()]["uri"]!.Value<string>()?.Split('\\').Last()?.Split('/').Last() ?? "";
 				if (imgUri != null)
 				{
 					string[] imageMatches = [.. Directory.GetFiles(srcPath, "*", SearchOption.AllDirectories).Where(f => string.Equals(Path.GetFileName(f), imgUri, StringComparison.OrdinalIgnoreCase))];
@@ -327,7 +324,7 @@ public class GlbBuilder
 			string mostLikelyMatch = "";
 			if (texIndex >= 0 && texIndex < imgJson.Count)
 			{
-				string imgUri = imgJson[texJson[texIndex]["extensions"]!["MSFT_texture_dds"]!["source"]!.Value<int>()]["uri"]!.Value<string>() ?? "";
+				string imgUri = imgJson[texJson[texIndex]["extensions"]!["MSFT_texture_dds"]!["source"]!.Value<int>()]["uri"]!.Value<string>()?.Split('\\').Last()?.Split('/').Last() ?? "";
 				if (imgUri != null)
 				{
 					string[] imageMatches = [.. Directory.GetFiles(srcPath, "*", SearchOption.AllDirectories).Where(f => string.Equals(Path.GetFileName(f), imgUri, StringComparison.OrdinalIgnoreCase))];
@@ -364,7 +361,7 @@ public class GlbBuilder
 			string mostLikelyMatch = "";
 			if (texIndex >= 0 && texIndex < imgJson.Count)
 			{
-				string imgUri = imgJson[texJson[texIndex]["extensions"]!["MSFT_texture_dds"]!["source"]!.Value<int>()]["uri"]!.Value<string>() ?? "";
+				string imgUri = imgJson[texJson[texIndex]["extensions"]!["MSFT_texture_dds"]!["source"]!.Value<int>()]["uri"]!.Value<string>()?.Split('\\').Last()?.Split('/').Last() ?? "";
 				if (imgUri != null)
 				{
 					string[] imageMatches = [.. Directory.GetFiles(srcPath, "*", SearchOption.AllDirectories).Where(f => string.Equals(Path.GetFileName(f), imgUri, StringComparison.OrdinalIgnoreCase))];
