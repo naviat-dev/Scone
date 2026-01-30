@@ -75,7 +75,7 @@ public class GlbBuilder
 		foreach (JObject primJson in ((JArray)meshJson["primitives"]!).Cast<JObject>())
 		{
 			JObject matJson = (JObject)matsJson[primJson["material"]!.Value<int>()];
-			if (matJson["extensions"]?["ASOBO_material_invisible"] != null)
+			if (matJson["extensions"]?["ASOBO_material_invisible"] != null || matJson["extensions"]?["ASOBO_material_environment_occluder"] != null)
 			{
 				return null;
 			}
