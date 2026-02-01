@@ -4,7 +4,6 @@ using System.Xml;
 using Newtonsoft.Json.Linq;
 using SharpGLTF.Geometry;
 using SharpGLTF.Geometry.VertexTypes;
-using SharpGLTF.Memory;
 using SharpGLTF.Scenes;
 using SharpGLTF.Schema2;
 
@@ -834,7 +833,7 @@ public class SceneryConverter : INotifyPropertyChanged
 								Quaternion rotation = Quaternion.CreateFromYawPitchRoll(yaw, pitch, roll);
 								Vector3 scale = new((float)libObj.scale, (float)libObj.scale, (float)libObj.scale);
 								Matrix4x4 transform = Matrix4x4.CreateScale(scale) * Matrix4x4.CreateFromQuaternion(rotation) * Matrix4x4.CreateTranslation(translation);
-								scene.Merge(sceneLocal, transform);
+								// scene.Merge(sceneLocal, transform);
 							}
 							glbIndex++;
 
@@ -876,7 +875,7 @@ public class SceneryConverter : INotifyPropertyChanged
 
 		string outAcPath = Path.Combine(path, $"{tileIndex}.ac");
 		Status = "Saving model to disk...";
-		scene.WriteToFile(outAcPath);
+		// scene.WriteToFile(outAcPath);
 
 		bool hasXml = false;
 		string activeName = $"{tileIndex}.{(hasXml ? "xml" : "ac")}";
@@ -1010,117 +1009,6 @@ public class SceneryConverter : INotifyPropertyChanged
 	private static AcBuilder CreateAcModelFromGltf(byte[] glbBinBytes, JObject json, string inputPath, string file)
 	{
 		AcBuilder scene = new();
-		JArray meshes = (JArray)json["meshes"]!;
-		JArray accessors = (JArray)json["accessors"]!;
-		JArray bufferViews = (JArray)json["bufferViews"]!;
-		JArray images = (JArray)json["images"]!;
-		JArray materials = (JArray)json["materials"]!;
-		JArray textures = (JArray)json["textures"]!;
-		Dictionary<int, List<int>> meshIndexToSceneNodeIndex = [];
-
-		List<AcBuilder.Material> acMaterials = [];
-
-		for (int k = 0; k < json["nodes"]!.Count(); k++)
-		{
-			JObject node = (JObject)json["nodes"]![k]!;
-			if (node["mesh"] != null)
-			{
-				int meshIndex = node["mesh"]!.Value<int>();
-				if (!meshIndexToSceneNodeIndex.TryGetValue(meshIndex, out List<int>? valueMesh))
-				{
-					valueMesh = [];
-					meshIndexToSceneNodeIndex[meshIndex] = valueMesh;
-				}
-				meshIndexToSceneNodeIndex[meshIndex].Add(k);
-			}
-		}
-
-		// Build parent map for nodes
-		JArray nodesArray = (JArray)json["nodes"]!;
-		int nodeCount = nodesArray.Count;
-		int[] parentMap = new int[nodeCount];
-		for (int n = 0; n < nodeCount; n++) parentMap[n] = -1;
-		for (int n = 0; n < nodeCount; n++)
-		{
-			JObject node = (JObject)nodesArray[n]!;
-			if (node["children"] != null)
-			{
-				foreach (var child in (JArray)node["children"]!)
-				{
-					int childIdx = child.Value<int>();
-					parentMap[childIdx] = n;
-				}
-			}
-		}
-
-		// Helper: Compute world transform for a node
-		Matrix4x4 GetWorldTransform(int nodeIdx)
-		{
-			Matrix4x4 result = Matrix4x4.Identity;
-			int? current = nodeIdx;
-			while (current != null && current >= 0)
-			{
-				JObject node = (JObject)nodesArray[current.Value]!;
-				// Build local transform
-				Vector3 t = node["translation"] != null ? new Vector3(
-					node["translation"]![0]!.Value<float>(),
-					node["translation"]![1]!.Value<float>(),
-					node["translation"]![2]!.Value<float>()) : Vector3.Zero;
-				Quaternion r = node["rotation"] != null ? new Quaternion(
-					node["rotation"]![0]!.Value<float>(),
-					node["rotation"]![1]!.Value<float>(),
-					node["rotation"]![2]!.Value<float>(),
-					node["rotation"]![3]!.Value<float>()) : Quaternion.Identity;
-				Vector3 s = node["scale"] != null ? new Vector3(
-					node["scale"]![0]!.Value<float>(),
-					node["scale"]![1]!.Value<float>(),
-					node["scale"]![2]!.Value<float>()) : Vector3.One;
-				float avgScale = (s.X + s.Y + s.Z) / 3.0f;
-				if (!float.IsFinite(avgScale) || avgScale <= 0f) avgScale = 1f;
-				s = new Vector3(avgScale, avgScale, avgScale);
-				Matrix4x4 local = Matrix4x4.CreateScale(s) * Matrix4x4.CreateFromQuaternion(Quaternion.Normalize(r)) * Matrix4x4.CreateTranslation(t);
-				result = local * result;
-				current = parentMap[current.Value] >= 0 ? parentMap[current.Value] : null;
-			}
-			return result;
-		}
-
-		foreach (JObject mesh in meshes.Cast<JObject>())
-		{
-			AcBuilder.Poly? poly = scene.BuildPolyFromGltf(inputPath, file, mesh, accessors, bufferViews, materials, textures, images, glbBinBytes, ref acMaterials);
-			if (poly == null) continue;
-
-			int meshIdx = meshes.IndexOf(mesh);
-			if (!meshIndexToSceneNodeIndex.TryGetValue(meshIdx, out List<int>? nodeIndices))
-			{
-				// No node references this mesh, add it directly
-				scene.Objects.Add(poly);
-				continue;
-			}
-
-			foreach (int nodeIndex in nodeIndices)
-			{
-				Matrix4x4 transform = GetWorldTransform(nodeIndex);
-
-				// Validate matrix
-				if (!(float.IsFinite(transform.M11) && float.IsFinite(transform.M12) && float.IsFinite(transform.M13) && float.IsFinite(transform.M14)
-					&& float.IsFinite(transform.M21) && float.IsFinite(transform.M22) && float.IsFinite(transform.M23) && float.IsFinite(transform.M24)
-					&& float.IsFinite(transform.M31) && float.IsFinite(transform.M32) && float.IsFinite(transform.M33) && float.IsFinite(transform.M34)
-					&& float.IsFinite(transform.M41) && float.IsFinite(transform.M42) && float.IsFinite(transform.M43) && float.IsFinite(transform.M44)))
-				{
-					continue;
-				}
-
-				// Create a temporary AcBuilder for this poly and merge it with transform
-				AcBuilder temp = new();
-				temp.Objects.Add(poly);
-				scene.Merge(temp, transform);
-			}
-		}
-
-		// Add materials to scene
-		scene.Materials.AddRange(acMaterials);
-
 		return scene;
 	}
 
