@@ -239,8 +239,8 @@ public sealed class AcBuilder
 				Vector2 uv1 = hasUv ? texCoords[idx1] : Vector2.Zero;
 				Vector2 uv2 = hasUv ? texCoords[idx2] : Vector2.Zero;
 				surface.AddVertex(idx0, uv0);
-				surface.AddVertex(idx1, uv1);
 				surface.AddVertex(idx2, uv2);
+				surface.AddVertex(idx1, uv1);
 				meshObject.Surfaces.Add(surface);
 			}
 
