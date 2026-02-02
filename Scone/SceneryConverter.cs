@@ -31,6 +31,7 @@ public class SceneryConverter : INotifyPropertyChanged
 	HashSet<Guid> guidsWithModels = [];
 	Dictionary<int, List<ModelReference>> modelReferencesByTile = [];
 	Dictionary<Guid, List<LibraryObject>> libraryObjects = [];
+	private static readonly Matrix4x4 FlipZMatrix = Matrix4x4.CreateScale(1f, 1f, -1f);
 
 	public void ConvertScenery(string inputPath, string outputPath, bool isGltf, bool isAc3d)
 	{
@@ -449,20 +450,12 @@ public class SceneryConverter : INotifyPropertyChanged
 							});
 							foreach (LibraryObject libObj in libraryObjectsForModel)
 							{
-								double deg2rad = Math.PI / 180.0;
-								double lonOffsetMeters = -(libObj.longitude - lonOrigin) * 111320.0 * Math.Cos(latOrigin * deg2rad);
-								double latOffsetMeters = (libObj.latitude - latOrigin) * 110540.0;
-								double altOffsetMeters = libObj.altitude - altOrigin;
-
-								// glTF: X = east (lon), Y = up (alt), Z = south (lat)
-								Vector3 translation = new((float)lonOffsetMeters, (float)altOffsetMeters, (float)latOffsetMeters);
-								float yaw = (float)(-libObj.heading * deg2rad); // negative for right-handed glTF
-								float pitch = (float)(libObj.pitch * deg2rad);
-								float roll = (float)(libObj.bank * deg2rad);
-								Quaternion rotation = Quaternion.CreateFromYawPitchRoll(yaw, pitch, roll);
-								Vector3 scale = new((float)libObj.scale, (float)libObj.scale, (float)libObj.scale);
-								Matrix4x4 transform = Matrix4x4.CreateScale(scale) * Matrix4x4.CreateFromQuaternion(rotation) * Matrix4x4.CreateTranslation(translation);
-								_ = scene.AddScene(sceneLocal, transform);
+								if (Terrain.GetTileIndex(libObj.latitude, libObj.longitude) != tileIndex)
+								{
+									continue;
+								}
+								Matrix4x4 placementTransform = CreatePlacementTransform(libObj, latOrigin, lonOrigin, altOrigin);
+								_ = scene.AddScene(sceneLocal, placementTransform);
 							}
 							glbIndex++;
 
@@ -697,7 +690,10 @@ public class SceneryConverter : INotifyPropertyChanged
 	{
 		int tileIndex = kvp.Key;
 		List<ModelReference> modelRefs = [.. kvp.Value.OrderByDescending(mr => mr.size)];
-		AcBuilder scene = new();
+		AcBuilder tileScene = new()
+		{
+			WorldName = $"Tile_{tileIndex}"
+		};
 		double latOrigin = center.X;
 		double lonOrigin = center.Y;
 		double altOrigin = center.Z;
@@ -814,26 +810,23 @@ public class SceneryConverter : INotifyPropertyChanged
 							byte[] glbBinBytes = glbBytes[(0x14 + (int)JSONLength + 8)..(0x14 + (int)JSONLength + 8 + (int)binLength)];
 
 							AcBuilder sceneLocal = CreateAcModelFromGlb(glbBytes, inputPath, modelRef.file);
+							if (!sceneLocal.Objects.Any())
+							{
+								continue;
+							}
 
 							// Write GLB with unique filename (include index to avoid overwrites)
 							string safeName = name;
 							string outName = glbIndex < lods.Count ? lods[glbIndex].name : $"{safeName}_glb{glbIndex}";
 							foreach (LibraryObject libObj in libraryObjectsForModel)
 							{
-								double deg2rad = Math.PI / 180.0;
-								double lonOffsetMeters = -(libObj.longitude - lonOrigin) * 111320.0 * Math.Cos(latOrigin * deg2rad);
-								double latOffsetMeters = (libObj.latitude - latOrigin) * 110540.0;
-								double altOffsetMeters = libObj.altitude - altOrigin;
-
-								// glTF: X = east (lon), Y = up (alt), Z = south (lat)
-								Vector3 translation = new((float)lonOffsetMeters, (float)altOffsetMeters, (float)latOffsetMeters);
-								float yaw = (float)(-libObj.heading * deg2rad); // negative for right-handed glTF
-								float pitch = (float)(libObj.pitch * deg2rad);
-								float roll = (float)(libObj.bank * deg2rad);
-								Quaternion rotation = Quaternion.CreateFromYawPitchRoll(yaw, pitch, roll);
-								Vector3 scale = new((float)libObj.scale, (float)libObj.scale, (float)libObj.scale);
-								Matrix4x4 transform = Matrix4x4.CreateScale(scale) * Matrix4x4.CreateFromQuaternion(rotation) * Matrix4x4.CreateTranslation(translation);
-								// scene.Merge(sceneLocal, transform);
+								if (Terrain.GetTileIndex(libObj.latitude, libObj.longitude) != tileIndex)
+								{
+									continue;
+								}
+								Matrix4x4 gltfTransform = CreatePlacementTransform(libObj, latOrigin, lonOrigin, altOrigin);
+								Matrix4x4 acTransform = ConvertToAcTransform(gltfTransform);
+								tileScene.Merge(sceneLocal, acTransform);
 							}
 							glbIndex++;
 
@@ -874,12 +867,19 @@ public class SceneryConverter : INotifyPropertyChanged
 		}
 
 		string outAcPath = Path.Combine(path, $"{tileIndex}.ac");
-		Status = "Saving model to disk...";
-		// scene.WriteToFile(outAcPath);
+		if (tileScene.Objects.Count == 0)
+		{
+			Logger.Info($"Tile {tileIndex} produced no geometry for AC3D export; skipping file generation.");
+		}
+		else
+		{
+			Status = "Saving model to disk...";
+			tileScene.WriteToFile(outAcPath);
+		}
 
 		bool hasXml = false;
 		string activeName = $"{tileIndex}.{(hasXml ? "xml" : "ac")}";
-		string placementStr = $"OBJECT_STATIC {activeName} {lonOrigin} {latOrigin} {altOrigin} {270} {0} {90}";
+		string placementStr = $"OBJECT_STATIC {activeName} {lonOrigin} {latOrigin} {altOrigin} {0} {0} {0}";
 		File.WriteAllText(Path.Combine(path, $"{tileIndex}.stg"), placementStr);
 		if (AbortAndSave)
 		{
@@ -1008,8 +1008,7 @@ public class SceneryConverter : INotifyPropertyChanged
 
 	private static AcBuilder CreateAcModelFromGltf(byte[] glbBinBytes, JObject json, string inputPath, string file)
 	{
-		AcBuilder scene = new();
-		return scene;
+		return AcBuilder.FromGltf(glbBinBytes, json, inputPath, file);
 	}
 
 	private static AcBuilder CreateAcModelFromGlb(byte[] glbBytes, string inputPath, string file)
@@ -1172,6 +1171,29 @@ public class SceneryConverter : INotifyPropertyChanged
 			_ = lodElem.AppendChild(maxProp);
 		}
 		return lodElem;
+	}
+
+	private static Matrix4x4 CreatePlacementTransform(LibraryObject libObj, double latOrigin, double lonOrigin, double altOrigin)
+	{
+		const double deg2rad = Math.PI / 180.0;
+		double lonOffsetMeters = -(libObj.longitude - lonOrigin) * 111320.0 * Math.Cos(latOrigin * deg2rad);
+		double latOffsetMeters = (libObj.latitude - latOrigin) * 110540.0;
+		double altOffsetMeters = libObj.altitude - altOrigin;
+
+		Vector3 translation = new((float)lonOffsetMeters, (float)altOffsetMeters, (float)latOffsetMeters);
+		float yaw = (float)(-libObj.heading * deg2rad);
+		float pitch = (float)(libObj.pitch * deg2rad);
+		float roll = (float)(libObj.bank * deg2rad);
+		Quaternion rotation = Quaternion.CreateFromYawPitchRoll(yaw, pitch, roll);
+		Vector3 scale = new((float)libObj.scale);
+
+		return Matrix4x4.CreateScale(scale) * Matrix4x4.CreateFromQuaternion(rotation) * Matrix4x4.CreateTranslation(translation);
+	}
+
+	private static Matrix4x4 ConvertToAcTransform(Matrix4x4 gltfTransform)
+	{
+		Matrix4x4 temp = Matrix4x4.Multiply(FlipZMatrix, gltfTransform);
+		return Matrix4x4.Multiply(temp, FlipZMatrix);
 	}
 
 	protected void OnPropertyChanged([CallerMemberName] string? propertyName = null)
