@@ -20,6 +20,7 @@ public sealed class AcBuilder
 	private readonly Dictionary<string, int> _materialCache = new(StringComparer.OrdinalIgnoreCase);
 	private readonly Dictionary<string, string> _textureCopyTargets = new(StringComparer.OrdinalIgnoreCase);
 	private readonly HashSet<string> _textureOutputNames = new(StringComparer.OrdinalIgnoreCase);
+	private const float VertexQuantizationScale = 10000f;
 
 	public string WorldName { get; set; } = "SconeExport";
 
@@ -205,7 +206,23 @@ public sealed class AcBuilder
 				Vector3 world = Vector3.Transform(primData.Positions[i], worldMatrix);
 				transformed[i] = new Vector3(world.X, world.Y, -world.Z);
 			}
-			meshObject.Vertices.AddRange(transformed);
+			Dictionary<VertexKey, int> vertexCache = new();
+
+			int GetOrAddVertexIndex(int sourceIndex)
+			{
+				if (sourceIndex < 0 || sourceIndex >= transformed.Length)
+				{
+					return -1;
+				}
+				VertexKey key = VertexKey.FromVector(transformed[sourceIndex]);
+				if (!vertexCache.TryGetValue(key, out int existing))
+				{
+					existing = meshObject.Vertices.Count;
+					meshObject.Vertices.Add(transformed[sourceIndex]);
+					vertexCache[key] = existing;
+				}
+				return existing;
+			}
 
 			int[] indices = primData.Indices.Length > 0 ? primData.Indices : Enumerable.Range(0, primData.Positions.Length).ToArray();
 			int indicesPerTriangle = 3;
@@ -223,10 +240,19 @@ public sealed class AcBuilder
 			for (int tri = 0; tri < maxTriangles; tri++)
 			{
 				int indexOffset = startIndex + (tri * indicesPerTriangle);
-				int idx0 = baseVertex + indices[indexOffset + 0];
-				int idx1 = baseVertex + indices[indexOffset + 1];
-				int idx2 = baseVertex + indices[indexOffset + 2];
-				if (idx0 >= meshObject.Vertices.Count || idx1 >= meshObject.Vertices.Count || idx2 >= meshObject.Vertices.Count)
+				int srcIdx0 = baseVertex + indices[indexOffset + 0];
+				int srcIdx1 = baseVertex + indices[indexOffset + 1];
+				int srcIdx2 = baseVertex + indices[indexOffset + 2];
+				if (srcIdx0 < 0 || srcIdx1 < 0 || srcIdx2 < 0 ||
+					srcIdx0 >= transformed.Length || srcIdx1 >= transformed.Length || srcIdx2 >= transformed.Length)
+				{
+					continue;
+				}
+
+				int idx0 = GetOrAddVertexIndex(srcIdx0);
+				int idx1 = GetOrAddVertexIndex(srcIdx1);
+				int idx2 = GetOrAddVertexIndex(srcIdx2);
+				if (idx0 < 0 || idx1 < 0 || idx2 < 0)
 				{
 					continue;
 				}
@@ -235,9 +261,9 @@ public sealed class AcBuilder
 				{
 					SmoothShaded = true
 				};
-				Vector2 uv0 = hasUv ? texCoords[idx0] : Vector2.Zero;
-				Vector2 uv1 = hasUv ? texCoords[idx1] : Vector2.Zero;
-				Vector2 uv2 = hasUv ? texCoords[idx2] : Vector2.Zero;
+				Vector2 uv0 = hasUv ? texCoords[srcIdx0] : Vector2.Zero;
+				Vector2 uv1 = hasUv ? texCoords[srcIdx1] : Vector2.Zero;
+				Vector2 uv2 = hasUv ? texCoords[srcIdx2] : Vector2.Zero;
 				surface.AddVertex(idx0, uv0);
 				surface.AddVertex(idx2, uv2);
 				surface.AddVertex(idx1, uv1);
@@ -686,7 +712,7 @@ public sealed class AcBuilder
 		public string? TextureName { get; set; }
 		public string? TextureSource { get; set; }
 		public Vector2 TextureRepeat { get; set; } = new(1f, 1f);
-		public float Crease { get; set; } = 180f;
+		public float Crease { get; set; } = 30f;
 
 		public AcMeshObject(string name)
 		{
@@ -775,7 +801,7 @@ public sealed class AcBuilder
 		public void AddVertex(int vertexIndex, Vector2 uv)
 		{
 			_vertexIndices.Add(vertexIndex);
-			_uvs.Add(uv);
+			_uvs.Add(new Vector2(uv.X, 1 - uv.Y));
 		}
 
 		public void Write(StreamWriter writer)
@@ -807,6 +833,48 @@ public sealed class AcBuilder
 			clone._vertexIndices.AddRange(_vertexIndices);
 			clone._uvs.AddRange(_uvs);
 			return clone;
+		}
+	}
+
+	private readonly struct VertexKey : IEquatable<VertexKey>
+	{
+		private readonly int _x;
+		private readonly int _y;
+		private readonly int _z;
+
+		private VertexKey(int x, int y, int z)
+		{
+			_x = x;
+			_y = y;
+			_z = z;
+		}
+
+		public static VertexKey FromVector(Vector3 position)
+		{
+			return new VertexKey(
+				Quantize(position.X),
+				Quantize(position.Y),
+				Quantize(position.Z));
+		}
+
+		public bool Equals(VertexKey other)
+		{
+			return _x == other._x && _y == other._y && _z == other._z;
+		}
+
+		public override bool Equals(object? obj)
+		{
+			return obj is VertexKey other && Equals(other);
+		}
+
+		public override int GetHashCode()
+		{
+			return HashCode.Combine(_x, _y, _z);
+		}
+
+		private static int Quantize(float value)
+		{
+			return (int)MathF.Round(value * VertexQuantizationScale);
 		}
 	}
 
