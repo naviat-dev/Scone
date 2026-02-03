@@ -286,7 +286,7 @@ public sealed partial class MainPage : Page
 			{
 				try
 				{
-					task._converter.ConvertScenery(task.TaskPath, App.AppConfig.OutputDirectory!, isGltf, isAc3d);
+					task._converter.ConvertScenery(task.TaskPath, App.AppConfig.OutputDirectory!, isGltf && !isAc3d, isAc3d && !isGltf);
 				}
 				catch (Exception innerEx)
 				{
