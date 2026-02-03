@@ -341,10 +341,11 @@ public class Terrain
 			if (!tileCache.TryGetValue(index, out TileKey? value))
 			{
 				byte[] stgData = client.GetByteArrayAsync($"{urlTopLevel}/{index}.stg").Result;
-				MatchCollection matches = new Regex(@"OBJECT(_BASE)? (.+\.btg)", RegexOptions.Multiline).Matches(Encoding.UTF8.GetString(stgData));
+				MatchCollection matches = new Regex(@"OBJECT(?:_BASE)? (.+\.btg)", RegexOptions.Multiline).Matches(Encoding.UTF8.GetString(stgData));
 				List<BtgParseResult> meshes = [];
 				foreach (Match match in matches)
 				{
+					Logger.Debug($"Fetching BTG data from {urlTopLevel}/{match.Groups[1].Value}.gz");
 					byte[] btgGzData = client.GetByteArrayAsync($"{urlTopLevel}/{match.Groups[1].Value}.gz").Result;
 					using MemoryStream compressedStream = new(btgGzData);
 					using GZipStream gzipStream = new(compressedStream, CompressionMode.Decompress);
