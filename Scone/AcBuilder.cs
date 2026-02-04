@@ -648,7 +648,12 @@ public sealed class AcBuilder
 		}
 		if (!string.IsNullOrEmpty(assetRoot) && Directory.Exists(assetRoot))
 		{
-			string[] matches = Directory.GetFiles(assetRoot, fileName, SearchOption.AllDirectories);
+			string[] matches = Directory.GetFiles(assetRoot, fileName, new EnumerationOptions
+			{
+				MatchCasing = MatchCasing.CaseInsensitive,
+				RecurseSubdirectories = true,
+				ReturnSpecialDirectories = false
+			});
 			if (matches.Length > 0)
 			{
 				return matches.OrderByDescending(path => CommonPrefixLength(path, sourceBgl)).First();

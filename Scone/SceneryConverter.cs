@@ -42,7 +42,12 @@ public class SceneryConverter : INotifyPropertyChanged
 			return;
 		}
 
-		string[] allBglFiles = Directory.GetFiles(inputPath, "*.bgl", SearchOption.AllDirectories);
+		string[] allBglFiles = Directory.GetFiles(inputPath, "*.bgl", new EnumerationOptions
+		{
+			MatchCasing = MatchCasing.CaseInsensitive,
+			RecurseSubdirectories = true,
+			ReturnSpecialDirectories = false
+		});
 		int totalLibraryObjects = 0;
 		// Gather placements first
 		foreach (string file in allBglFiles)
