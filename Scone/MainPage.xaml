@@ -20,19 +20,16 @@
 				<ColumnDefinition Width="*"/>
 			</Grid.ColumnDefinitions>
 
-			<!-- Logo Placeholder -->
+			<!-- Logo -->
 			<Border Grid.Column="0"
 					Width="40"
 					Height="40"
-					Background="{ThemeResource SystemAccentColor}"
 					CornerRadius="8"
-					Margin="0,0,12,0">
-				<TextBlock Text="S"
-						   FontSize="24"
-						   FontWeight="Bold"
-						   Foreground="White"
-						   HorizontalAlignment="Center"
-						   VerticalAlignment="Center"/>
+					Margin="0,0,12,0"
+					Background="Transparent">
+				<Image Source="ms-appx:///Assets/logo.png"
+					   Stretch="Uniform"
+					   AutomationProperties.Name="Scone logo"/>
 			</Border>
 
 			<!-- App Name -->

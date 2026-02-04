@@ -21,7 +21,20 @@
     <Application Id="App"
       Executable="$targetnametoken$.exe"
       EntryPoint="$targetentrypoint$">
-      <uap:VisualElements />
+      <uap:VisualElements
+        DisplayName="Scone"
+        Description="Scenery conversion toolkit"
+        Square150x150Logo="Assets/logo.png"
+        Square44x44Logo="Assets/logo.png"
+        BackgroundColor="transparent">
+        <uap:DefaultTile
+          Wide310x150Logo="Assets/logo.png"
+          Square310x310Logo="Assets/logo.png"
+          Square71x71Logo="Assets/logo.png" />
+        <uap:SplashScreen
+          Image="Assets/logo.png"
+          BackgroundColor="#FF101018" />
+      </uap:VisualElements>
     </Application>
   </Applications>
 
