@@ -230,14 +230,16 @@
 								   FontWeight="SemiBold"/>
 						<StackPanel Orientation="Horizontal"
 								Spacing="8">
-							<ToggleButton x:Name="GltfFormatToggle"
-										  Content="glTF"
-										  IsChecked="True"
-										  MinWidth="100"/>
-							<ToggleButton x:Name="Ac3dFormatToggle"
-										  Content="AC3D"
-										  IsChecked="False"
-										  MinWidth="100"/>
+							<RadioButton x:Name="GltfFormatToggle"
+									 GroupName="Format"
+									 Content="glTF"
+									 IsChecked="True"
+									 MinWidth="100"/>
+							<RadioButton x:Name="Ac3dFormatToggle"
+									 GroupName="Format"
+									 Content="AC3D"
+									 IsChecked="False"
+									 MinWidth="100"/>
 						</StackPanel>
 					</StackPanel>
 
