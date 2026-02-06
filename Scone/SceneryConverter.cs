@@ -33,6 +33,7 @@ public class SceneryConverter : INotifyPropertyChanged
 	HashSet<Guid> guidsWithModels = [];
 	Dictionary<int, List<ModelReference>> modelReferencesByTile = [];
 	Dictionary<Guid, List<LibraryObject>> libraryObjects = [];
+	List<SimObject> simObjects = [];
 	private static readonly Matrix4x4 FlipZMatrix = Matrix4x4.CreateScale(1f, 1f, -1f);
 
 	public void ConvertScenery(string inputPath, string outputPath, bool isGltf, bool isAc3d)
@@ -74,6 +75,7 @@ public class SceneryConverter : INotifyPropertyChanged
 
 			List<int> mdlDataOffsets = [];
 			List<int> sceneryObjectOffsets = [];
+			List<int> airportOffsets = [];
 			int sceneryObjectSubrecordCount = 0;
 			for (int i = 0; i < recordCt; i++)
 			{
@@ -110,7 +112,7 @@ public class SceneryConverter : INotifyPropertyChanged
 				{
 					_ = br.BaseStream.Seek(subOffset + bytesRead, SeekOrigin.Begin);
 					ushort id = br.ReadUInt16();
-					if (id != 0x0B) // LibraryObject
+					if (id != 0x0B && id != 0x19) // LibraryObject and SimObject
 					{
 						uint skip = br.ReadUInt16();
 						Logger.Warning($"Unexpected subrecord type at offset 0x{subOffset + bytesRead:X}: 0x{id:X4}, skipping {skip} bytes");
@@ -137,31 +139,59 @@ public class SceneryConverter : INotifyPropertyChanged
 					short imageComplexity = br.ReadInt16();
 					_ = br.BaseStream.Seek(2, SeekOrigin.Current); // There is an unknown 2-byte field here
 					_ = br.BaseStream.Seek(16, SeekOrigin.Current); // Skip GUID empty field
-					Guid guid = new(br.ReadBytes(16));
-					double scale = br.ReadSingle(); // Read as float from file, store as double for precision
-					LibraryObject libObj = new()
+					if (id == 0x0B) // LibraryObject
 					{
-						id = id,
-						size = size,
-						longitude = (longitude * (360.0 / 805306368.0)) - 180.0,
-						latitude = 90.0 - (latitude * (180.0 / 536870912.0)),
-						altitude = flags.Contains(Flags.IsAboveAGL) ? altitude + Terrain.GetElevation((float)(90.0 - (latitude * (180.0 / 536870912.0))), (float)((longitude * (360.0 / 805306368.0)) - 180.0)) : altitude,
-						flags = flags,
-						pitch = Math.Round(pitch * (360.0 / 65536.0), 3),
-						bank = Math.Round(bank * (360.0 / 65536.0), 3),
-						heading = Math.Round(heading * (360.0 / 65536.0), 3),
-						imageComplexity = imageComplexity,
-						guid = guid,
-						scale = Math.Round(scale, 3)
-					};
-					if (!libraryObjects.TryGetValue(guid, out _))
-					{
-						libraryObjects[guid] = [];
+						Guid guid = new(br.ReadBytes(16));
+						double scale = br.ReadSingle(); // Read as float from file, store as double for precision
+						LibraryObject libObj = new()
+						{
+							id = id,
+							size = size,
+							longitude = (longitude * (360.0 / 805306368.0)) - 180.0,
+							latitude = 90.0 - (latitude * (180.0 / 536870912.0)),
+							altitude = flags.Contains(Flags.IsAboveAGL) ? altitude + Terrain.GetElevation((float)(90.0 - (latitude * (180.0 / 536870912.0))), (float)((longitude * (360.0 / 805306368.0)) - 180.0)) : altitude,
+							flags = flags,
+							pitch = Math.Round(pitch * (360.0 / 65536.0), 3),
+							bank = Math.Round(bank * (360.0 / 65536.0), 3),
+							heading = Math.Round(heading * (360.0 / 65536.0), 3),
+							imageComplexity = imageComplexity,
+							guid = guid,
+							scale = Math.Round(scale, 3)
+						};
+						if (!libraryObjects.TryGetValue(guid, out _))
+						{
+							libraryObjects[guid] = [];
+						}
+						libraryObjects[guid].Add(libObj);
+						Logger.Debug($"{guid}\t{libObj.size}\t{libObj.longitude:F6}\t{libObj.latitude:F6}\t{libObj.altitude}\t[{string.Join(",", libObj.flags)}]\t{libObj.pitch:F2}\t{libObj.bank:F2}\t{libObj.heading:F2}\t{libObj.imageComplexity}\t{libObj.scale}");
 					}
-					libraryObjects[guid].Add(libObj);
+					else if (id == 0x19) // SimObject
+					{
+						float scale = br.ReadSingle();
+						ushort containerTitleLen = br.ReadUInt16();
+						ushort containerPathLen = br.ReadUInt16();
+						string containerTitle = Encoding.UTF8.GetString(br.ReadBytes(containerTitleLen));
+						string containerPath = Encoding.UTF8.GetString(br.ReadBytes(containerPathLen));
+						simObjects.Add(new SimObject
+						{
+							id = id,
+							size = size,
+							longitude = (longitude * (360.0 / 805306368.0)) - 180.0,
+							latitude = 90.0 - (latitude * (180.0 / 536870912.0)),
+							altitude = flags.Contains(Flags.IsAboveAGL) ? altitude + Terrain.GetElevation((float)(90.0 - (latitude * (180.0 / 536870912.0))), (float)((longitude * (360.0 / 805306368.0)) - 180.0)) : altitude,
+							flags = flags,
+							pitch = Math.Round(pitch * (360.0 / 65536.0), 3),
+							bank = Math.Round(bank * (360.0 / 65536.0), 3),
+							heading = Math.Round(heading * (360.0 / 65536.0), 3),
+							imageComplexity = imageComplexity,
+							scale = Math.Round(scale, 3),
+							containerTitle = containerTitle,
+							containerPath = containerPath
+						});
+						Logger.Debug($"SimObject: {containerTitle} at {containerPath}, scale {scale}");
+					}
 					totalLibraryObjects++;
 					Status = $"Looking for placements in {Path.GetFileName(file)}... found {totalLibraryObjects}";
-					Logger.Debug($"{guid}\t{libObj.size}\t{libObj.longitude:F6}\t{libObj.latitude:F6}\t{libObj.altitude}\t[{string.Join(",", libObj.flags)}]\t{libObj.pitch:F2}\t{libObj.bank:F2}\t{libObj.heading:F2}\t{libObj.imageComplexity}\t{libObj.scale}");
 					bytesRead += size;
 				}
 			}
@@ -1285,6 +1315,22 @@ public class SceneryConverter : INotifyPropertyChanged
 		public double heading;
 		public int imageComplexity;
 		public Guid guid;
+		public double scale;
+	}
+	private struct SimObject
+	{
+		public int id;
+		public int size;
+		public double longitude;
+		public double latitude;
+		public double altitude;
+		public Flags[] flags;
+		public double pitch;
+		public double bank;
+		public double heading;
+		public int imageComplexity;
+		public string containerTitle;
+		public string containerPath;
 		public double scale;
 	}
 
