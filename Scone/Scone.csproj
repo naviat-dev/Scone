@@ -16,6 +16,8 @@
 		<ApplicationPublisher>Scone</ApplicationPublisher>
 		<!-- Package Description -->
 		<Description>Scone powered by Uno Platform.</Description>
+		<!-- Windows executable icon -->
+		<ApplicationIcon>Assets\AppIcon.ico</ApplicationIcon>
 
 		<!--
       UnoFeatures let's you quickly add and manage implicit package references based on the features you
