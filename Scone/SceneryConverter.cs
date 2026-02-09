@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Numerics;
 using System.Text;
 using System.Xml;
@@ -506,7 +507,7 @@ public class SceneryConverter : INotifyPropertyChanged
 
 			bool hasXml = isGltf && isAc3d;
 			string activeName = $"{tileIndex}.{(hasXml ? "xml" : (isGltf ? "gltf" : "ac"))}";
-			string placementStr = $"OBJECT_STATIC {activeName} {center.Y} {center.X} {center.Z} {(hasXml ? 0 : (isAc3d && !isGltf ? 90 : 270))} {0} {(isAc3d && !isGltf ? 0 : 90)}";
+			string placementStr = $"OBJECT_STATIC {activeName} {center.Y.ToString(CultureInfo.InvariantCulture)} {center.X.ToString(CultureInfo.InvariantCulture)} {center.Z.ToString(CultureInfo.InvariantCulture)} {(hasXml ? 0 : (isAc3d && !isGltf ? 90 : 270))} {0} {(isAc3d && !isGltf ? 0 : 90)}";
 			if (hasXml)
 			{
 				XDocument doc = new(
