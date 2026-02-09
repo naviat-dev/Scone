@@ -1142,20 +1142,6 @@ public class SceneryConverter : INotifyPropertyChanged
 		return lightElem;
 	}
 
-	private static XmlNode CreateScaleElement(XmlDocument doc, float scale, ModelData model)
-	{
-		XmlElement scaleElem = doc.CreateElement("animation");
-		scaleElem.AppendChild(doc.CreateElement("type"))!.InnerText = "scale";
-		foreach (ModelObject modelObj in model.modelObjects)
-		{
-			scaleElem.AppendChild(doc.CreateElement("object-name"))!.InnerText = modelObj.name;
-		}
-		scaleElem.AppendChild(doc.CreateElement("x"))!.InnerText = scale.ToString();
-		scaleElem.AppendChild(doc.CreateElement("y"))!.InnerText = scale.ToString();
-		scaleElem.AppendChild(doc.CreateElement("z"))!.InnerText = scale.ToString();
-		return scaleElem;
-	}
-
 	private static XmlNode CreateLodElement(XmlDocument doc, float radius, int minSize, int? maxSize)
 	{
 		XmlElement lodElem = doc.CreateElement("animation");
