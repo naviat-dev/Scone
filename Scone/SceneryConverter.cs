@@ -1145,9 +1145,9 @@ public class SceneryConverter : INotifyPropertyChanged
 
 		if (light.cutoffAngle <= 90)
 		{
-			lightElem.AppendChild(doc.CreateElement("pitch-deg"))!.InnerText = light.pitchDeg.ToString();
-			lightElem.AppendChild(doc.CreateElement("roll-deg"))!.InnerText = light.rollDeg.ToString();
-			lightElem.AppendChild(doc.CreateElement("heading-deg"))!.InnerText = light.headingDeg.ToString();
+			lightElem.AppendChild(doc.CreateElement("pitch-deg"))!.InnerText = light.pitch.ToString();
+			lightElem.AppendChild(doc.CreateElement("roll-deg"))!.InnerText = light.roll.ToString();
+			lightElem.AppendChild(doc.CreateElement("heading-deg"))!.InnerText = light.heading.ToString();
 		}
 
 		XmlElement? colorElem = lightElem.AppendChild(doc.CreateElement("color")) as XmlElement;
@@ -1292,13 +1292,13 @@ public class SceneryConverter : INotifyPropertyChanged
 
 	private enum Flags
 	{
-		IsAboveAGL = 0,
-		NoAutogenSuppression = 1,
-		NoCrash = 2,
-		NoFog = 3,
-		NoShadow = 4,
-		NoZWrite = 5,
-		NoZTest = 6,
+		IsAboveAGL,
+		NoAutogenSuppression,
+		NoCrash,
+		NoFog,
+		NoShadow,
+		NoZWrite,
+		NoZTest,
 	}
 
 #pragma warning disable CS0649
@@ -1317,6 +1317,7 @@ public class SceneryConverter : INotifyPropertyChanged
 		public Guid guid;
 		public double scale;
 	}
+
 	private struct SimObject
 	{
 		public int id;
@@ -1332,6 +1333,630 @@ public class SceneryConverter : INotifyPropertyChanged
 		public string containerTitle;
 		public string containerPath;
 		public double scale;
+	}
+
+	private struct Tower
+	{
+		public double longitude;
+		public double latitude;
+		public double altitude;
+	}
+
+	enum RunwaySurfType
+	{
+		Concrete,
+		Grass,
+		Water,
+		Asphalt,
+		Clay,
+		Snow,
+		Ice,
+		Dirt,
+		Coral,
+		Gravel,
+		OilTreated,
+		SteelMats,
+		Bituminous,
+		Brick,
+		Macadam,
+		Planks,
+		Sand,
+		Shale,
+		Tarmac,
+		Unknown
+	}
+
+	enum RunwayMarkingType
+	{
+		Edges,
+		Threshold,
+		FixedDistance,
+		Touchdown,
+		Dashes,
+		Ident,
+		Precision,
+		EdgePavement,
+		SingleEnd,
+		PrimaryClosed,
+		SecondaryClosed,
+		PrimaryStol,
+		SecondaryStol,
+		AltThreshold,
+		AltFixedDistance,
+		AltTouchdown
+	}
+
+	enum RunwayLightType
+	{
+		EdgeNone,
+		EdgeLowIntensity,
+		EdgeMediumIntensity,
+		EdgeHighIntensity,
+		CenterNone,
+		CenterLowIntensity,
+		CenterMediumIntensity,
+		CenterHighIntensity,
+		CenterRed,
+		AltPrecision,
+		LeadingZeroIdent,
+		NoThresholdEndArrows
+	}
+
+	enum RunwayPatternType
+	{
+		PrimaryTakeoff,
+		PrimaryLanding,
+		PrimaryPattern,
+		SecondaryTakeoff,
+		SecondaryLanding,
+		SecondaryPattern
+	}
+
+	enum VasiType
+	{
+		Vasi21,
+		Vasi31,
+		Vasi22,
+		Vasi32,
+		Vasi33,
+		Papi1,
+		Papi2,
+		Tricolor,
+		PVasi,
+		TVasi,
+		Ball,
+		ApapPanels
+	}
+
+	private struct Runway
+	{
+		public RunwaySurfType surfaceType;
+		public int number;
+		public char designator;
+		public int numberSecondary;
+		public char designatorSecondary;
+		public string icaoIdentPrimary;
+		public string icaoIdentSecondary;
+		public double longitude;
+		public double latitude;
+		public double altitude;
+		public float lengthM;
+		public float widthM;
+		public float heading;
+		public float patternAltitude;
+		public RunwayMarkingType markingType;
+		public RunwayLightType lightType;
+		public RunwayPatternType patternType;
+		public float offsetThresholdLength;
+		public float offsetThresholdWidth;
+		public float blastPadLength;
+		public float blastPadWidth;
+		public float overrunLength;
+		public float overrunWidth;
+		public VasiType vasiType;
+		public float biasX;
+		public float biasZ;
+		public float spacing;
+		public float pitch;
+	}
+
+	enum RunwayStartType
+	{
+		Runway,
+		Water,
+		Helipad
+	}
+
+	private struct RunwayStart
+	{
+		public int runwayNumber;
+		public char runwayDesignator;
+		public double longitude;
+		public double latitude;
+		public double altitude;
+		public float heading;
+		public RunwayStartType type;
+	}
+
+	enum TaxiPointType
+	{
+		Unknown = 0,
+		Normal,
+		HoldShort,
+		IlsHoldShort,
+		HoldShortNoDraw,
+		IlsHoldShortNoDraw,
+	}
+
+	enum TaxiPointOrientation
+	{
+		Foward = 0,
+		Reverse
+	}
+
+	private struct TaxiwayPoint
+	{
+		public double longitude;
+		public double latitude;
+		public TaxiPointType type;
+		public TaxiPointOrientation orientation;
+	}
+
+	enum ParkingName
+	{
+		None,
+		Parking,
+		NParking,
+		NeParking,
+		EParking,
+		SeParking,
+		SParking,
+		SwParking,
+		WParking,
+		NwParking,
+		Gate,
+		Dock,
+		GateA,
+		GateB,
+		GateC,
+		GateD,
+		GateE,
+		GateF,
+		GateG,
+		GateH,
+		GateI,
+		GateJ,
+		GateK,
+		GateL,
+		GateM,
+		GateN,
+		GateO,
+		GateP,
+		GateQ,
+		GateR,
+		GateS,
+		GateT,
+		GateU,
+		GateV,
+		GateW,
+		GateX,
+		GateY,
+		GateZ
+	}
+
+	enum ParkingPushback
+	{
+		None,
+		Left,
+		Right,
+		Both
+	}
+
+	enum ParkingType
+	{
+		None,
+		RampGa,
+		RampGaSmall,
+		RampGaMedium,
+		RampGaLarge,
+		RampCargo,
+		RampMilCargo,
+		RampMilCombat,
+		GateSmall,
+		GateMedium,
+		GateHeavy,
+		DockGa,
+		Fuel,
+		Vehicle,
+		RampGaExtra,
+		GateExtra
+	}
+
+	private struct TaxiwayParking
+	{
+		public ParkingName name;
+		public ParkingPushback pushback;
+		public ParkingType type;
+		public uint number;
+		public double radius;
+		public float heading;
+		public double longitude;
+		public double latitude;
+		public string[] airlineCodes;
+		public bool numberMarking;
+		public ParkingName suffix;
+		public double numberBiasX;
+		public double numberBiasZ;
+		public double numberHeading;
+	}
+
+	enum TaxiwayPathMaterialType
+	{
+		BaseTiled,
+		Border,
+		Center
+	}
+
+	private struct TaxiwayPathMaterial
+	{
+		public byte type;
+		public byte opacity;
+		public Guid surface;
+		public TaxiwayPathMaterialType materialType;
+		public float tilingU;
+		public float tilingV;
+		public float width;
+		public float falloff;
+	}
+
+	enum TaxiwayPathType
+	{
+		Unknown,
+		Taxi,
+		Runway,
+		Parking,
+		Path,
+		Closed,
+		Vehicle,
+		Road
+	}
+
+	enum TaxiwayEdgeType
+	{
+		None,
+		Solid,
+		Dashed,
+		SolidDashed
+	}
+
+	private struct TaxiwayPath
+	{
+		public ushort start;
+		public ushort legacyEnd;
+		public char designator;
+		public TaxiwayPathType type;
+		public bool enhanced;
+		public bool drawSurface;
+		public bool drawDetail;
+		public int? runwayNumber; // only if this is a runway
+		public byte name; // if it isn't a runway
+		public bool centerLine;
+		public bool centerLineLighted;
+		public TaxiwayEdgeType leftEdgeType;
+		public bool leftEdgeLighted;
+		public TaxiwayEdgeType rightEdgeType;
+		public bool rightEdgeLighted;
+		public RunwaySurfType surfaceType;
+		public double width;
+		public Guid surface;
+		public int[] color; // RGBA bytes
+		public bool groundMerging;
+		public bool excludeVegetationAround;
+		public bool excludeVegetationInside;
+	}
+
+	public struct Apron
+	{
+		public bool drawSurface;
+		public bool drawDetail;
+		public bool localUV;
+		public bool stretchUV;
+		public bool groundMerging;
+		public bool excludeVegetationAround;
+		public bool excludeVegetationInside;
+		public byte opacity;
+		public int[] color; // RGBA bytes
+		public Guid surface;
+		public float tiling;
+		public float heading;
+		public float falloff;
+		public int priority;
+		public Vector2[] vertices;
+		public Vector3[] tris;
+	}
+
+	public struct TaxiwaySign
+	{
+		public double longitude;
+		public double latitude;
+		public float heading;
+		public byte size;
+		public bool justificationRight;
+		public string label;
+	}
+
+	enum PaintedLineType
+	{
+		Default,
+		HoldShortForward,
+		HoldShortBackward,
+		HoldShortForwardMarked,
+		HoldShortBackwardMarked,
+		IlsHoldShort,
+		EdgeLineSolid,
+		EdgeLineDashed,
+		HoldShortTaxiway,
+		ServiceDashed,
+		EdgeServiceSolid,
+		EdgeServiceDashed,
+		WideYellow,
+		WideWhite,
+		WideRed,
+		SlimRed,
+		EdgeSolidOrtho,
+		EdgeSolidOrthoBack,
+		NonMovement,
+		NonMovementBack,
+		EnhancedCenter,
+		DefaultLighted,
+		HoldShortForwardMarkedL,
+		HoldShortBackwardMarkedL,
+		HoldShortForwardLighted,
+		HoldShortBackwardLighted,
+		IlsHoldShortLighted,
+		EdgeLineSolidLighted,
+		EdgeLineDashedLighted,
+		HoldShortTaxiwayLighted,
+		ServiceDashedLighted,
+		EdgeServiceSolidLighted,
+		EdgeServiceDashedLighted,
+		WideYellowLighted,
+		WideWhiteLighted,
+		WideRedLighted,
+		SlimRedLighted,
+		EdgeSolidOrthoLighted,
+		EdgeSolidOrthoBackLight,
+		NonMovementLighted,
+		NonMovementBackLighted,
+		EnhancedCenterLighted
+	}
+
+	enum PaintedLineTrueAngle
+	{
+		None,
+		Begin,
+		End,
+		BothEnds,
+		AllPoints
+	}
+
+	private struct PaintedLine
+	{
+		public PaintedLineType type;
+		public PaintedLineTrueAngle trueAngle;
+		public Vector2[] vertices;
+		public Guid surface;
+	}
+	private struct PaintedHatchedArea
+	{
+		public PaintedLineType type;
+		public ushort vertexCount;
+		public float heading;
+		public double spacing;
+		public Vector2[] vertices;
+	}
+
+	private struct Jetway
+	{
+		public ushort parkingNumber;
+		public ParkingName gateName;
+		public ParkingName suffix;
+	}
+
+	private struct LightSupport
+	{
+		public double longitude;
+		public double latitude;
+		public double altitude;
+		public double altitude2;
+		public float heading;
+		public float width;
+		public float length;
+	}
+
+	enum LegType
+	{
+		Af,
+		Ca,
+		Cd,
+		Cf,
+		Ci,
+		Cr,
+		Df,
+		Fa,
+		Fc,
+		Fd,
+		Fm,
+		Ha,
+		Hf,
+		Hm,
+		If,
+		Pi,
+		Rf,
+		Tf,
+		Va,
+		Vd,
+		Vi,
+		Vm,
+		Vr
+	}
+
+	enum AltitudeDescriptor
+	{
+		Empty,
+		A,
+		Plus,
+		Minus,
+		B,
+		C,
+		G,
+		H,
+		I,
+		J,
+		V
+	}
+
+	enum TurnDirection
+	{
+		Null,
+		Left,
+		Right,
+		Either
+	}
+
+	enum ApproachType
+	{
+		Unknown,
+		Gps,
+		Vor,
+		Ndb,
+		Ils,
+		Localizer,
+		Sdf,
+		Lda,
+		Vordme,
+		Ndbdme,
+		Rnav,
+		LocalizerBackcourse
+	}
+
+	enum FixType
+	{
+		Unknown,
+		Airport,
+		Vor,
+		Ndb,
+		TerminalNdb,
+		Waypoint,
+		TerminalWaypoint,
+		Localizer,
+		Runway
+	}
+
+	private struct Leg
+	{
+		public LegType type;
+		public AltitudeDescriptor altitudeDescriptor;
+		public TurnDirection turnDirection;
+		public bool courseIsTrue;
+		public bool timeIsSpecified;
+		public bool flyOver;
+		public FixType fixType;
+		public string fixIdent;
+		public string fixRegion;
+		public string fixAirport;
+		public FixType recommendedType;
+		public string recommendedIdent;
+		public string recommendedRegion;
+		public string recommendedAirport;
+		public float theta;
+		public float rho;
+		public float? trueCourse; // if courseIsTrue
+		public float? magneticCourse; // if !courseIsTrue
+		public float? timeSeconds; // if timeIsSpecified
+		public float? distance; // if !timeIsSpecified
+		public float altitude1;
+		public float altitude2;
+		public float speedLimit;
+		public float verticalAngle;
+	}
+
+	private struct Approach
+	{
+		public char suffix;
+		public int runwayNumber;
+		public ApproachType type;
+		public char designator;
+		public bool gpsOverlay;
+		public FixType fixType;
+		public string fixIdent;
+		public string fixRegion;
+		public string airportIdent;
+		public float altitude;
+		public float heading;
+		public float missedAltitude;
+		public Leg[] approachLegs;
+		public Leg[] missedApproachLegs;
+		public Leg[] transitionLegs;
+	}
+
+	public struct ApronEdgeLights
+	{
+		public int[] coloration;
+		public float scale;
+		public float falloff;
+		public Vector2[] vertices;
+		public Vector3[] edges; // radius, vertex1, vertex2
+	}
+
+	enum HelipadType
+	{
+		None,
+		H,
+		Square,
+		Circle,
+		Medical
+	}
+
+	private struct Helipad
+	{
+		public RunwaySurfType surface;
+		public HelipadType type;
+		public bool transparent;
+		public bool closed;
+		public int[] color; // RGBA bytes
+		public double longitude;
+		public double latitude;
+		public double altitude;
+		public double length;
+		public double width;
+		public float heading;
+	}
+
+	private struct Airport
+	{
+		public double longitude;
+		public double latitude;
+		public double altitude;
+		public Tower tower;
+		public float magvar;
+		public string icao;
+		public string regIdent;
+		public string name;
+		public Runway[] runways;
+		public RunwayStart[] runwayStarts;
+		public TaxiwayPoint[] taxiwayPoints;
+		public TaxiwayParking[] taxiwayParkings;
+		public TaxiwayPath[] taxiwayPaths;
+		public Apron[] aprons;
+		public TaxiwaySign[] taxiwaySigns;
+		public PaintedLine[] paintedLines;
+		public PaintedHatchedArea[] paintedHatchedAreas;
+		public Jetway[] jetways;
+		public LightSupport[] lightSupports;
+		public Approach[] approaches;
+		public ApronEdgeLights[] apronEdgeLights;
+		public Helipad[] helipads;
 	}
 
 	private struct LodData
@@ -1368,9 +1993,9 @@ public class SceneryConverter : INotifyPropertyChanged
 	{
 		public string? name;
 		public Vector3 position;
-		public float pitchDeg;
-		public float rollDeg;
-		public float headingDeg;
+		public float pitch;
+		public float roll;
+		public float heading;
 		public Vector4 color;
 		public float intensity;
 		public float cutoffAngle;
