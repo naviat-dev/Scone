@@ -1383,7 +1383,10 @@ public class SceneryConverter : INotifyPropertyChanged
 		SecondaryStol,
 		AltThreshold,
 		AltFixedDistance,
-		AltTouchdown
+		AltTouchdown,
+		AltPrecision,
+		LeadingZeroIdent,
+		NoThresholdEndArrows
 	}
 
 	enum RunwayLightType
@@ -1396,10 +1399,7 @@ public class SceneryConverter : INotifyPropertyChanged
 		CenterLowIntensity,
 		CenterMediumIntensity,
 		CenterHighIntensity,
-		CenterRed,
-		AltPrecision,
-		LeadingZeroIdent,
-		NoThresholdEndArrows
+		CenterRed
 	}
 
 	enum RunwayPatternType
@@ -1428,9 +1428,82 @@ public class SceneryConverter : INotifyPropertyChanged
 		ApapPanels
 	}
 
+	private struct Vasi
+	{
+		public VasiType type;
+		public double biasX;
+		public double biasZ;
+		public float spacing;
+		public float pitch;
+	}
+
+	private struct OffsetThreshold
+	{
+		public RunwaySurfType fsXSurface;
+		public Guid surface;
+		public double length;
+		public double width;
+	}
+
+	private struct BlastPad
+	{
+		public RunwaySurfType fsXSurface;
+		public Guid surface;
+		public double length;
+		public double width;
+	}
+
+	private struct Overrun
+	{
+		public RunwaySurfType fsXSurface;
+		public Guid surface;
+		public double length;
+		public double width;
+	}
+
+	enum ApproachLightType
+	{
+		None,
+		ODALS,
+		MALSF,
+		MALSR,
+		SSALF,
+		SSALR,
+		ALSF1,
+		ALSF2,
+		RAIL,
+		CALVERT,
+		CALVERT2,
+		MALS,
+		SALS,
+		SALSF,
+		SSALS
+	}
+
+	private struct ApproachLight
+	{
+		public ApproachLightType type;
+		public bool endLights;
+		public bool reil;
+		public bool touchdown;
+		public bool strobes;
+		public double spacing;
+		public double offset;
+		public float slope;
+	}
+
+	private struct FacilityMaterial
+	{
+		public int opacity;
+		public Guid guid;
+		public float tilingU;
+		public float tilingV;
+		public double width;
+		public float falloff;
+	}
+
 	private struct Runway
 	{
-		public RunwaySurfType surfaceType;
 		public int number;
 		public char designator;
 		public int numberSecondary;
@@ -1440,24 +1513,24 @@ public class SceneryConverter : INotifyPropertyChanged
 		public double longitude;
 		public double latitude;
 		public double altitude;
-		public float lengthM;
-		public float widthM;
+		public double length;
+		public double width;
 		public float heading;
 		public float patternAltitude;
-		public RunwayMarkingType markingType;
-		public RunwayLightType lightType;
-		public RunwayPatternType patternType;
-		public float offsetThresholdLength;
-		public float offsetThresholdWidth;
-		public float blastPadLength;
-		public float blastPadWidth;
-		public float overrunLength;
-		public float overrunWidth;
-		public VasiType vasiType;
-		public float biasX;
-		public float biasZ;
-		public float spacing;
-		public float pitch;
+		public RunwayMarkingType[] markingTypes;
+		public RunwayLightType[] lightTypes;
+		public RunwayPatternType[] patternTypes;
+		public bool groundMerging;
+		public bool excludeVegetationAround;
+		public float falloff;
+		public Guid surface;
+		public int[] coloration; // RGBA bytes
+		public Vasi[] vasis;
+		public OffsetThreshold[] offsetThresholds;
+		public BlastPad[] blastPads;
+		public Overrun[] overruns;
+		public ApproachLight[] approachLights;
+		public FacilityMaterial facilityMaterial;
 	}
 
 	enum RunwayStartType
