@@ -33,8 +33,8 @@ public class SceneryConverter : INotifyPropertyChanged
 	HashSet<Guid> guidsWithModels = [];
 	Dictionary<int, List<ModelReference>> modelReferencesByTile = [];
 	Dictionary<Guid, List<LibraryObject>> libraryObjects = [];
+	Dictionary<string, List<SimObject>> simObjects = [];
 	List<Airport> airports = [];
-	List<SimObject> simObjects = [];
 	private static readonly Matrix4x4 FlipZMatrix = Matrix4x4.CreateScale(1f, 1f, -1f);
 
 	public void ConvertScenery(string inputPath, string outputPath, bool isGltf, bool isAc3d)
@@ -177,7 +177,7 @@ public class SceneryConverter : INotifyPropertyChanged
 						ushort containerPathLen = br.ReadUInt16();
 						string containerTitle = Encoding.UTF8.GetString(br.ReadBytes(containerTitleLen));
 						string containerPath = Encoding.UTF8.GetString(br.ReadBytes(containerPathLen));
-						simObjects.Add(new SimObject
+						SimObject simObj = new SimObject
 						{
 							id = id,
 							size = size,
@@ -192,7 +192,14 @@ public class SceneryConverter : INotifyPropertyChanged
 							scale = Math.Round(scale, 3),
 							containerTitle = containerTitle,
 							containerPath = containerPath
-						});
+						};
+						if (simObjects.TryGetValue(containerTitle, out List<SimObject>? existingSimObjs))
+						{
+							existingSimObjs.Add(simObj);
+						} else
+						{
+							simObjects[containerTitle] = [simObj];
+						}
 						Logger.Debug($"SimObject: {containerTitle} at {containerPath}, scale {scale}");
 					}
 					totalLibraryObjects++;
@@ -723,7 +730,15 @@ public class SceneryConverter : INotifyPropertyChanged
 								}
 								else if (BitConverter.ToInt16(sceneryObjectBytes, 0) == 0x0019)
 								{
-									simObjects.Add(BuildSimObject(sceneryObjectBytes));
+									SimObject simObj = BuildSimObject(sceneryObjectBytes);
+									if (simObjects.TryGetValue(simObj.containerTitle, out List<SimObject>? simObjList))
+									{
+										simObjList.Add(simObj);
+									}
+									else
+									{
+										simObjects[simObj.containerTitle] = [simObj];
+									}
 								}
 								else
 								{
@@ -747,7 +762,15 @@ public class SceneryConverter : INotifyPropertyChanged
 								}
 								else if (BitConverter.ToInt16(sceneryObjectBytes, 0) == 0x0019)
 								{
-									simObjects.Add(BuildSimObject(sceneryObjectBytes));
+									SimObject simObj = BuildSimObject(sceneryObjectBytes);
+									if (simObjects.TryGetValue(simObj.containerTitle, out List<SimObject>? simObjList))
+									{
+										simObjList.Add(simObj);
+									}
+									else
+									{
+										simObjects[simObj.containerTitle] = [simObj];
+									}
 								}
 								else
 								{
