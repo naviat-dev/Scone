@@ -33,6 +33,7 @@ public class SceneryConverter : INotifyPropertyChanged
 	HashSet<Guid> guidsWithModels = [];
 	Dictionary<int, List<ModelReference>> modelReferencesByTile = [];
 	Dictionary<Guid, List<LibraryObject>> libraryObjects = [];
+	List<Airport> airports = [];
 	List<SimObject> simObjects = [];
 	private static readonly Matrix4x4 FlipZMatrix = Matrix4x4.CreateScale(1f, 1f, -1f);
 
@@ -51,7 +52,7 @@ public class SceneryConverter : INotifyPropertyChanged
 			ReturnSpecialDirectories = false
 		});
 		int totalLibraryObjects = 0;
-		// Gather placements first
+		// Gather placements and airports first
 		foreach (string file in allBglFiles)
 		{
 			using BinaryReader br = new(new FileStream(file, FileMode.Open, FileAccess.Read));
@@ -73,23 +74,28 @@ public class SceneryConverter : INotifyPropertyChanged
 			// Skip 0x38-byte header
 			_ = br.BaseStream.Seek(0x38, SeekOrigin.Begin);
 
-			List<int> mdlDataOffsets = [];
 			List<int> sceneryObjectOffsets = [];
 			List<int> airportOffsets = [];
-			int sceneryObjectSubrecordCount = 0;
 			for (int i = 0; i < recordCt; i++)
 			{
 				long recordStartPos = br.BaseStream.Position;
 				uint recType = br.ReadUInt32();
 				_ = br.BaseStream.Seek(recordStartPos + 0x08, SeekOrigin.Begin);
-				sceneryObjectSubrecordCount = (int)br.ReadUInt32();
+				int subrecordCount = (int)br.ReadUInt32();
 				uint startSubsection = br.ReadUInt32();
 				uint recSize = br.ReadUInt32();
 				if (recType == 0x0025) // SceneryObject
 				{
-					for (int j = 0; j < sceneryObjectSubrecordCount; j++)
+					for (int j = 0; j < subrecordCount; j++)
 					{
 						sceneryObjectOffsets.Add((int)startSubsection + (j * 16));
+					}
+				}
+				else if (recType == 0x0003) // Airport
+				{
+					for (int j = 0; j < subrecordCount; j++)
+					{
+						airportOffsets.Add((int)startSubsection + (j * 16));
 					}
 				}
 			}
@@ -104,10 +110,9 @@ public class SceneryConverter : INotifyPropertyChanged
 				sceneryObjectSubrecords.Add((subrecOffset, size));
 			}
 
-			int bytesRead = 0;
 			foreach ((int subOffset, int subSize) in sceneryObjectSubrecords)
 			{
-				bytesRead = 0;
+				int bytesRead = 0;
 				while (bytesRead < subSize)
 				{
 					_ = br.BaseStream.Seek(subOffset + bytesRead, SeekOrigin.Begin);
@@ -193,6 +198,804 @@ public class SceneryConverter : INotifyPropertyChanged
 					totalLibraryObjects++;
 					Status = $"Looking for placements in {Path.GetFileName(file)}... found {totalLibraryObjects}";
 					bytesRead += size;
+				}
+			}
+
+			// Parse Airport subrecords
+			List<(int offset, int size)> airportSubrecords = [];
+			foreach (int airportOffset in airportOffsets)
+			{
+				_ = br.BaseStream.Seek(airportOffset + 8, SeekOrigin.Begin);
+				int subrecOffset = (int)br.ReadUInt32();
+				int size = (int)br.ReadUInt32();
+				airportSubrecords.Add((subrecOffset, size));
+			}
+
+			foreach ((int subOffset, int subSize) in airportSubrecords)
+			{
+				int bytesRead = 0;
+				while (bytesRead < subSize)
+				{
+					_ = br.BaseStream.Seek(subOffset + bytesRead, SeekOrigin.Begin);
+					ushort id = br.ReadUInt16();
+					if (id != 0x0056) // Airport
+					{
+						uint skip = br.ReadUInt32();
+						Logger.Warning($"Unexpected airport subrecord type at offset 0x{subOffset + bytesRead:X}: 0x{id:X4}, skipping {skip} bytes");
+						_ = br.BaseStream.Seek(subOffset + skip, SeekOrigin.Begin);
+						bytesRead += (int)skip;
+						continue;
+					}
+					Airport airport = new();
+					uint size = br.ReadUInt32();
+					int runwayCt = br.ReadByte();
+					int comCt = br.ReadByte();
+					int startCt = br.ReadByte();
+					int appCt = br.ReadByte();
+					int legacyApronCt = br.ReadByte();
+					int helipadCt = br.ReadByte();
+					airport.longitude = (br.ReadUInt32() * (360.0 / 805306368.0)) - 180.0;
+					airport.latitude = 90.0 - (br.ReadUInt32() * (180.0 / 536870912.0));
+					airport.altitude = br.ReadInt32() / 1000.0;
+					airport.tower = new()
+					{
+						latitude = 90.0 - (br.ReadUInt32() * (180.0 / 536870912.0)),
+						longitude = (br.ReadUInt32() * (360.0 / 805306368.0)) - 180.0,
+						altitude = br.ReadInt32() / 1000.0
+					};
+					airport.magvar = br.ReadSingle();
+					airport.icao = ConvertIcaoBytesToString(br.ReadInt32());
+					airport.regIdent = ConvertIcaoBytesToString(br.ReadInt32() & 0x3FF);
+					airport.runways = [];
+					airport.runwayStarts = [];
+					airport.taxiwayPoints = [];
+					airport.taxiwayParkings = [];
+					airport.taxiwayPaths = [];
+					airport.taxiNames = [];
+					airport.aprons = [];
+					airport.taxiwaySigns = [];
+					airport.paintedLines = [];
+					airport.paintedHatchedAreas = [];
+					airport.jetways = [];
+					airport.lightSupports = [];
+					airport.approaches = [];
+					airport.apronEdgeLights = [];
+					airport.helipads = [];
+
+					br.BaseStream.Seek(subOffset + bytesRead + 0x37, SeekOrigin.Begin); // Skip ahead to departure count
+					int departureCt = br.ReadByte();
+					br.BaseStream.Seek(subOffset + bytesRead + 0x39, SeekOrigin.Begin); // Skip ahead to arrival count
+					int arrivalCt = br.ReadByte();
+					br.BaseStream.Seek(subOffset + bytesRead + 0x3c, SeekOrigin.Begin); // Skip ahead to remaining useful records
+					ushort apronCt = br.ReadUInt16();
+					ushort paintedLineCt = br.ReadUInt16();
+					ushort paintedPolygonCt = br.ReadUInt16();
+					ushort paintedHatchedAreaCt = br.ReadUInt16();
+					Console.WriteLine($"stream position before airport records: 0x{br.BaseStream.Position:X}");
+					uint airportBytesRead = 0x44; // Start with 0x44 bytes we've already read
+
+					while (airportBytesRead < size)
+					{
+						// This shouldn't be necessary, but it puts you back on the straight and narrow if something goes wrong in the parsing and we get off-track
+						_ = br.BaseStream.Seek(subOffset + bytesRead + airportBytesRead, SeekOrigin.Begin);
+
+						ushort recordId = br.ReadUInt16();
+						uint recordSize = br.ReadUInt32();
+						if (recordId == 0x0019) // Airport Name
+						{
+							airport.name = Encoding.UTF8.GetString(br.ReadBytes((int)recordSize - 6));
+						}
+						else if (recordId == 0x00ce) // Runway
+						{
+							br.BaseStream.Seek(2, SeekOrigin.Current); // Skip not-useful data
+							Runway runway = new()
+							{
+								primaryNumber = br.ReadByte(),
+								primaryDesignator = (Designator)br.ReadByte(),
+								secondaryNumber = br.ReadByte(),
+								secondaryDesignator = (Designator)br.ReadByte(),
+								primaryILSIdent = ConvertIcaoBytesToString(br.ReadInt32()),
+								secondaryILSIdent = ConvertIcaoBytesToString(br.ReadInt32()),
+								longitude = (br.ReadUInt32() * (360.0 / 805306368.0)) - 180.0,
+								latitude = 90.0 - (br.ReadUInt32() * (180.0 / 536870912.0)),
+								altitude = br.ReadInt32() / 1000.0,
+								length = br.ReadUInt32() / 1000.0,
+								width = br.ReadUInt32() / 1000.0,
+								heading = Math.Round(br.ReadSingle() * (360.0 / 65536.0), 3),
+								patternAltitude = br.ReadSingle() / 1000.0,
+								markingTypes = [],
+								lightTypes = [],
+								patternTypes = [],
+								vasis = [],
+								offsetThresholds = [],
+								blastPads = [],
+								overruns = [],
+								approachLights = [],
+							};
+							short markingValue = br.ReadInt16();
+							byte lightValue = br.ReadByte();
+							byte patternValue = br.ReadByte();
+							List<RunwayMarkingType> markingTypes = [];
+							List<RunwayLightType> lightTypes = [];
+							List<RunwayPatternType> patternTypes = [];
+
+							for (int j = 0; j < 16; j++)
+							{
+								if (((markingValue >> j) & 1) != 0)
+								{
+									markingTypes.Add((RunwayMarkingType)j);
+								}
+							}
+
+							if ((lightValue & (1 << 5)) != 0)
+							{
+								markingTypes.Add(RunwayMarkingType.AltPrecision);
+							}
+							if ((lightValue & (1 << 6)) != 0)
+							{
+								markingTypes.Add(RunwayMarkingType.LeadingZeroIdent);
+							}
+							if ((lightValue & (1 << 7)) != 0)
+							{
+								markingTypes.Add(RunwayMarkingType.NoThresholdEndArrows);
+							}
+
+							int edgeLightsValue = lightValue & 0b11;
+							lightTypes.Add((RunwayLightType)edgeLightsValue);
+
+							int centerLightsValue = (lightValue >> 2) & 0b11;
+							lightTypes.Add((RunwayLightType)(4 + centerLightsValue));
+
+							if ((lightValue & (1 << 4)) != 0)
+							{
+								lightTypes.Add(RunwayLightType.CenterRed);
+							}
+
+							if ((patternValue & (1 << 0)) != 0)
+							{
+								patternTypes.Add(RunwayPatternType.PrimaryTakeoff);
+							}
+							if ((patternValue & (1 << 1)) != 0)
+							{
+								patternTypes.Add(RunwayPatternType.PrimaryLanding);
+							}
+							if ((patternValue & (1 << 2)) != 0)
+							{
+								patternTypes.Add(RunwayPatternType.PrimaryPattern);
+							}
+							if ((patternValue & (1 << 3)) != 0)
+							{
+								patternTypes.Add(RunwayPatternType.SecondaryTakeoff);
+							}
+							if ((patternValue & (1 << 4)) != 0)
+							{
+								patternTypes.Add(RunwayPatternType.SecondaryLanding);
+							}
+							if ((patternValue & (1 << 5)) != 0)
+							{
+								patternTypes.Add(RunwayPatternType.SecondaryPattern);
+							}
+
+							runway.markingTypes = [.. markingTypes];
+							runway.lightTypes = [.. lightTypes];
+							runway.patternTypes = [.. patternTypes];
+							runway.groundMerging = (patternValue & (1 << 6)) != 0;
+							runway.excludeVegetationAround = (patternValue & (1 << 7)) != 0;
+							br.BaseStream.Seek(0x14, SeekOrigin.Current);
+							runway.falloff = br.ReadSingle();
+							runway.surface = new(br.ReadBytes(16));
+							runway.coloration = [br.ReadByte(), br.ReadByte(), br.ReadByte(), br.ReadByte()];
+							uint runwayBytesRead = 0x60;
+							while (runwayBytesRead < recordSize)
+							{
+								br.BaseStream.Seek(subOffset + bytesRead + airportBytesRead + runwayBytesRead, SeekOrigin.Begin);
+								ushort runwayRecordId = br.ReadUInt16();
+								uint runwayRecordSize = br.ReadUInt32();
+								if (runwayRecordId >= 0x000b && runwayRecordId <= 0x000e) // VASI
+								{
+									runway.vasis.Add(new Vasi
+									{
+										childType = (VasiChildType)(runwayRecordId - 0x000b),
+										type = (VasiType)(runwayRecordId - 0x000b),
+										biasX = br.ReadSingle(),
+										biasZ = br.ReadSingle(),
+										spacing = br.ReadSingle(),
+										pitch = br.ReadSingle(),
+									});
+								}
+								else if (runwayRecordId == 0x0005) // OffsetThreshold
+								{
+									runway.offsetThresholds.Add(new OffsetThreshold
+									{
+										fsXSurface = (Surface)br.ReadSingle(),
+										surface = new(br.ReadBytes(16)),
+										length = br.ReadSingle(),
+										width = br.ReadSingle(),
+									});
+								}
+								else if (runwayRecordId == 0x0007 || runwayRecordId == 0x0008) // BlastPad
+								{
+									runway.blastPads.Add(new BlastPad
+									{
+										fsXSurface = (Surface)br.ReadSingle(),
+										surface = new(br.ReadBytes(16)),
+										length = br.ReadSingle(),
+										width = br.ReadSingle(),
+									});
+								}
+								else if (runwayRecordId == 0x0065 || runwayRecordId == 0x0066) // Overrun
+								{
+									runway.overruns.Add(new Overrun
+									{
+										fsXSurface = (Surface)br.ReadSingle(),
+										surface = new(br.ReadBytes(16)),
+										length = br.ReadSingle(),
+										width = br.ReadSingle(),
+									});
+								}
+								else if (runwayRecordId == 0x00df || runwayRecordId == 0x00e0) // ApproachLights
+								{
+									byte typeValue = br.ReadByte();
+									runway.approachLights.Add(new ApproachLight
+									{
+										type = (ApproachLightType)(typeValue & 0b1111),
+										endLights = (typeValue & 0b10000) != 0,
+										reil = (typeValue & 0b100000) != 0,
+										touchdown = (typeValue & 0b1000000) != 0,
+										strobes = br.ReadByte(),
+										spacing = br.ReadSingle(),
+										offset = br.ReadSingle(),
+										slope = br.ReadSingle(),
+									});
+									br.BaseStream.Seek(4, SeekOrigin.Current); // Skip unknown field
+								}
+								else if (runwayRecordId == 0x00cb) // FacilityMaterial
+								{
+									br.BaseStream.Seek(1, SeekOrigin.Current); // Skip unknown field
+									runway.facilityMaterial = new FacilityMaterial
+									{
+										opacity = br.ReadByte(),
+										guid = new(br.ReadBytes(16))
+									};
+									br.BaseStream.Seek(4, SeekOrigin.Current); // Skip another unknown field
+									runway.facilityMaterial.tilingU = br.ReadSingle();
+									runway.facilityMaterial.tilingV = br.ReadSingle();
+									runway.facilityMaterial.width = br.ReadSingle();
+									runway.facilityMaterial.falloff = br.ReadSingle();
+								}
+								runwayBytesRead += runwayRecordSize;
+							}
+							airport.runways.Add(runway);
+						}
+						else if (recordId == 0x0011) // Start
+						{
+							RunwayStart runwayStart = new()
+							{
+								runwayNumber = br.ReadByte(),
+							};
+							byte value = br.ReadByte();
+							runwayStart.designator = (Designator)(value & 0b1111);
+							runwayStart.type = (RunwayStartType)((value >> 4) & 0b1111);
+							runwayStart.longitude = (br.ReadUInt32() * (360.0 / 805306368.0)) - 180.0;
+							runwayStart.latitude = 90.0 - (br.ReadUInt32() * (180.0 / 536870912.0));
+							runwayStart.altitude = br.ReadInt32() / 1000.0;
+							runwayStart.heading = br.ReadSingle() * (360.0 / 65536.0);
+							airport.runwayStarts.Add(runwayStart);
+						}
+						else if (recordId == 0x001a) // TaxiwayPoint
+						{
+							ushort subRecordCount = br.ReadUInt16();
+							for (int j = 0; j < subRecordCount; j++)
+							{
+								TaxiwayPoint taxiwayPoint = new()
+								{
+									type = (TaxiPointType)br.ReadByte(),
+									orientation = (TaxiPointOrientation)br.ReadByte(),
+								};
+								br.BaseStream.Seek(2, SeekOrigin.Current); // Skip unknown field
+								taxiwayPoint.longitude = (br.ReadUInt32() * (360.0 / 805306368.0)) - 180.0;
+								taxiwayPoint.latitude = 90.0 - (br.ReadUInt32() * (180.0 / 536870912.0));
+								airport.taxiwayPoints.Add(taxiwayPoint);
+							}
+						}
+						else if (recordId == 0x00e7) // TaxiwayParking
+						{
+							ushort subRecordCount = br.ReadUInt16();
+							for (int j = 0; j < subRecordCount; j++)
+							{
+								int value = br.ReadInt32();
+								TaxiwayParking taxiwayParking = new()
+								{
+									name = (ParkingName)(value & 0b111111),
+									pushback = (ParkingPushback)((value >> 6) & 0b11),
+									type = (ParkingType)((value >> 8) & 0b1111),
+									number = (uint)((value >> 12) & 0xFFF),
+									airlineCodes = new string[value >> 24 & 0xFF],
+									radius = br.ReadSingle(),
+									heading = br.ReadSingle() * (360.0 / 65536.0),
+									teeOffset1 = br.ReadSingle(),
+									teeOffset2 = br.ReadSingle(),
+									teeOffset3 = br.ReadSingle(),
+									teeOffset4 = br.ReadSingle(),
+									longitude = (br.ReadUInt32() * (360.0 / 805306368.0)) - 180.0,
+									latitude = 90.0 - (br.ReadUInt32() * (180.0 / 536870912.0))
+								};
+								for (int k = 0; k < taxiwayParking.airlineCodes.Length; k++)
+								{
+									taxiwayParking.airlineCodes[k] = Encoding.ASCII.GetString(br.ReadBytes(4));
+								}
+								taxiwayParking.numberMarking = br.ReadBoolean();
+								taxiwayParking.suffix = (ParkingName)br.ReadByte();
+								br.BaseStream.Seek(5, SeekOrigin.Current); // Skip unknown fields
+								taxiwayParking.numberBiasX = br.ReadSingle();
+								taxiwayParking.numberBiasZ = br.ReadSingle();
+								taxiwayParking.numberHeading = br.ReadSingle() * (360.0 / 65536.0);
+								airport.taxiwayParkings.Add(taxiwayParking);
+							}
+						}
+						else if (recordId == 0x00d4) // TaxiwayPath
+						{
+							ushort subRecordCount = br.ReadUInt16();
+							for (int j = 0; j < subRecordCount; j++)
+							{
+								TaxiwayPath taxiwayPath = new()
+								{
+									start = br.ReadUInt16()
+								};
+								short value1 = br.ReadInt16();
+								byte value2 = br.ReadByte();
+								taxiwayPath.legacyEnd = (ushort)(value1 & 0x7FF);
+								taxiwayPath.designator = (Designator)((value1 >> 11) & 0b1111);
+								taxiwayPath.type = (TaxiwayPathType)(value2 & 0b111);
+								taxiwayPath.enhanced = (value2 & 0b1000) == 1;
+								taxiwayPath.drawSurface = (value2 & 0b10000) == 1;
+								taxiwayPath.drawDetail = (value2 & 0b100000) == 1;
+								if (taxiwayPath.type == TaxiwayPathType.Runway)
+								{
+									taxiwayPath.runwayNumber = br.ReadByte();
+								}
+								else
+								{
+									taxiwayPath.name = br.ReadByte();
+								}
+								byte value3 = br.ReadByte();
+								taxiwayPath.centerLine = (value3 & 0b1) == 1;
+								taxiwayPath.centerLineLighted = (value3 & 0b10) == 1;
+								taxiwayPath.leftEdge = (TaxiwayEdgeType)(value3 & 0b1100);
+								taxiwayPath.leftEdgeLighted = (value3 & 0b10000) == 1;
+								taxiwayPath.rightEdge = (TaxiwayEdgeType)(value3 & 0b1100000);
+								taxiwayPath.rightEdgeLighted = (value3 & 0b10000000) == 1;
+								taxiwayPath.fsXSurface = (Surface)br.ReadByte();
+								taxiwayPath.width = br.ReadSingle();
+								taxiwayPath.weightLimit = br.ReadUInt32();
+								br.BaseStream.Seek(8, SeekOrigin.Current); // Skip unknown field
+								taxiwayPath.surface = new(br.ReadBytes(16));
+								taxiwayPath.coloration = [br.ReadByte(), br.ReadByte(), br.ReadByte(), br.ReadByte()];
+								int materialCt = br.ReadByte();
+								byte value4 = br.ReadByte();
+								taxiwayPath.groundMerging = (value4 & 0b1) == 1;
+								taxiwayPath.excludeVegetationAround = (value4 & 0b10) == 0;
+								taxiwayPath.excludeVegetationInside = (value4 & 0b100) == 0;
+								taxiwayPath.end = br.ReadUInt16();
+								taxiwayPath.materials = [];
+								for (int k = 0; k < materialCt; k++)
+								{
+									if (br.ReadInt16() == 0x00d5) // TaxiwayPathMaterial
+									{
+										_ = br.BaseStream.Seek(4, SeekOrigin.Current); // The record size, but it's the same every time
+										taxiwayPath.materials.Add(new TaxiwayPathMaterial
+										{
+											type = br.ReadByte(),
+											opacity = br.ReadByte(),
+											surface = new(br.ReadBytes(16)),
+											materialType = (TaxiwayPathMaterialType)br.ReadUInt32(),
+											tilingU = br.ReadSingle(),
+											tilingV = br.ReadSingle(),
+											width = br.ReadSingle(),
+											falloff = br.ReadSingle()
+										});
+									}
+								}
+								airport.taxiwayPaths.Add(taxiwayPath);
+							}
+						}
+						else if (recordId == 0x001d) // TaxiName
+						{
+							ushort subRecordCount = br.ReadUInt16();
+							for (int j = 0; j < subRecordCount; j++)
+							{
+								airport.taxiNames.Add(Encoding.UTF8.GetString(br.ReadBytes(8)));
+							}
+						}
+						else if (recordId == 0x00d3) // Apron
+						{
+							byte value = br.ReadByte();
+							Apron apron = new()
+							{
+								drawSurface = (value & 0b1) == 1,
+								drawDetail = (value & 0b10) == 1,
+								localUV = (value & 0b100) == 1,
+								stretchUV = (value & 0b1000) == 1,
+								groundMerging = (value & 0b10000) == 0,
+								excludeVegetationAround = (value & 0b100000) == 0,
+								excludeVegetationInside = (value & 0b1000000) == 0,
+								opacity = br.ReadByte(),
+								coloration = [br.ReadByte(), br.ReadByte(), br.ReadByte(), br.ReadByte()],
+								surface = new(br.ReadBytes(16)),
+								tiling = br.ReadSingle(),
+								heading = br.ReadSingle() * (360.0 / 65536.0),
+								falloff = br.ReadSingle(),
+								priority = br.ReadInt32(),
+								vertices = [],
+								tris = []
+							};
+							ushort vertexCt = br.ReadUInt16();
+							ushort triangleCt = br.ReadUInt16();
+							for (int j = 0; j < vertexCt; j++)
+							{
+								apron.vertices.Add(new Vector2
+									((float)(((float)(br.ReadUInt32() * (360.0 / 805306368.0))) - 180.0),
+									(float)(90.0 - (br.ReadUInt32() * (180.0 / 536870912.0))))
+								);
+							}
+							for (int j = 0; j < triangleCt; j++)
+							{
+								apron.tris.Add(new Vector3(br.ReadUInt16(), br.ReadUInt16(), br.ReadUInt16()));
+							}
+							airport.aprons.Add(apron);
+						}
+						else if (recordId == 0x00d9) // TaxiwaySign
+						{
+							_ = br.BaseStream.Seek(2, SeekOrigin.Current); // Skip record size, it's always the same
+							airport.taxiwaySigns.Add(new TaxiwaySign
+							{
+								longitude = (br.ReadUInt32() * (360.0 / 805306368.0)) - 180.0,
+								latitude = 90.0 - (br.ReadUInt32() * (180.0 / 536870912.0)),
+								heading = br.ReadSingle() * (360.0 / 65536.0),
+								size = br.ReadByte(),
+								justificationRight = (br.ReadByte() & 0b1) == 1,
+								label = Encoding.ASCII.GetString(br.ReadBytes(0x3e)),
+							});
+						}
+						else if (recordId == 0x00cf) // PaintedLine
+						{
+							PaintedLine paintedLine = new()
+							{
+								type = (PaintedLineType)br.ReadByte(),
+								trueAngle = (PaintedLineTrueAngle)br.ReadByte(),
+								vertices = []
+							};
+							uint vertexCt = br.ReadUInt32();
+							paintedLine.surface = new(br.ReadBytes(16));
+							for (int j = 0; j < vertexCt; j++)
+							{
+								paintedLine.vertices.Add(new Vector2
+									((float)(((float)(br.ReadUInt32() * (360.0 / 805306368.0))) - 180.0),
+									(float)(90.0 - (br.ReadUInt32() * (180.0 / 536870912.0))))
+								);
+							}
+							airport.paintedLines.Add(paintedLine);
+						}
+						else if (recordId == 0x00d8) // PaintedHatchedArea
+						{
+							PaintedHatchedArea paintedHatchedArea = new()
+							{
+								type = (PaintedLineType)br.ReadByte(),
+								vertices = []
+							};
+							ushort vertexCt = br.ReadUInt16();
+							paintedHatchedArea.heading = br.ReadSingle() * (360.0 / 65536.0);
+							paintedHatchedArea.spacing = br.ReadSingle();
+							for (int j = 0; j < vertexCt; j++)
+							{
+								paintedHatchedArea.vertices.Add(new Vector2
+									((float)(((float)(br.ReadUInt32() * (360.0 / 805306368.0))) - 180.0),
+									(float)(90.0 - (br.ReadUInt32() * (180.0 / 536870912.0))))
+								);
+							}
+							airport.paintedHatchedAreas.Add(paintedHatchedArea);
+						}
+						else if (recordId == 0x00de) // Jetway
+						{
+							airport.jetways.Add(new Jetway()
+							{
+								parkingNumber = br.ReadUInt16(),
+								gateName = (ParkingName)br.ReadUInt16(),
+								suffix = (ParkingName)br.ReadUInt16(),
+							});
+							_ = br.BaseStream.Seek(2, SeekOrigin.Current); // Skip unknown field
+							ushort sceneryObjectLength1 = br.ReadUInt16();
+							ushort sceneryObjectLength2 = br.ReadUInt16();
+							if (sceneryObjectLength1 > 0)
+							{
+								byte[] sceneryObjectBytes = br.ReadBytes(sceneryObjectLength1);
+								if (BitConverter.ToInt16(sceneryObjectBytes, 0) == 0x000b)
+								{
+									LibraryObject libObj = BuildLibraryObject(sceneryObjectBytes);
+									if (libraryObjects.TryGetValue(libObj.guid, out List<LibraryObject>? libObjList))
+									{
+										libObjList.Add(libObj);
+									}
+									else
+									{
+										libraryObjects[libObj.guid] = [libObj];
+									}
+								}
+								else if (BitConverter.ToInt16(sceneryObjectBytes, 0) == 0x0019)
+								{
+									simObjects.Add(BuildSimObject(sceneryObjectBytes));
+								}
+								else
+								{
+									Logger.Warning($"Unexpected scenery object type in jetway record at offset 0x{subOffset + bytesRead + airportBytesRead:X}: 0x{BitConverter.ToInt16(sceneryObjectBytes, 0):X4}");
+								}
+							}
+							if (sceneryObjectLength2 > 0)
+							{
+								byte[] sceneryObjectBytes = br.ReadBytes(sceneryObjectLength2);
+								if (BitConverter.ToInt16(sceneryObjectBytes, 0) == 0x000b)
+								{
+									LibraryObject libObj = BuildLibraryObject(sceneryObjectBytes);
+									if (libraryObjects.TryGetValue(libObj.guid, out List<LibraryObject>? libObjList))
+									{
+										libObjList.Add(libObj);
+									}
+									else
+									{
+										libraryObjects[libObj.guid] = [libObj];
+									}
+								}
+								else if (BitConverter.ToInt16(sceneryObjectBytes, 0) == 0x0019)
+								{
+									simObjects.Add(BuildSimObject(sceneryObjectBytes));
+								}
+								else
+								{
+									Logger.Warning($"Unexpected scenery object type in jetway record at offset 0x{subOffset + bytesRead + airportBytesRead:X}: 0x{BitConverter.ToInt16(sceneryObjectBytes, 0):X4}");
+								}
+							}
+						}
+						else if (recordId == 0x0057) // LightSupport
+						{
+							_ = br.BaseStream.Seek(2, SeekOrigin.Current); // Skip unknown field
+							airport.lightSupports.Add(new LightSupport
+							{
+								latitude = 90.0 - (br.ReadUInt32() * (180.0 / 536870912.0)),
+								longitude = (br.ReadUInt32() * (360.0 / 805306368.0)) - 180.0,
+								altitude = br.ReadInt32() / 1000.0,
+								altitude2 = br.ReadInt32() / 1000.0,
+								heading = br.ReadSingle() * (360.0 / 65536.0),
+								width = br.ReadSingle(),
+								length = br.ReadSingle()
+							});
+						}
+						else if (recordId == 0x0024) // Approach
+						{
+							// This is taking a lot of time, and my current structure doesn't lend itself to it very much at all
+							// Comment this out, return to it some other day, and skip the records in the meantime
+							_ = br.BaseStream.Seek(recordSize, SeekOrigin.Current);
+							/* Approach approach = new()
+							{
+								suffix = br.ReadChar(),
+								runwayNumber = br.ReadByte(),
+							};
+							byte value1 = br.ReadByte();
+							approach.type = (ApproachType)(value1 & 0b1111);
+							approach.designator = (Designator)((value1 >> 4) & 0b111);
+							approach.gpsOverlay = (value1 & 0b10000000) == 1;
+							int transitionCount = br.ReadByte();
+							int legCount = br.ReadByte();
+							int missedApproachCount = br.ReadByte();
+							approach.fixType = (FixType)(br.ReadByte() & 0b11111);
+							approach.fixIdent = ConvertIcaoBytesToString(br.ReadInt32());
+							int value2 = br.ReadInt32();
+							approach.fixRegion = ConvertIcaoBytesToString(value2 & 0x7FF);
+							approach.airportIdent = ConvertIcaoBytesToString((int)(value2 & 0xFFFFF800));
+							approach.altitude = br.ReadInt32() / 1000.0;
+							approach.heading = br.ReadSingle() * (360.0 / 65536.0);
+							approach.missedAltitude = br.ReadInt32() / 1000.0;
+							approach.approachLegs = [];
+							approach.transitionLegs = [];
+							approach.missedApproachLegs = [];
+							int airportRecordBytesRead = 0x20;
+							while (airportRecordBytesRead < recordSize)
+							{
+								ushort approachRecordId = br.ReadUInt16();
+								uint approachRecordSize = br.ReadUInt32();
+								if (approachRecordId >= 0x00e1 && approachRecordId <= 0x00e6)
+								{
+									ushort legCt = br.ReadUInt16();
+									for (int j = 0; j < legCt; j++)
+									{
+										Leg leg = new()
+										{
+											type = (LegType)br.ReadByte(),
+											altitudeDescriptor = (AltitudeDescriptor)br.ReadByte()
+										};
+										int value3 = br.ReadInt16();
+										leg.turnDirection = (TurnDirection)(value3 & 0b11);
+										leg.courseIsTrue = (value3 & 0x100) == 1;
+										leg.timeIsSpecified = (value3 & 0x200) == 1;
+										leg.flyOver = (value3 & 0x400) == 1;
+										int value4 = br.ReadInt32();
+										leg.fixType = (FixType)(value4 & 0b11111);
+										leg.fixIdent = ConvertIcaoBytesToString(value4);
+										int value5 = br.ReadInt32();
+										leg.fixRegion = ConvertIcaoBytesToString(value5 & 0x7FF);
+										leg.fixAirport = ConvertIcaoBytesToString((int)(value5 & 0xFFFFF800));
+										int value6 = br.ReadInt32();
+										leg.recommendedType = (FixType)(value6 & 0b1111);
+										leg.recommendedIdent = ConvertIcaoBytesToString(value6);
+										int value7 = br.ReadInt32();
+										leg.recommendedRegion = ConvertIcaoBytesToString(value7 & 0x7FF);
+										leg.recommendedAirport = ConvertIcaoBytesToString((int)(value7 & 0xFFFFF800));
+										leg.theta = br.ReadSingle() * (360.0 / 65536.0);
+										leg.rho = br.ReadSingle();
+										if (leg.courseIsTrue)
+										{
+											leg.trueCourse = br.ReadSingle() * (360.0 / 65536.0);
+										}
+										else
+										{
+											leg.magneticCourse = br.ReadSingle() * (360.0 / 65536.0);
+										}
+
+										if (leg.timeIsSpecified)
+										{
+											leg.time = br.ReadSingle();
+										}
+										else
+										{
+											leg.distance = br.ReadSingle();
+										}
+										leg.altitude1 = br.ReadInt32() / 1000.0;
+										leg.altitude2 = br.ReadInt32() / 1000.0;
+										leg.speedLimit = br.ReadSingle();
+										leg.verticalAngle = br.ReadSingle();
+										_ = br.BaseStream.Seek(16, SeekOrigin.Current); // Skip unknown field
+										if (approachRecordId == 0x00e2)
+										{
+											approach.missedApproachLegs.Add(leg);
+										}
+										else if (approachRecordId == 0x00e3)
+										{
+											approach.transitionLegs.Add(leg);
+										}
+										else
+										{
+											approach.approachLegs.Add(leg);
+										}
+									}
+								}
+								else if (approachRecordId == 0x002c
+										|| approachRecordId == 0x0046
+										|| approachRecordId == 0x0047
+										|| approachRecordId == 0x004a)
+								{
+									int transitionLegsCount = br.ReadByte();
+									int number;
+									Designator designator;
+									if (approachRecordId == 0x0046)
+									{
+										number = br.ReadByte();
+										designator = (Designator)br.ReadByte();
+										br.BaseStream.Seek(3, SeekOrigin.Current); // Skip unknown field
+									}
+									for (int j = 0; j < transitionLegsCount; j++)
+									{
+										TransitionLeg transitionLeg = new()
+										{
+											type = (LegType)br.ReadByte(),
+											altitudeDescriptor = (AltitudeDescriptor)br.ReadByte()
+										};
+										int value3 = br.ReadInt16();
+										transitionLeg.turnDirection = (TurnDirection)(value3 & 0b11);
+										transitionLeg.courseIsTrue = (value3 & 0x100) == 1;
+										transitionLeg.timeIsSpecified = (value3 & 0x200) == 1;
+										transitionLeg.flyOver = (value3 & 0x400) == 1;
+										int value4 = br.ReadInt32();
+										transitionLeg.fixType = (FixType)(value4 & 0b11111);
+										transitionLeg.fixIdent = ConvertIcaoBytesToString(value4);
+										int value5 = br.ReadInt32();
+										transitionLeg.fixRegion = ConvertIcaoBytesToString(value5 & 0x7FF);
+										transitionLeg.fixAirport = ConvertIcaoBytesToString((int)(value5 & 0xFFFFF800));
+										int value6 = br.ReadInt32();
+										transitionLeg.recommendedType = (FixType)(value6 & 0b1111);
+										transitionLeg.recommendedIdent = ConvertIcaoBytesToString(value6);
+										int value7 = br.ReadInt32();
+										transitionLeg.recommendedRegion = ConvertIcaoBytesToString(value7 & 0x7FF);
+										transitionLeg.recommendedAirport = ConvertIcaoBytesToString((int)(value7 & 0xFFFFF800));
+										transitionLeg.theta = br.ReadSingle() * (360.0 / 65536.0);
+										transitionLeg.rho = br.ReadSingle();
+										if (transitionLeg.courseIsTrue)
+										{
+											transitionLeg.trueCourse = br.ReadSingle() * (360.0 / 65536.0);
+										}
+										else
+										{
+											transitionLeg.magneticCourse = br.ReadSingle() * (360.0 / 65536.0);
+										}
+
+										if (transitionLeg.timeIsSpecified)
+										{
+											transitionLeg.time = br.ReadSingle();
+										}
+										else
+										{
+											transitionLeg.distance = br.ReadSingle();
+									}
+								}
+							} */
+						}
+						else if (recordId == 0x0031) // ApronEdgeLights
+						{
+							_ = br.BaseStream.Seek(2, SeekOrigin.Current); // Skip unknown record
+							ushort vertexCt = br.ReadUInt16();
+							ushort edgeCt = br.ReadUInt16();
+							ApronEdgeLights apronEdgeLights = new()
+							{
+								coloration = [br.ReadByte(), br.ReadByte(), br.ReadByte(), br.ReadByte()],
+								scale = br.ReadSingle(),
+								falloff = br.ReadSingle(),
+								vertices = [],
+								edges = []
+							};
+							for (int j = 0; j < vertexCt; j++)
+							{
+								apronEdgeLights.vertices.Add(new Vector2
+									((float)(((float)(br.ReadUInt32() * (360.0 / 805306368.0))) - 180.0),
+									(float)(90.0 - (br.ReadUInt32() * (180.0 / 536870912.0))))
+								);
+							}
+							for (int j = 0; j < edgeCt; j++)
+							{
+								apronEdgeLights.edges.Add(new Vector3(br.ReadSingle(), br.ReadUInt16(), br.ReadUInt16()));
+							}
+							airport.apronEdgeLights.Add(apronEdgeLights);
+						}
+						else if (recordId == 0x0026) // Helipad
+						{
+							Helipad helipad = new()
+							{
+								surface = (Surface)br.ReadByte()
+							};
+							byte value = br.ReadByte();
+							helipad.type = (HelipadType)(value & 0b1111);
+							helipad.transparent = (value & 0b10000) == 1;
+							helipad.closed = (value & 0b100000) == 1;
+							helipad.color = [br.ReadByte(), br.ReadByte(), br.ReadByte(), br.ReadByte()];
+							helipad.longitude = (br.ReadUInt32() * (360.0 / 805306368.0)) - 180.0;
+							helipad.latitude = 90.0 - (br.ReadUInt32() * (180.0 / 536870912.0));
+							helipad.altitude = br.ReadInt32() / 1000.0;
+							helipad.length = br.ReadSingle();
+							helipad.width = br.ReadSingle();
+							helipad.heading = br.ReadSingle() * (360.0 / 65536.0);
+							airport.helipads.Add(helipad);
+						}
+						else if (recordId == 0x00e8) // ProjectedMesh
+						{
+							ProjectedMesh projectedMesh = new()
+							{
+								priority = br.ReadByte()
+							};
+							_ = br.BaseStream.Seek(1, SeekOrigin.Current); // Skip unknown field
+							int value = br.ReadInt32();
+							projectedMesh.groundMerging = (value & 0b1) == 1;
+							ushort subRecordSize = br.ReadUInt16();
+							byte[] sceneryObjectBytes = br.ReadBytes(subRecordSize);
+							if (BitConverter.ToInt16(sceneryObjectBytes, 0) == 0x000b)
+							{
+								projectedMesh.libraryObject = BuildLibraryObject(sceneryObjectBytes);
+							}
+						}
+						else
+						{
+							Logger.Warning($"Unexpected airport record type at offset 0x{subOffset + bytesRead + airportBytesRead:X}: 0x{recordId:X4}, skipping {recordSize} bytes");
+						}
+						airportBytesRead += recordSize;
+					}
+					airports.Add(airport);
+					bytesRead += (int)size;
 				}
 			}
 		}
@@ -1285,6 +2088,68 @@ public class SceneryConverter : INotifyPropertyChanged
 		return Matrix4x4.Multiply(temp, FlipZMatrix);
 	}
 
+	private static LibraryObject BuildLibraryObject(byte[] bytes)
+	{
+		LibraryObject libObj = new()
+		{
+			id = BitConverter.ToUInt16(bytes, 0),
+			size = BitConverter.ToUInt16(bytes, 2),
+			longitude = (BitConverter.ToInt32(bytes, 4) * (360.0 / 805306368.0)) - 180.0,
+			latitude = 90.0 - (BitConverter.ToInt32(bytes, 8) * (180.0 / 536870912.0)),
+			altitude = BitConverter.ToSingle(bytes, 12) / 1000.0
+		};
+		int flagsInt = BitConverter.ToInt16(bytes, 16);
+		libObj.flags = [.. Enum.GetValues<Flags>().Where(f => (flagsInt & (1 << (int)f)) != 0)];
+		libObj.pitch = Math.Round(BitConverter.ToInt16(bytes, 18) * (360.0 / 65536.0), 3);
+		libObj.bank = Math.Round(BitConverter.ToInt16(bytes, 20) * (360.0 / 65536.0), 3);
+		libObj.heading = Math.Round(BitConverter.ToInt16(bytes, 22) * (360.0 / 65536.0), 3);
+		libObj.imageComplexity = BitConverter.ToUInt16(bytes, 24);
+		libObj.guid = new Guid(bytes[44..60]);
+		libObj.scale = BitConverter.ToSingle(bytes, 60);
+		return libObj;
+	}
+
+	private static SimObject BuildSimObject(byte[] bytes)
+	{
+		SimObject simObj = new()
+		{
+			id = BitConverter.ToUInt16(bytes, 0),
+			size = BitConverter.ToUInt16(bytes, 2),
+			longitude = (BitConverter.ToInt32(bytes, 4) * (360.0 / 805306368.0)) - 180.0,
+			latitude = 90.0 - (BitConverter.ToInt32(bytes, 8) * (180.0 / 536870912.0)),
+			altitude = BitConverter.ToSingle(bytes, 12) / 1000.0
+		};
+		int flagsInt = BitConverter.ToInt16(bytes, 16);
+		simObj.flags = [.. Enum.GetValues<Flags>().Where(f => (flagsInt & (1 << (int)f)) != 0)];
+		simObj.pitch = Math.Round(BitConverter.ToInt16(bytes, 18) * (360.0 / 65536.0), 3);
+		simObj.bank = Math.Round(BitConverter.ToInt16(bytes, 20) * (360.0 / 65536.0), 3);
+		simObj.heading = Math.Round(BitConverter.ToInt16(bytes, 22) * (360.0 / 65536.0), 3);
+		simObj.imageComplexity = BitConverter.ToUInt16(bytes, 24);
+		simObj.scale = BitConverter.ToSingle(bytes, 44);
+		int containerTitleLength = BitConverter.ToUInt16(bytes, 48);
+		int containerPathLength = BitConverter.ToUInt16(bytes, 50);
+		simObj.containerTitle = BitConverter.ToString(bytes, 52, containerTitleLength).TrimEnd('\0');
+		simObj.containerPath = BitConverter.ToString(bytes, 52 + containerTitleLength, containerPathLength).TrimEnd('\0');
+		return simObj;
+	}
+
+	private static string ConvertIcaoBytesToString(int icaoBytes)
+	{
+
+		StringBuilder sb = new();
+		icaoBytes >>= 5;
+		while (icaoBytes > 37)
+		{
+			int charVal = icaoBytes % 38;
+			icaoBytes = (icaoBytes - charVal) / 38;
+			char c = charVal == 0 ? ' ' :
+				charVal > 1 && charVal < 12 ? (char)('0' + charVal - 2) :
+											  (char)('A' + charVal - 12);
+			sb.Insert(0, c);
+		}
+		return sb.ToString();
+	}
+
 	protected void OnPropertyChanged([CallerMemberName] string? propertyName = null)
 	{
 		PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
@@ -1342,7 +2207,18 @@ public class SceneryConverter : INotifyPropertyChanged
 		public double altitude;
 	}
 
-	enum RunwaySurfType
+	enum Designator
+	{
+		None,
+		Left,
+		Right,
+		Center,
+		Water,
+		A,
+		B
+	}
+
+	enum Surface
 	{
 		Concrete,
 		Grass,
@@ -1363,7 +2239,9 @@ public class SceneryConverter : INotifyPropertyChanged
 		Sand,
 		Shale,
 		Tarmac,
-		Unknown
+		Unknown = 0x00fe,
+		UseFs20Material = 0x0200,
+		UseFs20ApronMaterial = 0xff03
 	}
 
 	enum RunwayMarkingType
@@ -1412,6 +2290,14 @@ public class SceneryConverter : INotifyPropertyChanged
 		SecondaryPattern
 	}
 
+	enum VasiChildType
+	{
+		PrimaryLeft,
+		PrimaryRight,
+		SecondaryLeft,
+		SecondaryRight
+	}
+
 	enum VasiType
 	{
 		Vasi21,
@@ -1430,6 +2316,7 @@ public class SceneryConverter : INotifyPropertyChanged
 
 	private struct Vasi
 	{
+		public VasiChildType childType;
 		public VasiType type;
 		public double biasX;
 		public double biasZ;
@@ -1439,7 +2326,7 @@ public class SceneryConverter : INotifyPropertyChanged
 
 	private struct OffsetThreshold
 	{
-		public RunwaySurfType fsXSurface;
+		public Surface fsXSurface;
 		public Guid surface;
 		public double length;
 		public double width;
@@ -1447,7 +2334,7 @@ public class SceneryConverter : INotifyPropertyChanged
 
 	private struct BlastPad
 	{
-		public RunwaySurfType fsXSurface;
+		public Surface fsXSurface;
 		public Guid surface;
 		public double length;
 		public double width;
@@ -1455,7 +2342,7 @@ public class SceneryConverter : INotifyPropertyChanged
 
 	private struct Overrun
 	{
-		public RunwaySurfType fsXSurface;
+		public Surface fsXSurface;
 		public Guid surface;
 		public double length;
 		public double width;
@@ -1486,7 +2373,7 @@ public class SceneryConverter : INotifyPropertyChanged
 		public bool endLights;
 		public bool reil;
 		public bool touchdown;
-		public bool strobes;
+		public byte strobes;
 		public double spacing;
 		public double offset;
 		public float slope;
@@ -1504,32 +2391,32 @@ public class SceneryConverter : INotifyPropertyChanged
 
 	private struct Runway
 	{
-		public int number;
-		public char designator;
-		public int numberSecondary;
-		public char designatorSecondary;
-		public string icaoIdentPrimary;
-		public string icaoIdentSecondary;
+		public int primaryNumber;
+		public Designator primaryDesignator;
+		public int secondaryNumber;
+		public Designator secondaryDesignator;
+		public string primaryILSIdent;
+		public string secondaryILSIdent;
 		public double longitude;
 		public double latitude;
 		public double altitude;
 		public double length;
 		public double width;
-		public float heading;
-		public float patternAltitude;
-		public RunwayMarkingType[] markingTypes;
-		public RunwayLightType[] lightTypes;
-		public RunwayPatternType[] patternTypes;
+		public double heading;
+		public double patternAltitude;
+		public List<RunwayMarkingType> markingTypes;
+		public List<RunwayLightType> lightTypes;
+		public List<RunwayPatternType> patternTypes;
 		public bool groundMerging;
 		public bool excludeVegetationAround;
 		public float falloff;
 		public Guid surface;
 		public int[] coloration; // RGBA bytes
-		public Vasi[] vasis;
-		public OffsetThreshold[] offsetThresholds;
-		public BlastPad[] blastPads;
-		public Overrun[] overruns;
-		public ApproachLight[] approachLights;
+		public List<Vasi> vasis;
+		public List<OffsetThreshold> offsetThresholds;
+		public List<BlastPad> blastPads;
+		public List<Overrun> overruns;
+		public List<ApproachLight> approachLights;
 		public FacilityMaterial facilityMaterial;
 	}
 
@@ -1543,11 +2430,11 @@ public class SceneryConverter : INotifyPropertyChanged
 	private struct RunwayStart
 	{
 		public int runwayNumber;
-		public char runwayDesignator;
+		public Designator designator;
 		public double longitude;
 		public double latitude;
 		public double altitude;
-		public float heading;
+		public double heading;
 		public RunwayStartType type;
 	}
 
@@ -1652,7 +2539,11 @@ public class SceneryConverter : INotifyPropertyChanged
 		public ParkingType type;
 		public uint number;
 		public double radius;
-		public float heading;
+		public double heading;
+		public float teeOffset1;
+		public float teeOffset2;
+		public float teeOffset3;
+		public float teeOffset4; // labeled as another teeOffset3 in the docs
 		public double longitude;
 		public double latitude;
 		public string[] airlineCodes;
@@ -1706,7 +2597,7 @@ public class SceneryConverter : INotifyPropertyChanged
 	{
 		public ushort start;
 		public ushort legacyEnd;
-		public char designator;
+		public Designator designator;
 		public TaxiwayPathType type;
 		public bool enhanced;
 		public bool drawSurface;
@@ -1715,17 +2606,20 @@ public class SceneryConverter : INotifyPropertyChanged
 		public byte name; // if it isn't a runway
 		public bool centerLine;
 		public bool centerLineLighted;
-		public TaxiwayEdgeType leftEdgeType;
+		public TaxiwayEdgeType leftEdge;
 		public bool leftEdgeLighted;
-		public TaxiwayEdgeType rightEdgeType;
+		public TaxiwayEdgeType rightEdge;
 		public bool rightEdgeLighted;
-		public RunwaySurfType surfaceType;
+		public Surface fsXSurface;
 		public double width;
+		public uint weightLimit;
 		public Guid surface;
-		public int[] color; // RGBA bytes
+		public int[] coloration; // RGBA bytes
 		public bool groundMerging;
 		public bool excludeVegetationAround;
 		public bool excludeVegetationInside;
+		public ushort end;
+		public List<TaxiwayPathMaterial> materials;
 	}
 
 	public struct Apron
@@ -1738,21 +2632,21 @@ public class SceneryConverter : INotifyPropertyChanged
 		public bool excludeVegetationAround;
 		public bool excludeVegetationInside;
 		public byte opacity;
-		public int[] color; // RGBA bytes
+		public int[] coloration; // RGBA bytes
 		public Guid surface;
 		public float tiling;
-		public float heading;
+		public double heading;
 		public float falloff;
 		public int priority;
-		public Vector2[] vertices;
-		public Vector3[] tris;
+		public List<Vector2> vertices;
+		public List<Vector3> tris;
 	}
 
 	public struct TaxiwaySign
 	{
 		public double longitude;
 		public double latitude;
-		public float heading;
+		public double heading;
 		public byte size;
 		public bool justificationRight;
 		public string label;
@@ -1817,16 +2711,17 @@ public class SceneryConverter : INotifyPropertyChanged
 	{
 		public PaintedLineType type;
 		public PaintedLineTrueAngle trueAngle;
-		public Vector2[] vertices;
+		public List<Vector2> vertices;
 		public Guid surface;
 	}
+
 	private struct PaintedHatchedArea
 	{
 		public PaintedLineType type;
 		public ushort vertexCount;
-		public float heading;
+		public double heading;
 		public double spacing;
-		public Vector2[] vertices;
+		public List<Vector2> vertices;
 	}
 
 	private struct Jetway
@@ -1842,7 +2737,7 @@ public class SceneryConverter : INotifyPropertyChanged
 		public double latitude;
 		public double altitude;
 		public double altitude2;
-		public float heading;
+		public double heading;
 		public float width;
 		public float length;
 	}
@@ -1942,14 +2837,14 @@ public class SceneryConverter : INotifyPropertyChanged
 		public string recommendedIdent;
 		public string recommendedRegion;
 		public string recommendedAirport;
-		public float theta;
+		public double theta;
 		public float rho;
-		public float? trueCourse; // if courseIsTrue
-		public float? magneticCourse; // if !courseIsTrue
-		public float? timeSeconds; // if timeIsSpecified
+		public double? trueCourse; // if courseIsTrue
+		public double? magneticCourse; // if !courseIsTrue
+		public float? time; // if timeIsSpecified
 		public float? distance; // if !timeIsSpecified
-		public float altitude1;
-		public float altitude2;
+		public double altitude1;
+		public double altitude2;
 		public float speedLimit;
 		public float verticalAngle;
 	}
@@ -1959,18 +2854,18 @@ public class SceneryConverter : INotifyPropertyChanged
 		public char suffix;
 		public int runwayNumber;
 		public ApproachType type;
-		public char designator;
+		public Designator designator;
 		public bool gpsOverlay;
 		public FixType fixType;
 		public string fixIdent;
 		public string fixRegion;
 		public string airportIdent;
-		public float altitude;
-		public float heading;
-		public float missedAltitude;
-		public Leg[] approachLegs;
-		public Leg[] missedApproachLegs;
-		public Leg[] transitionLegs;
+		public double altitude;
+		public double heading;
+		public double missedAltitude;
+		public List<Leg> approachLegs;
+		public List<Leg> missedApproachLegs;
+		public List<Leg> transitionLegs;
 	}
 
 	public struct ApronEdgeLights
@@ -1978,8 +2873,8 @@ public class SceneryConverter : INotifyPropertyChanged
 		public int[] coloration;
 		public float scale;
 		public float falloff;
-		public Vector2[] vertices;
-		public Vector3[] edges; // radius, vertex1, vertex2
+		public List<Vector2> vertices;
+		public List<Vector3> edges; // radius, vertex1, vertex2
 	}
 
 	enum HelipadType
@@ -1993,7 +2888,7 @@ public class SceneryConverter : INotifyPropertyChanged
 
 	private struct Helipad
 	{
-		public RunwaySurfType surface;
+		public Surface surface;
 		public HelipadType type;
 		public bool transparent;
 		public bool closed;
@@ -2003,7 +2898,14 @@ public class SceneryConverter : INotifyPropertyChanged
 		public double altitude;
 		public double length;
 		public double width;
-		public float heading;
+		public double heading;
+	}
+
+	private struct ProjectedMesh
+	{
+		public byte priority;
+		public bool groundMerging;
+		public LibraryObject libraryObject;
 	}
 
 	private struct Airport
@@ -2016,20 +2918,22 @@ public class SceneryConverter : INotifyPropertyChanged
 		public string icao;
 		public string regIdent;
 		public string name;
-		public Runway[] runways;
-		public RunwayStart[] runwayStarts;
-		public TaxiwayPoint[] taxiwayPoints;
-		public TaxiwayParking[] taxiwayParkings;
-		public TaxiwayPath[] taxiwayPaths;
-		public Apron[] aprons;
-		public TaxiwaySign[] taxiwaySigns;
-		public PaintedLine[] paintedLines;
-		public PaintedHatchedArea[] paintedHatchedAreas;
-		public Jetway[] jetways;
-		public LightSupport[] lightSupports;
-		public Approach[] approaches;
-		public ApronEdgeLights[] apronEdgeLights;
-		public Helipad[] helipads;
+		public List<Runway> runways;
+		public List<RunwayStart> runwayStarts;
+		public List<TaxiwayPoint> taxiwayPoints;
+		public List<TaxiwayParking> taxiwayParkings;
+		public List<TaxiwayPath> taxiwayPaths;
+		public List<string> taxiNames;
+		public List<Apron> aprons;
+		public List<TaxiwaySign> taxiwaySigns;
+		public List<PaintedLine> paintedLines;
+		public List<PaintedHatchedArea> paintedHatchedAreas;
+		public List<Jetway> jetways;
+		public List<LightSupport> lightSupports;
+		public List<Approach> approaches;
+		public List<ApronEdgeLights> apronEdgeLights;
+		public List<Helipad> helipads;
+		public List<ProjectedMesh> projectedMeshes;
 	}
 
 	private struct LodData
