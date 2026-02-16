@@ -34,6 +34,7 @@ public class SceneryConverter : INotifyPropertyChanged
 	Dictionary<int, List<ModelReference>> modelReferencesByTile = [];
 	Dictionary<Guid, List<LibraryObject>> libraryObjects = [];
 	Dictionary<string, List<SimObject>> simObjects = [];
+	Dictionary<int, Dictionary<string, SimObject>> simObjectsByTile = [];
 	List<Airport> airports = [];
 	private static readonly Matrix4x4 FlipZMatrix = Matrix4x4.CreateScale(1f, 1f, -1f);
 
@@ -117,94 +118,32 @@ public class SceneryConverter : INotifyPropertyChanged
 				{
 					_ = br.BaseStream.Seek(subOffset + bytesRead, SeekOrigin.Begin);
 					ushort id = br.ReadUInt16();
-					if (id != 0x0B && id != 0x19) // LibraryObject and SimObject
-					{
-						uint skip = br.ReadUInt16();
-						Logger.Warning($"Unexpected subrecord type at offset 0x{subOffset + bytesRead:X}: 0x{id:X4}, skipping {skip} bytes");
-						_ = br.BaseStream.Seek(subOffset + skip, SeekOrigin.Begin);
-						bytesRead += (int)skip;
-						continue;
-					}
-					ushort size = br.ReadUInt16();
-					uint longitude = br.ReadUInt32(), latitude = br.ReadUInt32();
-					double altitude = br.ReadInt32() / 1000.0;
-					ushort flagsValue = br.ReadUInt16();
-					List<Flags> flagsList = [];
-					for (int j = 0; j < 7; j++)
-					{
-						if ((byte)((flagsValue >> j) & 1) != 0)
-						{
-							flagsList.Add((Flags)j);
-						}
-					}
-					Flags[] flags = [.. flagsList];
-					ushort pitch = br.ReadUInt16();
-					ushort bank = br.ReadUInt16();
-					ushort heading = br.ReadUInt16();
-					short imageComplexity = br.ReadInt16();
-					_ = br.BaseStream.Seek(2, SeekOrigin.Current); // There is an unknown 2-byte field here
-					_ = br.BaseStream.Seek(16, SeekOrigin.Current); // Skip GUID empty field
+					uint size = br.ReadUInt16();
 					if (id == 0x0B) // LibraryObject
 					{
-						Guid guid = new(br.ReadBytes(16));
-						double scale = br.ReadSingle(); // Read as float from file, store as double for precision
-						LibraryObject libObj = new()
+						_ = br.BaseStream.Seek(-4, SeekOrigin.Current); // Reverse back to get all of the bytes
+						LibraryObject libObj = BuildLibraryObject(br.ReadBytes((int)size));
+						if (!libraryObjects.TryGetValue(libObj.guid, out _))
 						{
-							id = id,
-							size = size,
-							longitude = (longitude * (360.0 / 805306368.0)) - 180.0,
-							latitude = 90.0 - (latitude * (180.0 / 536870912.0)),
-							altitude = flags.Contains(Flags.IsAboveAGL) ? altitude + Terrain.GetElevation((float)(90.0 - (latitude * (180.0 / 536870912.0))), (float)((longitude * (360.0 / 805306368.0)) - 180.0)) : altitude,
-							flags = flags,
-							pitch = Math.Round(pitch * (360.0 / 65536.0), 3),
-							bank = Math.Round(bank * (360.0 / 65536.0), 3),
-							heading = Math.Round(heading * (360.0 / 65536.0), 3),
-							imageComplexity = imageComplexity,
-							guid = guid,
-							scale = Math.Round(scale, 3)
-						};
-						if (!libraryObjects.TryGetValue(guid, out _))
-						{
-							libraryObjects[guid] = [];
+							libraryObjects[libObj.guid] = [];
 						}
-						libraryObjects[guid].Add(libObj);
-						Logger.Debug($"{guid}\t{libObj.size}\t{libObj.longitude:F6}\t{libObj.latitude:F6}\t{libObj.altitude}\t[{string.Join(",", libObj.flags)}]\t{libObj.pitch:F2}\t{libObj.bank:F2}\t{libObj.heading:F2}\t{libObj.imageComplexity}\t{libObj.scale}");
+						libraryObjects[libObj.guid].Add(libObj);
 					}
 					else if (id == 0x19) // SimObject
 					{
-						float scale = br.ReadSingle();
-						ushort containerTitleLen = br.ReadUInt16();
-						ushort containerPathLen = br.ReadUInt16();
-						string containerTitle = Encoding.UTF8.GetString(br.ReadBytes(containerTitleLen));
-						string containerPath = Encoding.UTF8.GetString(br.ReadBytes(containerPathLen));
-						SimObject simObj = new SimObject
-						{
-							id = id,
-							size = size,
-							longitude = (longitude * (360.0 / 805306368.0)) - 180.0,
-							latitude = 90.0 - (latitude * (180.0 / 536870912.0)),
-							altitude = flags.Contains(Flags.IsAboveAGL) ? altitude + Terrain.GetElevation((float)(90.0 - (latitude * (180.0 / 536870912.0))), (float)((longitude * (360.0 / 805306368.0)) - 180.0)) : altitude,
-							flags = flags,
-							pitch = Math.Round(pitch * (360.0 / 65536.0), 3),
-							bank = Math.Round(bank * (360.0 / 65536.0), 3),
-							heading = Math.Round(heading * (360.0 / 65536.0), 3),
-							imageComplexity = imageComplexity,
-							scale = Math.Round(scale, 3),
-							containerTitle = containerTitle,
-							containerPath = containerPath
-						};
-						if (simObjects.TryGetValue(containerTitle, out List<SimObject>? existingSimObjs))
-						{
-							existingSimObjs.Add(simObj);
-						} else
-						{
-							simObjects[containerTitle] = [simObj];
-						}
-						Logger.Debug($"SimObject: {containerTitle} at {containerPath}, scale {scale}");
+						_ = br.BaseStream.Seek(-4, SeekOrigin.Current); // Reverse back to get all of the bytes
+						BuildSimObject(br.ReadBytes((int)size));
+					}
+					else
+					{
+						Logger.Warning($"Unexpected subrecord type at offset 0x{subOffset + bytesRead:X}: 0x{id:X4}, skipping {size} bytes");
+						_ = br.BaseStream.Seek(subOffset + size, SeekOrigin.Begin);
+						bytesRead += (int)size;
+						continue;
 					}
 					totalLibraryObjects++;
 					Status = $"Looking for placements in {Path.GetFileName(file)}... found {totalLibraryObjects}";
-					bytesRead += size;
+					bytesRead += (int)size;
 				}
 			}
 
@@ -730,15 +669,7 @@ public class SceneryConverter : INotifyPropertyChanged
 								}
 								else if (BitConverter.ToInt16(sceneryObjectBytes, 0) == 0x0019)
 								{
-									SimObject simObj = BuildSimObject(sceneryObjectBytes);
-									if (simObjects.TryGetValue(simObj.containerTitle, out List<SimObject>? simObjList))
-									{
-										simObjList.Add(simObj);
-									}
-									else
-									{
-										simObjects[simObj.containerTitle] = [simObj];
-									}
+									BuildSimObject(sceneryObjectBytes);
 								}
 								else
 								{
@@ -762,15 +693,7 @@ public class SceneryConverter : INotifyPropertyChanged
 								}
 								else if (BitConverter.ToInt16(sceneryObjectBytes, 0) == 0x0019)
 								{
-									SimObject simObj = BuildSimObject(sceneryObjectBytes);
-									if (simObjects.TryGetValue(simObj.containerTitle, out List<SimObject>? simObjList))
-									{
-										simObjList.Add(simObj);
-									}
-									else
-									{
-										simObjects[simObj.containerTitle] = [simObj];
-									}
+									BuildSimObject(sceneryObjectBytes);
 								}
 								else
 								{
@@ -2113,47 +2036,69 @@ public class SceneryConverter : INotifyPropertyChanged
 
 	private static LibraryObject BuildLibraryObject(byte[] bytes)
 	{
+		double longitude = (BitConverter.ToInt32(bytes, 4) * (360.0 / 805306368.0)) - 180.0;
+		double latitude = 90.0 - (BitConverter.ToInt32(bytes, 8) * (180.0 / 536870912.0));
+		double altitude = BitConverter.ToInt32(bytes, 12) / 1000.0;
+		Flags[] flags = [.. Enum.GetValues<Flags>().Where(f => (BitConverter.ToInt16(bytes, 16) & (1 << (int)f)) != 0)];
 		LibraryObject libObj = new()
 		{
-			id = BitConverter.ToUInt16(bytes, 0),
-			size = BitConverter.ToUInt16(bytes, 2),
-			longitude = (BitConverter.ToInt32(bytes, 4) * (360.0 / 805306368.0)) - 180.0,
-			latitude = 90.0 - (BitConverter.ToInt32(bytes, 8) * (180.0 / 536870912.0)),
-			altitude = BitConverter.ToSingle(bytes, 12) / 1000.0
+			longitude = longitude,
+			latitude = latitude,
+			altitude = flags.Contains(Flags.IsAboveAGL) ? altitude + Terrain.GetElevation((float)latitude, (float)longitude) : altitude,
+			flags = flags,
+			pitch = Math.Round(BitConverter.ToInt16(bytes, 18) * (360.0 / 65536.0), 3),
+			bank = Math.Round(BitConverter.ToInt16(bytes, 20) * (360.0 / 65536.0), 3),
+			heading = Math.Round(BitConverter.ToInt16(bytes, 22) * (360.0 / 65536.0), 3),
+			imageComplexity = BitConverter.ToUInt16(bytes, 24),
+			guid = new Guid(bytes[44..60]),
+			scale = BitConverter.ToSingle(bytes, 60)
 		};
-		int flagsInt = BitConverter.ToInt16(bytes, 16);
-		libObj.flags = [.. Enum.GetValues<Flags>().Where(f => (flagsInt & (1 << (int)f)) != 0)];
-		libObj.pitch = Math.Round(BitConverter.ToInt16(bytes, 18) * (360.0 / 65536.0), 3);
-		libObj.bank = Math.Round(BitConverter.ToInt16(bytes, 20) * (360.0 / 65536.0), 3);
-		libObj.heading = Math.Round(BitConverter.ToInt16(bytes, 22) * (360.0 / 65536.0), 3);
-		libObj.imageComplexity = BitConverter.ToUInt16(bytes, 24);
-		libObj.guid = new Guid(bytes[44..60]);
-		libObj.scale = BitConverter.ToSingle(bytes, 60);
+		Logger.Debug($"{libObj.guid}\t{libObj.longitude:F6}\t{libObj.latitude:F6}\t{libObj.altitude}\t[{string.Join(",", libObj.flags)}]\t{libObj.pitch:F2}\t{libObj.bank:F2}\t{libObj.heading:F2}\t{libObj.imageComplexity}\t{libObj.scale}");
 		return libObj;
 	}
 
-	private static SimObject BuildSimObject(byte[] bytes)
+	private void BuildSimObject(byte[] bytes)
 	{
-		SimObject simObj = new()
-		{
-			id = BitConverter.ToUInt16(bytes, 0),
-			size = BitConverter.ToUInt16(bytes, 2),
-			longitude = (BitConverter.ToInt32(bytes, 4) * (360.0 / 805306368.0)) - 180.0,
-			latitude = 90.0 - (BitConverter.ToInt32(bytes, 8) * (180.0 / 536870912.0)),
-			altitude = BitConverter.ToSingle(bytes, 12) / 1000.0
-		};
-		int flagsInt = BitConverter.ToInt16(bytes, 16);
-		simObj.flags = [.. Enum.GetValues<Flags>().Where(f => (flagsInt & (1 << (int)f)) != 0)];
-		simObj.pitch = Math.Round(BitConverter.ToInt16(bytes, 18) * (360.0 / 65536.0), 3);
-		simObj.bank = Math.Round(BitConverter.ToInt16(bytes, 20) * (360.0 / 65536.0), 3);
-		simObj.heading = Math.Round(BitConverter.ToInt16(bytes, 22) * (360.0 / 65536.0), 3);
-		simObj.imageComplexity = BitConverter.ToUInt16(bytes, 24);
-		simObj.scale = BitConverter.ToSingle(bytes, 44);
+		Vector3 position = new(
+			(float)((BitConverter.ToInt32(bytes, 4) * (360.0 / 805306368.0)) - 180.0),
+			(float)(90.0 - (BitConverter.ToInt32(bytes, 8) * (180.0 / 536870912.0))),
+			(float)(BitConverter.ToInt32(bytes, 12) / 1000.0)
+		);
+		Vector3 orientation = new(
+			(float)Math.Round(BitConverter.ToInt16(bytes, 18) * (360.0 / 65536.0), 3),
+			(float)Math.Round(BitConverter.ToInt16(bytes, 20) * (360.0 / 65536.0), 3),
+			(float)Math.Round(BitConverter.ToInt16(bytes, 22) * (360.0 / 65536.0), 3)
+		);
+		float scale = BitConverter.ToSingle(bytes, 44);
 		int containerTitleLength = BitConverter.ToUInt16(bytes, 48);
 		int containerPathLength = BitConverter.ToUInt16(bytes, 50);
-		simObj.containerTitle = BitConverter.ToString(bytes, 52, containerTitleLength).TrimEnd('\0');
-		simObj.containerPath = BitConverter.ToString(bytes, 52 + containerTitleLength, containerPathLength).TrimEnd('\0');
-		return simObj;
+		string containerTitle = BitConverter.ToString(bytes, 52, containerTitleLength).TrimEnd('\0');
+		string containerPath = BitConverter.ToString(bytes, 52 + containerTitleLength, containerPathLength).TrimEnd('\0');
+		int tileIndex = Terrain.GetTileIndex(position.Y, position.X);
+		if (!simObjectsByTile.TryGetValue(tileIndex, out Dictionary<string, SimObject>? simObjects))
+		{
+			simObjectsByTile[tileIndex] = [];
+		}
+		if (simObjectsByTile[tileIndex].TryGetValue(containerTitle, out SimObject existingObj))
+		{
+			existingObj.position.Add(position);
+			existingObj.orientation.Add(orientation);
+			existingObj.scale.Add(scale);
+		}
+		else
+		{
+			simObjectsByTile[tileIndex][containerTitle] = new SimObject
+			{
+				position = [position],
+				flags = [.. Enum.GetValues<Flags>().Where(f => (BitConverter.ToInt16(bytes, 16) & (1 << (int)f)) != 0)],
+				orientation = [orientation],
+				imageComplexity = BitConverter.ToUInt16(bytes, 24),
+				scale = [scale],
+				containerTitle = containerTitle,
+				containerPath = containerPath,
+			};
+		}
+		Logger.Debug($"SimObject: {simObjectsByTile[tileIndex][containerTitle].containerTitle} at {simObjectsByTile[tileIndex][containerTitle].containerPath}, scale {simObjectsByTile[tileIndex][containerTitle].scale}");
 	}
 
 	private static string ConvertIcaoBytesToString(int icaoBytes)
@@ -2192,8 +2137,6 @@ public class SceneryConverter : INotifyPropertyChanged
 #pragma warning disable CS0649
 	private struct LibraryObject
 	{
-		public int id;
-		public int size;
 		public double longitude;
 		public double latitude;
 		public double altitude;
@@ -2208,19 +2151,13 @@ public class SceneryConverter : INotifyPropertyChanged
 
 	private struct SimObject
 	{
-		public int id;
-		public int size;
-		public double longitude;
-		public double latitude;
-		public double altitude;
+		public List<Vector3> position;
 		public Flags[] flags;
-		public double pitch;
-		public double bank;
-		public double heading;
+		public List<Vector3> orientation;
 		public int imageComplexity;
 		public string containerTitle;
 		public string containerPath;
-		public double scale;
+		public List<double> scale;
 	}
 
 	private struct Tower
