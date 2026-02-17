@@ -2,8 +2,8 @@ namespace Scone;
 
 public partial class App : Application
 {
-	public static readonly string TempPath = Path.GetTempPath() + "scone";
-	public static readonly string StorePath = ApplicationData.Current.LocalFolder.Path;
+	public static readonly string TempPath = Path.Combine(Path.GetTempPath(), "scone");
+	public static readonly string StorePath = Path.Combine(ApplicationData.Current.LocalFolder.Path, "scone");
 	public static readonly string ConfigPath = Path.Combine(StorePath, "config.json");
 	public static Config AppConfig = new();
 	/// <summary>
@@ -20,16 +20,16 @@ public partial class App : Application
 		{
             _ = Directory.CreateDirectory(StorePath);
 		}
-		/* if (File.Exists(ConfigPath))
+		if (File.Exists(ConfigPath))
 		{
 			string json = File.ReadAllText(ConfigPath);
-			// AppConfig = System.Text.Json.JsonSerializer.Deserialize<Config>(json);
+			AppConfig = System.Text.Json.JsonSerializer.Deserialize<Config>(json);
 		}
 		Suspending += static (s, e) =>
 		{
 			// Save config on exit
 			File.WriteAllText(ConfigPath, System.Text.Json.JsonSerializer.Serialize(AppConfig));
-		}; */
+		};
 		InitializeComponent();
 	}
 

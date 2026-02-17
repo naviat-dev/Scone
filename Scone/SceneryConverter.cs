@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Numerics;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Xml;
 using System.Xml.Linq;
 using Newtonsoft.Json.Linq;
@@ -132,7 +133,7 @@ public class SceneryConverter : INotifyPropertyChanged
 					else if (id == 0x19) // SimObject
 					{
 						_ = br.BaseStream.Seek(-4, SeekOrigin.Current); // Reverse back to get all of the bytes
-						BuildSimObject(br.ReadBytes((int)size));
+						BuildSimObject(br.ReadBytes((int)size), file);
 					}
 					else
 					{
@@ -669,7 +670,7 @@ public class SceneryConverter : INotifyPropertyChanged
 								}
 								else if (BitConverter.ToInt16(sceneryObjectBytes, 0) == 0x0019)
 								{
-									BuildSimObject(sceneryObjectBytes);
+									BuildSimObject(sceneryObjectBytes, file);
 								}
 								else
 								{
@@ -693,7 +694,7 @@ public class SceneryConverter : INotifyPropertyChanged
 								}
 								else if (BitConverter.ToInt16(sceneryObjectBytes, 0) == 0x0019)
 								{
-									BuildSimObject(sceneryObjectBytes);
+									BuildSimObject(sceneryObjectBytes, file);
 								}
 								else
 								{
@@ -946,6 +947,248 @@ public class SceneryConverter : INotifyPropertyChanged
 			}
 		}
 
+		// Dump SimObjects to a folder for debugging
+		foreach (KeyValuePair<int, Dictionary<string, SimObject>> kvp in simObjectsByTile)
+		{
+			foreach (KeyValuePair<string, SimObject> kvp2 in kvp.Value)
+			{
+				SimObject simObj = kvp2.Value;
+				if (!File.Exists(simObj.containerPath))
+				{
+					continue;
+				}
+				string simObjContainer = File.ReadAllText(simObj.containerPath);
+				Match match = new Regex(@$"title={simObj.containerTitle}\r?\nmodel=(.*)\r?\ntexture=(.*)", RegexOptions.Multiline).Match(simObjContainer);
+				if (match.Success)
+				{
+					string modelCfgFile = Path.Combine(Path.GetDirectoryName(simObj.containerPath)!, match.Groups[1].Value.Trim() == "" ? "model" : $"model.{match.Groups[1].Value.Replace("\r", "").Trim()}", "model.cfg");
+					string texturePath = Path.Combine(Path.GetDirectoryName(simObj.containerPath)!, match.Groups[2].Value.Trim() == "" ? "texture" : $"texture.{match.Groups[2].Value.Replace("\r", "").Trim()}");
+					string dirName = Path.GetDirectoryName(modelCfgFile)!;
+					string modelSource = new Regex(@"normal=(.+)", RegexOptions.Multiline).Match(File.ReadAllText(modelCfgFile)).Groups[1].Value;
+					XmlReader xmlReader = XmlReader.Create(Path.Combine(dirName, modelSource));
+					string gltfFile = "";
+					while (xmlReader.Read())
+					{
+						if (xmlReader.NodeType == XmlNodeType.Element && xmlReader.Name == "LODS")
+						{
+							XDocument xDocument = XDocument.Load(xmlReader.ReadSubtree());
+							var lodEntries = xDocument
+								.Descendants("LOD")
+								.Select(lod =>
+								{
+									_ = float.TryParse(lod.Attribute("MinSize")?.Value, NumberStyles.Float, CultureInfo.InvariantCulture, out float minSize);
+									return new { lod, minSize };
+								})
+								.ToList();
+							string? lodModelFile = lodEntries
+								.OrderByDescending(entry => entry.minSize)
+								.Select(entry => entry.lod.Attribute("ModelFile")?.Value)
+								.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
+							if (string.IsNullOrWhiteSpace(lodModelFile))
+							{
+								Logger.Warning($"No valid LOD entries found in {modelSource}; skipping {simObj.containerTitle}.");
+								break;
+							}
+							gltfFile = lodModelFile;
+							break;
+						}
+					}
+					if (string.IsNullOrWhiteSpace(gltfFile))
+					{
+						continue;
+					}
+					string simObjOutputDir = Path.Combine(App.StorePath, "SimObjects", simObj.containerTitle);
+					JObject json = JObject.Parse(File.ReadAllText(Path.Combine(dirName, gltfFile)));
+					string bufferDir = Path.Combine(dirName, json["buffers"]![0]!["uri"]!.ToString());
+					SceneBuilder scene = CreateGltfModelFromGltf(File.ReadAllBytes(bufferDir), json, texturePath, Path.GetDirectoryName(modelCfgFile)!);
+					Directory.CreateDirectory(simObjOutputDir);
+					scene.ToGltf2().SaveGLTF(simObjOutputDir, new WriteSettings
+					{
+						ImageWriting = ResourceWriteMode.SatelliteFile,
+						// This name doesn't matter; we will fix up the URIs in the postprocessor
+						ImageWriteCallback = (context, assetName, image) => { return ""; },
+						JsonPostprocessor = (json) =>
+						{
+							JObject gltfText = JObject.Parse(json);
+							Dictionary<string, int> imageUriToIndex = [];
+							JArray images = [];
+							// Assign proper sources for textures using extensions
+							foreach (JObject mat in gltfText["materials"]?.Cast<JObject>() ?? [])
+							{
+								if (mat["pbrMetallicRoughness"]?["baseColorTexture"] != null)
+								{
+									string baseColorTex = mat["extras"]!["baseColorTexture"]!.Value<string>() ?? "";
+									int texIndex = mat["pbrMetallicRoughness"]!["baseColorTexture"]!["index"]!.Value<int>();
+									JObject currentTexture = new()
+									{
+										["extensions"] = new JObject
+										{
+											["MSFT_texture_dds"] = new JObject
+											{
+												["source"] = images.Count
+											}
+										},
+										["source"] = images.Count
+									};
+									if (imageUriToIndex.TryGetValue(baseColorTex, out int existingIndex))
+									{
+										currentTexture["source"] = existingIndex;
+										currentTexture["extensions"]!["MSFT_texture_dds"]!["source"] = existingIndex;
+									}
+									else
+									{
+										imageUriToIndex[baseColorTex] = images.Count;
+										images.Add(new JObject
+										{
+											["uri"] = Path.GetFileName(baseColorTex)
+										});
+									}
+									gltfText["textures"]?[texIndex] = currentTexture;
+									if (!File.Exists(Path.Combine(simObjOutputDir, Path.GetFileName(baseColorTex))))
+										File.Copy(baseColorTex, Path.Combine(simObjOutputDir, Path.GetFileName(baseColorTex)));
+								}
+								if (mat["pbrMetallicRoughness"]?["metallicRoughnessTexture"] != null)
+								{
+									string metallicRoughnessTex = mat["extras"]!["metallicRoughnessTexture"]!.Value<string>() ?? "";
+									int texIndex = mat["pbrMetallicRoughness"]!["metallicRoughnessTexture"]!["index"]!.Value<int>();
+									JObject currentTexture = new()
+									{
+										["extensions"] = new JObject
+										{
+											["MSFT_texture_dds"] = new JObject
+											{
+												["source"] = images.Count
+											}
+										},
+										["source"] = images.Count
+									};
+									if (imageUriToIndex.TryGetValue(metallicRoughnessTex, out int existingIndex))
+									{
+										currentTexture["source"] = existingIndex;
+										currentTexture["extensions"]!["MSFT_texture_dds"]!["source"] = existingIndex;
+									}
+									else
+									{
+										imageUriToIndex[metallicRoughnessTex] = images.Count;
+										images.Add(new JObject
+										{
+											["uri"] = Path.GetFileName(metallicRoughnessTex)
+										});
+									}
+									gltfText["textures"]?[texIndex] = currentTexture;
+									if (!File.Exists(Path.Combine(simObjOutputDir, Path.GetFileName(metallicRoughnessTex))))
+										File.Copy(metallicRoughnessTex, Path.Combine(simObjOutputDir, Path.GetFileName(metallicRoughnessTex)), true);
+								}
+								if (mat["normalTexture"] != null)
+								{
+									string normaTex = mat["extras"]!["normalTexture"]!.Value<string>() ?? "";
+									int texIndex = mat["normalTexture"]!["index"]!.Value<int>();
+									JObject currentTexture = new()
+									{
+										["extensions"] = new JObject
+										{
+											["MSFT_texture_dds"] = new JObject
+											{
+												["source"] = images.Count
+											}
+										},
+										["source"] = images.Count
+									};
+									if (imageUriToIndex.TryGetValue(normaTex, out int existingIndex))
+									{
+										currentTexture["source"] = existingIndex;
+										currentTexture["extensions"]!["MSFT_texture_dds"]!["source"] = existingIndex;
+									}
+									else
+									{
+										imageUriToIndex[normaTex] = images.Count;
+										images.Add(new JObject
+										{
+											["uri"] = Path.GetFileName(normaTex)
+										});
+									}
+									gltfText["textures"]?[texIndex] = currentTexture;
+									if (!File.Exists(Path.Combine(simObjOutputDir, Path.GetFileName(normaTex))))
+										File.Copy(normaTex, Path.Combine(simObjOutputDir, Path.GetFileName(normaTex)), true);
+								}
+								if (mat["occlusionTexture"] != null)
+								{
+									string occlusionTex = mat["extras"]!["occlusionTexture"]!.Value<string>() ?? "";
+									int texIndex = mat["occlusionTexture"]!["index"]!.Value<int>();
+									JObject currentTexture = new()
+									{
+										["extensions"] = new JObject
+										{
+											["MSFT_texture_dds"] = new JObject
+											{
+												["source"] = images.Count
+											}
+										},
+										["source"] = images.Count
+									};
+									if (imageUriToIndex.TryGetValue(occlusionTex, out int existingIndex))
+									{
+										currentTexture["source"] = existingIndex;
+										currentTexture["extensions"]!["MSFT_texture_dds"]!["source"] = existingIndex;
+									}
+									else
+									{
+										imageUriToIndex[occlusionTex] = images.Count;
+										images.Add(new JObject
+										{
+											["uri"] = Path.GetFileName(occlusionTex)
+										});
+									}
+									gltfText["textures"]?[texIndex] = currentTexture;
+									if (!File.Exists(Path.Combine(simObjOutputDir, Path.GetFileName(occlusionTex))))
+										File.Copy(occlusionTex, Path.Combine(simObjOutputDir, Path.GetFileName(occlusionTex)), true);
+								}
+								if (mat["emissiveTexture"] != null)
+								{
+									string emissiveTex = mat["extras"]!["emissiveTexture"]!.Value<string>() ?? "";
+									int texIndex = mat["emissiveTexture"]!["index"]!.Value<int>();
+									JObject currentTexture = new()
+									{
+										["extensions"] = new JObject
+										{
+											["MSFT_texture_dds"] = new JObject
+											{
+												["source"] = images.Count
+											}
+										},
+										["source"] = images.Count
+									};
+									if (imageUriToIndex.TryGetValue(emissiveTex, out int existingIndex))
+									{
+										currentTexture["source"] = existingIndex;
+										currentTexture["extensions"]!["MSFT_texture_dds"]!["source"] = existingIndex;
+									}
+									else
+									{
+										imageUriToIndex[emissiveTex] = images.Count;
+										images.Add(new JObject
+										{
+											["uri"] = Path.GetFileName(emissiveTex)
+										});
+									}
+									gltfText["textures"]?[texIndex] = currentTexture;
+									if (!File.Exists(Path.Combine(simObjOutputDir, Path.GetFileName(emissiveTex))))
+										File.Copy(emissiveTex, Path.Combine(simObjOutputDir, Path.GetFileName(emissiveTex)), true);
+								}
+							}
+							gltfText["images"] = images;
+							return gltfText.ToString();
+						}
+					});
+				}
+				else
+				{
+					Logger.Warning($"Could not find {simObj.containerTitle} in SimObject container file: {simObj.containerPath}");
+					continue;
+				}
+			}
+		}
+
 		// Models need to be written combined on a tile-by-tile basis to minimize RAM consumption
 		// We have all the placements and their GUIDs, so run through the model BGLs and create a Dictionary
 		// The key will be the tile index, and the value will be a list of access points of models (file, binary address, size)
@@ -1047,7 +1290,9 @@ public class SceneryConverter : INotifyPropertyChanged
 				}
 			}
 		}
-		totalModelCount = modelReferencesByTile.Values.Sum(l => l.Count);
+
+		totalModelCount = modelReferencesByTile.Values.Sum(l => l.Count) + simObjectsByTile.Values.Sum(l => l.Count);
+		int[] simObjectOnlyTileIndices = [.. simObjectsByTile.Where(kvp => !modelReferencesByTile.ContainsKey(kvp.Key)).Select(kvp => kvp.Key)];
 		if (isGltf && isAc3d) totalModelCount *= 2;
 		Logger.Info($"Found {totalModelCount} models");
 		if (totalModelCount == 0)
@@ -1059,8 +1304,9 @@ public class SceneryConverter : INotifyPropertyChanged
 		foreach (var kvp in modelReferencesByTile)
 		{
 			int tileIndex = kvp.Key;
+			SimObject[] simObjectsForTile = simObjectsByTile.TryGetValue(tileIndex, out Dictionary<string, SimObject>? simObjList) ? [.. simObjList.Values] : [];
 			List<ModelReference> modelRefs = [.. kvp.Value.OrderByDescending(mr => mr.size)];
-			Logger.Info($"Tile {tileIndex} has {modelRefs.Count} model references");
+			Logger.Info($"Tile {tileIndex} has {modelRefs.Count} model references and {simObjectsForTile.Sum(l => l.position.Count)} sim objects");
 			List<LibraryObject> libraryObjectsForTile = [.. libraryObjects.Values.SelectMany(loList => loList).Where(lo => Terrain.GetTileIndex(lo.latitude, lo.longitude) == tileIndex)];
 			Vector3 center = new(
 				(float)(libraryObjectsForTile.Count > 0 ? libraryObjectsForTile.Sum(lo => lo.latitude) / libraryObjectsForTile.Count : 0.0),
@@ -2057,7 +2303,7 @@ public class SceneryConverter : INotifyPropertyChanged
 		return libObj;
 	}
 
-	private void BuildSimObject(byte[] bytes)
+	private void BuildSimObject(byte[] bytes, string sourceFile)
 	{
 		Vector3 position = new(
 			(float)((BitConverter.ToInt32(bytes, 4) * (360.0 / 805306368.0)) - 180.0),
@@ -2072,8 +2318,8 @@ public class SceneryConverter : INotifyPropertyChanged
 		float scale = BitConverter.ToSingle(bytes, 44);
 		int containerTitleLength = BitConverter.ToUInt16(bytes, 48);
 		int containerPathLength = BitConverter.ToUInt16(bytes, 50);
-		string containerTitle = BitConverter.ToString(bytes, 52, containerTitleLength).TrimEnd('\0');
-		string containerPath = BitConverter.ToString(bytes, 52 + containerTitleLength, containerPathLength).TrimEnd('\0');
+		string containerTitle = Encoding.ASCII.GetString(bytes, 52, containerTitleLength).TrimEnd('\0');
+		string containerPath = Encoding.ASCII.GetString(bytes, 52 + containerTitleLength, containerPathLength).TrimEnd('\0');
 		int tileIndex = Terrain.GetTileIndex(position.Y, position.X);
 		if (!simObjectsByTile.TryGetValue(tileIndex, out Dictionary<string, SimObject>? simObjects))
 		{
@@ -2087,6 +2333,28 @@ public class SceneryConverter : INotifyPropertyChanged
 		}
 		else
 		{
+			// Only look for the container path if this is the first time we've seen this container title in this tile
+			// If we've already seen it, we assume it's the same container and skip path lookup for subsequent instances to save time
+			string placementPath = Path.GetDirectoryName(sourceFile) ?? "";
+			while (!string.IsNullOrEmpty(placementPath) && !Directory.Exists(Path.Combine(placementPath, "SimObjects")))
+			{
+				placementPath = Path.GetDirectoryName(placementPath) ?? "";
+			}
+			bool foundContainer = placementPath != "";
+			if (foundContainer)
+			{
+				placementPath = Path.Combine(placementPath, "SimObjects");
+				string[] simCfgFiles = Directory.GetFiles(placementPath, "sim.cfg", SearchOption.AllDirectories);
+				foreach (string simCfgFile in simCfgFiles)
+				{
+					string[] lines = File.ReadAllLines(simCfgFile);
+					if (lines.Any(l => l.Trim().Equals($"title={containerTitle}", StringComparison.OrdinalIgnoreCase)))
+					{
+						containerPath = simCfgFile;
+						break;
+					}
+				}
+			}
 			simObjectsByTile[tileIndex][containerTitle] = new SimObject
 			{
 				position = [position],
@@ -2098,7 +2366,7 @@ public class SceneryConverter : INotifyPropertyChanged
 				containerPath = containerPath,
 			};
 		}
-		Logger.Debug($"SimObject: {simObjectsByTile[tileIndex][containerTitle].containerTitle} at {simObjectsByTile[tileIndex][containerTitle].containerPath}, scale {simObjectsByTile[tileIndex][containerTitle].scale}");
+		Logger.Debug($"SimObject: {containerTitle} at {containerPath}, scale {scale}");
 	}
 
 	private static string ConvertIcaoBytesToString(int icaoBytes)
@@ -2106,7 +2374,7 @@ public class SceneryConverter : INotifyPropertyChanged
 
 		StringBuilder sb = new();
 		icaoBytes >>= 5;
-		while (icaoBytes > 37)
+		while (icaoBytes > 1)
 		{
 			int charVal = icaoBytes % 38;
 			icaoBytes = (icaoBytes - charVal) / 38;
@@ -2123,6 +2391,7 @@ public class SceneryConverter : INotifyPropertyChanged
 		PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
 	}
 
+	#region Data Structures
 	private enum Flags
 	{
 		IsAboveAGL,
@@ -2945,4 +3214,5 @@ public class SceneryConverter : INotifyPropertyChanged
 		public float rotationSpeed;
 	}
 #pragma warning restore CS0649
+	#endregion
 }

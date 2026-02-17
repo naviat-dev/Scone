@@ -220,7 +220,7 @@ public sealed class AcBuilder
 				return existing;
 			}
 
-			int[] indices = primData.Indices.Length > 0 ? primData.Indices : Enumerable.Range(0, primData.Positions.Length).ToArray();
+			int[] indices = primData.Indices.Length > 0 ? primData.Indices : [.. Enumerable.Range(0, primData.Positions.Length)];
 			int indicesPerTriangle = 3;
 			int baseVertex = prim["extras"]?["ASOBO_primitive"]?["BaseVertexIndex"]?.Value<int>() ?? 0;
 			int startIndex = prim["extras"]?["ASOBO_primitive"]?["StartIndex"]?.Value<int>() ?? 0;
@@ -390,7 +390,7 @@ public sealed class AcBuilder
 
 	private static int[] BuildParentMap(JArray nodes)
 	{
-		int[] parents = Enumerable.Repeat(-1, nodes.Count).ToArray();
+		int[] parents = [.. Enumerable.Repeat(-1, nodes.Count)];
 		for (int i = 0; i < nodes.Count; i++)
 		{
 			JObject node = (JObject)nodes[i]!;
