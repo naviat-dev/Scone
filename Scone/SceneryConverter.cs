@@ -1995,93 +1995,64 @@ public class SceneryConverter : INotifyPropertyChanged
 		JArray images = (JArray)json["images"]!;
 		JArray materials = (JArray)json["materials"]!;
 		JArray textures = (JArray)json["textures"]!;
-		Dictionary<int, List<int>> meshIndexToSceneNodeIndex = [];
-		for (int k = 0; k < json["nodes"]!.Count(); k++)
-		{
-			JObject node = (JObject)json["nodes"]![k]!;
-			if (node["mesh"] != null)
-			{
-				int meshIndex = node["mesh"]!.Value<int>();
-				if (!meshIndexToSceneNodeIndex.TryGetValue(meshIndex, out List<int>? valueMesh))
-				{
-					valueMesh = [];
-					meshIndexToSceneNodeIndex[meshIndex] = valueMesh;
-				}
-				meshIndexToSceneNodeIndex[meshIndex].Add(k);
-			}
-		}
-
-		// Build parent map for nodes
-		JArray nodesArray = (JArray)json["nodes"]!;
-		int nodeCount = nodesArray.Count;
-		int[] parentMap = new int[nodeCount];
-		for (int n = 0; n < nodeCount; n++) parentMap[n] = -1;
-		for (int n = 0; n < nodeCount; n++)
-		{
-			JObject node = (JObject)nodesArray[n]!;
-			if (node["children"] != null)
-			{
-				foreach (var child in (JArray)node["children"]!)
-				{
-					int childIdx = child.Value<int>();
-					parentMap[childIdx] = n;
-				}
-			}
-		}
-
-		// Helper: Compute world transform for a node
-		Matrix4x4 GetWorldTransform(int nodeIdx)
-		{
-			Matrix4x4 result = Matrix4x4.Identity;
-			int? current = nodeIdx;
-			while (current != null && current >= 0)
-			{
-				JObject node = (JObject)nodesArray[current.Value]!;
-				// Build local transform
-				Vector3 t = node["translation"] != null ? new Vector3(
-					node["translation"]![0]!.Value<float>(),
-					node["translation"]![1]!.Value<float>(),
-					node["translation"]![2]!.Value<float>()) : Vector3.Zero;
-				Quaternion r = node["rotation"] != null ? new Quaternion(
-					node["rotation"]![0]!.Value<float>(),
-					node["rotation"]![1]!.Value<float>(),
-					node["rotation"]![2]!.Value<float>(),
-					node["rotation"]![3]!.Value<float>()) : Quaternion.Identity;
-				Vector3 s = node["scale"] != null ? new Vector3(
-					node["scale"]![0]!.Value<float>(),
-					node["scale"]![1]!.Value<float>(),
-					node["scale"]![2]!.Value<float>()) : Vector3.One;
-				float avgScale = (s.X + s.Y + s.Z) / 3.0f;
-				if (!float.IsFinite(avgScale) || avgScale <= 0f) avgScale = 1f;
-				s = new Vector3(avgScale, avgScale, avgScale);
-				Matrix4x4 local = Matrix4x4.CreateScale(s) * Matrix4x4.CreateFromQuaternion(Quaternion.Normalize(r)) * Matrix4x4.CreateTranslation(t);
-				result = local * result;
-				current = parentMap[current.Value] >= 0 ? parentMap[current.Value] : null;
-			}
-			return result;
-		}
-
+		JArray nodes = (JArray)json["nodes"]!;
+		JArray topLevelNodes = (JArray)json["scenes"]![json["scene"]!.Value<int>()]!["nodes"]!;
+		List<MeshBuilder<VertexPositionNormalTangent, VertexTexture2, VertexEmpty>> meshBuilders = [];
 		foreach (JObject mesh in meshes.Cast<JObject>())
 		{
-			MeshBuilder<VertexPositionNormalTangent, VertexTexture2, VertexEmpty>? meshBuilder = GlbBuilder.BuildMesh(inputPath, file, mesh, accessors, bufferViews, materials, textures, images, glbBinBytes);
-			if (meshBuilder == null) continue;
-			int meshIdx = meshes.IndexOf(mesh);
-			if (!meshIndexToSceneNodeIndex.TryGetValue(meshIdx, out List<int>? nodeIndices)) continue;
-			foreach (int nodeIndex in nodeIndices)
-			{
-				Matrix4x4 transform = GetWorldTransform(nodeIndex);
-				// Validate matrix before passing to SharpGLTF
-				if (!(float.IsFinite(transform.M11) && float.IsFinite(transform.M12) && float.IsFinite(transform.M13) && float.IsFinite(transform.M14)
-					&& float.IsFinite(transform.M21) && float.IsFinite(transform.M22) && float.IsFinite(transform.M23) && float.IsFinite(transform.M24)
-					&& float.IsFinite(transform.M31) && float.IsFinite(transform.M32) && float.IsFinite(transform.M33) && float.IsFinite(transform.M34)
-					&& float.IsFinite(transform.M41) && float.IsFinite(transform.M42) && float.IsFinite(transform.M43) && float.IsFinite(transform.M44)))
-				{
-					// Skip this mesh if transform is invalid to prevent runtime exception
-					continue;
-				}
-				_ = scene.AddRigidMesh(meshBuilder, transform);
-			}
+			meshBuilders.Add(GlbBuilder.BuildMesh(inputPath, file, mesh, accessors, bufferViews, materials, textures, images, glbBinBytes));
 		}
+
+		NodeBuilder GetChildNodes(int nodeIndex)
+		{
+			JObject nodeJson = (JObject)nodes[nodeIndex]!;
+			NodeBuilder nodeBuilder = new()
+			{
+				Name = nodeJson["name"]?.Value<string>() ?? $"Node_{nodeIndex}",
+			};
+			List<NodeBuilder> children = [];
+			if (nodeJson["children"] != null)
+			{
+				foreach (int childIndex in nodeJson["children"]!.Values<int>())
+				{
+					nodeBuilder.AddNode(GetChildNodes(childIndex));
+				}
+			}
+
+			// Apply transformations if present
+			if (nodeJson["translation"] != null)
+			{
+				JArray translation = (JArray)nodeJson["translation"]!;
+				_ = nodeBuilder.WithLocalTranslation(new Vector3(translation[0].Value<float>(), translation[1].Value<float>(), translation[2].Value<float>()));
+			}
+			if (nodeJson["rotation"] != null)
+			{
+				JArray rotation = (JArray)nodeJson["rotation"]!;
+				_ = nodeBuilder.WithLocalRotation(new Quaternion(rotation[0].Value<float>(), rotation[1].Value<float>(), rotation[2].Value<float>(), rotation[3].Value<float>()));
+			}
+			if (nodeJson["scale"] != null)
+			{
+				JArray scale = (JArray)nodeJson["scale"]!;
+				_ = nodeBuilder.WithLocalScale(new Vector3(scale[0].Value<float>(), scale[1].Value<float>(), scale[2].Value<float>()));
+			}
+			if (nodeJson["matrix"] != null)
+			{
+				JArray matrix = (JArray)nodeJson["matrix"]!;
+				nodeBuilder.LocalMatrix = new Matrix4x4(
+					matrix[0].Value<float>(), matrix[1].Value<float>(), matrix[2].Value<float>(), matrix[3].Value<float>(),
+					matrix[4].Value<float>(), matrix[5].Value<float>(), matrix[6].Value<float>(), matrix[7].Value<float>(),
+					matrix[8].Value<float>(), matrix[9].Value<float>(), matrix[10].Value<float>(), matrix[11].Value<float>(),
+					matrix[12].Value<float>(), matrix[13].Value<float>(), matrix[14].Value<float>(), matrix[15].Value<float>());
+			}
+			if (nodeJson["mesh"] != null)
+			{
+				scene.AddRigidMesh(meshBuilders[nodeJson["mesh"]!.Value<int>()], nodeBuilder);
+			}
+			return nodeBuilder;
+		}
+
+		NodeBuilder[] nodeTree = [.. topLevelNodes.Select(nodeIndex => GetChildNodes(nodeIndex.Value<int>()))];
+
 		return scene;
 	}
 

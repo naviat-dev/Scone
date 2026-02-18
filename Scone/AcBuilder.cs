@@ -82,7 +82,7 @@ public sealed class AcBuilder
 
 	public void Merge(AcBuilder other, Matrix4x4 transform)
 	{
-		Dictionary<int, int> materialRemap = new();
+		Dictionary<int, int> materialRemap = [];
 		for (int i = 0; i < other._materials.Count; i++)
 		{
 			int targetIndex = EnsureMaterial(other._materials[i]);
@@ -202,7 +202,7 @@ public sealed class AcBuilder
 				Vector3 world = Vector3.Transform(primData.Positions[i], worldMatrix);
 				transformed[i] = new Vector3(world.X, world.Y, -world.Z);
 			}
-			Dictionary<VertexKey, int> vertexCache = new();
+			Dictionary<VertexKey, int> vertexCache = [];
 
 			int GetOrAddVertexIndex(int sourceIndex)
 			{
