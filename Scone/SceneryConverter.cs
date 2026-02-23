@@ -9,6 +9,7 @@ using SharpGLTF.Geometry;
 using SharpGLTF.Geometry.VertexTypes;
 using SharpGLTF.Scenes;
 using SharpGLTF.Schema2;
+using Uno.Extensions.Specialized;
 
 namespace Scone;
 
@@ -961,11 +962,12 @@ public class SceneryConverter : INotifyPropertyChanged
 				Match match = new Regex(@$"title={simObj.containerTitle}\r?\nmodel=(.*)\r?\ntexture=(.*)", RegexOptions.Multiline).Match(simObjContainer);
 				if (match.Success)
 				{
-					string modelCfgFile = Path.Combine(Path.GetDirectoryName(simObj.containerPath)!, match.Groups[1].Value.Trim() == "" ? "model" : $"model.{match.Groups[1].Value.Replace("\r", "").Trim()}", "model.cfg");
-					string texturePath = Path.Combine(Path.GetDirectoryName(simObj.containerPath)!, match.Groups[2].Value.Trim() == "" ? "texture" : $"texture.{match.Groups[2].Value.Replace("\r", "").Trim()}");
+					string modelCfgFile = Path.Combine(Path.GetDirectoryName(simObj.containerPath)!, match.Groups[1].Value.Trim() == "" ? "model" : $"model.{match.Groups[1].Value.Replace("\r", "").Replace("\"", "").Trim()}", "model.cfg");
+					string texturePath = Path.Combine(Path.GetDirectoryName(simObj.containerPath)!, match.Groups[2].Value.Trim() == "" ? "texture" : $"texture.{match.Groups[2].Value.Replace("\r", "").Replace("\"", "").Trim()}");
 					string dirName = Path.GetDirectoryName(modelCfgFile)!;
 					string modelSource = new Regex(@"normal=(.+)", RegexOptions.Multiline).Match(File.ReadAllText(modelCfgFile)).Groups[1].Value;
-					XmlReader xmlReader = XmlReader.Create(Path.Combine(dirName, modelSource));
+					string xmlPath = Path.Combine(dirName, modelSource);
+					XmlReader xmlReader = XmlReader.Create(xmlPath);
 					string gltfFile = "";
 					while (xmlReader.Read())
 					{
@@ -998,187 +1000,16 @@ public class SceneryConverter : INotifyPropertyChanged
 						continue;
 					}
 					string simObjOutputDir = Path.Combine(App.StorePath, "SimObjects", simObj.containerTitle);
-					JObject json = JObject.Parse(File.ReadAllText(Path.Combine(dirName, gltfFile)));
-					string bufferDir = Path.Combine(dirName, json["buffers"]![0]!["uri"]!.ToString());
+					JObject json = JObject.Parse(File.ReadAllText(Path.Combine(Path.GetDirectoryName(xmlPath)!, gltfFile)));
+					string bufferDir = Path.Combine(Path.GetDirectoryName(xmlPath)!, json["buffers"]![0]!["uri"]!.ToString());
 					SceneBuilder scene = CreateGltfModelFromGltf(File.ReadAllBytes(bufferDir), json, texturePath, Path.GetDirectoryName(modelCfgFile)!);
 					Directory.CreateDirectory(simObjOutputDir);
-					scene.ToGltf2().SaveGLTF(simObjOutputDir, new WriteSettings
+					scene.ToGltf2().SaveGLTF(Path.Combine(simObjOutputDir, $"{simObj.containerTitle}.gltf"), new WriteSettings
 					{
 						ImageWriting = ResourceWriteMode.SatelliteFile,
 						// This name doesn't matter; we will fix up the URIs in the postprocessor
 						ImageWriteCallback = (context, assetName, image) => { return ""; },
-						JsonPostprocessor = (json) =>
-						{
-							JObject gltfText = JObject.Parse(json);
-							Dictionary<string, int> imageUriToIndex = [];
-							JArray images = [];
-							// Assign proper sources for textures using extensions
-							foreach (JObject mat in gltfText["materials"]?.Cast<JObject>() ?? [])
-							{
-								if (mat["pbrMetallicRoughness"]?["baseColorTexture"] != null)
-								{
-									string baseColorTex = mat["extras"]!["baseColorTexture"]!.Value<string>() ?? "";
-									int texIndex = mat["pbrMetallicRoughness"]!["baseColorTexture"]!["index"]!.Value<int>();
-									JObject currentTexture = new()
-									{
-										["extensions"] = new JObject
-										{
-											["MSFT_texture_dds"] = new JObject
-											{
-												["source"] = images.Count
-											}
-										},
-										["source"] = images.Count
-									};
-									if (imageUriToIndex.TryGetValue(baseColorTex, out int existingIndex))
-									{
-										currentTexture["source"] = existingIndex;
-										currentTexture["extensions"]!["MSFT_texture_dds"]!["source"] = existingIndex;
-									}
-									else
-									{
-										imageUriToIndex[baseColorTex] = images.Count;
-										images.Add(new JObject
-										{
-											["uri"] = Path.GetFileName(baseColorTex)
-										});
-									}
-									gltfText["textures"]?[texIndex] = currentTexture;
-									if (!File.Exists(Path.Combine(simObjOutputDir, Path.GetFileName(baseColorTex))))
-										File.Copy(baseColorTex, Path.Combine(simObjOutputDir, Path.GetFileName(baseColorTex)));
-								}
-								if (mat["pbrMetallicRoughness"]?["metallicRoughnessTexture"] != null)
-								{
-									string metallicRoughnessTex = mat["extras"]!["metallicRoughnessTexture"]!.Value<string>() ?? "";
-									int texIndex = mat["pbrMetallicRoughness"]!["metallicRoughnessTexture"]!["index"]!.Value<int>();
-									JObject currentTexture = new()
-									{
-										["extensions"] = new JObject
-										{
-											["MSFT_texture_dds"] = new JObject
-											{
-												["source"] = images.Count
-											}
-										},
-										["source"] = images.Count
-									};
-									if (imageUriToIndex.TryGetValue(metallicRoughnessTex, out int existingIndex))
-									{
-										currentTexture["source"] = existingIndex;
-										currentTexture["extensions"]!["MSFT_texture_dds"]!["source"] = existingIndex;
-									}
-									else
-									{
-										imageUriToIndex[metallicRoughnessTex] = images.Count;
-										images.Add(new JObject
-										{
-											["uri"] = Path.GetFileName(metallicRoughnessTex)
-										});
-									}
-									gltfText["textures"]?[texIndex] = currentTexture;
-									if (!File.Exists(Path.Combine(simObjOutputDir, Path.GetFileName(metallicRoughnessTex))))
-										File.Copy(metallicRoughnessTex, Path.Combine(simObjOutputDir, Path.GetFileName(metallicRoughnessTex)), true);
-								}
-								if (mat["normalTexture"] != null)
-								{
-									string normaTex = mat["extras"]!["normalTexture"]!.Value<string>() ?? "";
-									int texIndex = mat["normalTexture"]!["index"]!.Value<int>();
-									JObject currentTexture = new()
-									{
-										["extensions"] = new JObject
-										{
-											["MSFT_texture_dds"] = new JObject
-											{
-												["source"] = images.Count
-											}
-										},
-										["source"] = images.Count
-									};
-									if (imageUriToIndex.TryGetValue(normaTex, out int existingIndex))
-									{
-										currentTexture["source"] = existingIndex;
-										currentTexture["extensions"]!["MSFT_texture_dds"]!["source"] = existingIndex;
-									}
-									else
-									{
-										imageUriToIndex[normaTex] = images.Count;
-										images.Add(new JObject
-										{
-											["uri"] = Path.GetFileName(normaTex)
-										});
-									}
-									gltfText["textures"]?[texIndex] = currentTexture;
-									if (!File.Exists(Path.Combine(simObjOutputDir, Path.GetFileName(normaTex))))
-										File.Copy(normaTex, Path.Combine(simObjOutputDir, Path.GetFileName(normaTex)), true);
-								}
-								if (mat["occlusionTexture"] != null)
-								{
-									string occlusionTex = mat["extras"]!["occlusionTexture"]!.Value<string>() ?? "";
-									int texIndex = mat["occlusionTexture"]!["index"]!.Value<int>();
-									JObject currentTexture = new()
-									{
-										["extensions"] = new JObject
-										{
-											["MSFT_texture_dds"] = new JObject
-											{
-												["source"] = images.Count
-											}
-										},
-										["source"] = images.Count
-									};
-									if (imageUriToIndex.TryGetValue(occlusionTex, out int existingIndex))
-									{
-										currentTexture["source"] = existingIndex;
-										currentTexture["extensions"]!["MSFT_texture_dds"]!["source"] = existingIndex;
-									}
-									else
-									{
-										imageUriToIndex[occlusionTex] = images.Count;
-										images.Add(new JObject
-										{
-											["uri"] = Path.GetFileName(occlusionTex)
-										});
-									}
-									gltfText["textures"]?[texIndex] = currentTexture;
-									if (!File.Exists(Path.Combine(simObjOutputDir, Path.GetFileName(occlusionTex))))
-										File.Copy(occlusionTex, Path.Combine(simObjOutputDir, Path.GetFileName(occlusionTex)), true);
-								}
-								if (mat["emissiveTexture"] != null)
-								{
-									string emissiveTex = mat["extras"]!["emissiveTexture"]!.Value<string>() ?? "";
-									int texIndex = mat["emissiveTexture"]!["index"]!.Value<int>();
-									JObject currentTexture = new()
-									{
-										["extensions"] = new JObject
-										{
-											["MSFT_texture_dds"] = new JObject
-											{
-												["source"] = images.Count
-											}
-										},
-										["source"] = images.Count
-									};
-									if (imageUriToIndex.TryGetValue(emissiveTex, out int existingIndex))
-									{
-										currentTexture["source"] = existingIndex;
-										currentTexture["extensions"]!["MSFT_texture_dds"]!["source"] = existingIndex;
-									}
-									else
-									{
-										imageUriToIndex[emissiveTex] = images.Count;
-										images.Add(new JObject
-										{
-											["uri"] = Path.GetFileName(emissiveTex)
-										});
-									}
-									gltfText["textures"]?[texIndex] = currentTexture;
-									if (!File.Exists(Path.Combine(simObjOutputDir, Path.GetFileName(emissiveTex))))
-										File.Copy(emissiveTex, Path.Combine(simObjOutputDir, Path.GetFileName(emissiveTex)), true);
-								}
-							}
-							gltfText["images"] = images;
-							return gltfText.ToString();
-						}
+						JsonPostprocessor = (json) => JsonPostprocessor(json, simObjOutputDir)
 					});
 				}
 				else
@@ -1304,6 +1135,7 @@ public class SceneryConverter : INotifyPropertyChanged
 		foreach (var kvp in modelReferencesByTile)
 		{
 			int tileIndex = kvp.Key;
+			List<XDocument> animations = [];
 			SimObject[] simObjectsForTile = simObjectsByTile.TryGetValue(tileIndex, out Dictionary<string, SimObject>? simObjList) ? [.. simObjList.Values] : [];
 			List<ModelReference> modelRefs = [.. kvp.Value.OrderByDescending(mr => mr.size)];
 			Logger.Info($"Tile {tileIndex} has {modelRefs.Count} model references and {simObjectsForTile.Sum(l => l.position.Count)} sim objects");
@@ -1318,6 +1150,262 @@ public class SceneryConverter : INotifyPropertyChanged
 			if (isGltf)
 			{
 				tileSceneGltf = ConvertSceneryGltf(inputPath, outputPath, kvp, center);
+
+				// Add in SimObjects here, and detect jetways to add in their drivers as well
+				foreach (SimObject simObj in simObjectsForTile)
+				{
+					if (!File.Exists(simObj.containerPath))
+					{
+						continue;
+					}
+					string simObjContainer = File.ReadAllText(simObj.containerPath);
+					Match match = new Regex(@$"title={simObj.containerTitle}\r?\nmodel=(.*)\r?\ntexture=(.*)", RegexOptions.Multiline).Match(simObjContainer);
+					if (match.Success)
+					{
+						string modelCfgFile = Path.Combine(Path.GetDirectoryName(simObj.containerPath)!, match.Groups[1].Value.Trim() == "" ? "model" : $"model.{match.Groups[1].Value.Replace("\r", "").Replace("\"", "").Trim()}", "model.cfg");
+						string texturePath = Path.Combine(Path.GetDirectoryName(simObj.containerPath)!, match.Groups[2].Value.Trim() == "" ? "texture" : $"texture.{match.Groups[2].Value.Replace("\r", "").Replace("\"", "").Trim()}");
+						string dirName = Path.GetDirectoryName(modelCfgFile)!;
+						string modelSource = new Regex(@"normal=(.+)", RegexOptions.Multiline).Match(File.ReadAllText(modelCfgFile)).Groups[1].Value;
+						string xmlPath = Path.Combine(dirName, modelSource);
+						XmlReader xmlReader = XmlReader.Create(xmlPath);
+						string gltfFile = "";
+						while (xmlReader.Read())
+						{
+							if (xmlReader.NodeType == XmlNodeType.Element && xmlReader.Name == "LODS")
+							{
+								XDocument xDocument = XDocument.Load(xmlReader.ReadSubtree());
+								var lodEntries = xDocument
+									.Descendants("LOD")
+									.Select(lod =>
+									{
+										_ = float.TryParse(lod.Attribute("MinSize")?.Value, NumberStyles.Float, CultureInfo.InvariantCulture, out float minSize);
+										return new { lod, minSize };
+									})
+									.ToList();
+								string? lodModelFile = lodEntries
+									.OrderByDescending(entry => entry.minSize)
+									.Select(entry => entry.lod.Attribute("ModelFile")?.Value)
+									.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
+								if (string.IsNullOrWhiteSpace(lodModelFile))
+								{
+									Logger.Warning($"No valid LOD entries found in {modelSource}; skipping {simObj.containerTitle}.");
+									break;
+								}
+								gltfFile = lodModelFile;
+								break;
+							}
+						}
+						if (string.IsNullOrWhiteSpace(gltfFile))
+						{
+							continue;
+						}
+						string simObjOutputDir = Path.Combine(App.StorePath, "SimObjects", simObj.containerTitle);
+						JObject json = JObject.Parse(File.ReadAllText(Path.Combine(Path.GetDirectoryName(xmlPath)!, gltfFile)));
+						string bufferDir = Path.Combine(Path.GetDirectoryName(xmlPath)!, json["buffers"]![0]!["uri"]!.ToString());
+						SceneBuilder scene = CreateGltfModelFromGltf(File.ReadAllBytes(bufferDir), json, texturePath, Path.GetDirectoryName(modelCfgFile)!);
+
+						// Find out if this is a jetway by looking for the 3 IKChain names
+						xmlReader = XmlReader.Create(xmlPath, new XmlReaderSettings { ConformanceLevel = ConformanceLevel.Fragment });
+						bool isJetway = false;
+						string IKMainHandleStart = "", IKSecondaryHandleStart = "", IKWheelsGroundLockStart = "",
+								IKMainHandleEnd = "", IKSecondaryHandleEnd = "", IKWheelsGroundLockEnd = "";
+						Vector3 mainHandleStartPos = new();
+						Vector3 mainHandleEndPos = new();
+						Vector3 secondaryHandleStartPos = new();
+						Vector3 secondaryHandleEndPos = new();
+						Vector3 wheelsGroundLockStartPos = new();
+						Vector3 wheelsGroundLockEndPos = new();
+						List<(string nodeName, double dist)> mainHandleExtensionNodeNamesDist = [];
+						(double rotationMax, double rotationMin) = (0, 0);
+						while (xmlReader.Read() && !(isJetway = IKMainHandleStart != "" && IKSecondaryHandleStart != "" && IKWheelsGroundLockStart != ""))
+						{
+							if (xmlReader.NodeType == XmlNodeType.Element && xmlReader.Name == "IKChain")
+							{
+								if (xmlReader.GetAttribute("Name") == "IK_MainHandle")
+								{
+									XDocument ikChainDoc = XDocument.Load(xmlReader.ReadSubtree());
+									IKMainHandleStart = ikChainDoc.Descendants("Start").First().Value;
+									IKMainHandleEnd = ikChainDoc.Descendants("End").First().Value;
+								}
+								else if (xmlReader.GetAttribute("Name") == "IK_SecondaryHandle")
+								{
+									XDocument ikChainDoc = XDocument.Load(xmlReader.ReadSubtree());
+									IKSecondaryHandleStart = ikChainDoc.Descendants("Start").First().Value;
+									IKSecondaryHandleEnd = ikChainDoc.Descendants("End").First().Value;
+								}
+								else if (xmlReader.GetAttribute("Name") == "IK_WheelsGroundLock")
+								{
+									XDocument ikChainDoc = XDocument.Load(xmlReader.ReadSubtree());
+									IKWheelsGroundLockStart = ikChainDoc.Descendants("Start").First().Value;
+									IKWheelsGroundLockEnd = ikChainDoc.Descendants("End").First().Value;
+								}
+							}
+						}
+						if (isJetway)
+						{
+							// Parse the glTF once more to get the IK handle nodes
+							JArray nodes = (JArray)json["nodes"]!;
+							JObject mainHandleStartNode = (JObject)nodes.First(n => n["name"]?.ToString() == IKMainHandleStart);
+							JObject mainHandleEndNode = (JObject)nodes.First(n => n["name"]?.ToString() == IKMainHandleEnd);
+							JObject secondaryHandleStartNode = (JObject)nodes.First(n => n["name"]?.ToString() == IKSecondaryHandleStart);
+							JObject secondaryHandleEndNode = (JObject)nodes.First(n => n["name"]?.ToString() == IKSecondaryHandleEnd);
+							JObject wheelsGroundLockStartNode = (JObject)nodes.First(n => n["name"]?.ToString() == IKWheelsGroundLockStart);
+							JObject wheelsGroundLockEndNode = (JObject)nodes.First(n => n["name"]?.ToString() == IKWheelsGroundLockEnd);
+							mainHandleStartPos = new Vector3(
+								mainHandleStartNode["translation"]?[0]?.ToObject<float>() ?? 0,
+								mainHandleStartNode["translation"]?[1]?.ToObject<float>() ?? 0,
+								mainHandleStartNode["translation"]?[2]?.ToObject<float>() ?? 0
+							);
+							mainHandleEndPos = new Vector3(
+								mainHandleEndNode["translation"]?[0]?.ToObject<float>() ?? 0,
+								mainHandleEndNode["translation"]?[1]?.ToObject<float>() ?? 0,
+								mainHandleEndNode["translation"]?[2]?.ToObject<float>() ?? 0
+							);
+							secondaryHandleStartPos = new Vector3(
+								secondaryHandleStartNode["translation"]?[0]?.ToObject<float>() ?? 0,
+								secondaryHandleStartNode["translation"]?[1]?.ToObject<float>() ?? 0,
+								secondaryHandleStartNode["translation"]?[2]?.ToObject<float>() ?? 0
+							);
+							secondaryHandleEndPos = new Vector3(
+								secondaryHandleEndNode["translation"]?[0]?.ToObject<float>() ?? 0,
+								secondaryHandleEndNode["translation"]?[1]?.ToObject<float>() ?? 0,
+								secondaryHandleEndNode["translation"]?[2]?.ToObject<float>() ?? 0
+							);
+							wheelsGroundLockStartPos = new Vector3(
+								wheelsGroundLockStartNode["translation"]?[0]?.ToObject<float>() ?? 0,
+								wheelsGroundLockStartNode["translation"]?[1]?.ToObject<float>() ?? 0,
+								wheelsGroundLockStartNode["translation"]?[2]?.ToObject<float>() ?? 0
+							);
+							wheelsGroundLockEndPos = new Vector3(
+								wheelsGroundLockEndNode["translation"]?[0]?.ToObject<float>() ?? 0,
+								wheelsGroundLockEndNode["translation"]?[1]?.ToObject<float>() ?? 0,
+								wheelsGroundLockEndNode["translation"]?[2]?.ToObject<float>() ?? 0
+							);
+							int prevIdLength = 0;
+							while (xmlReader.Read())
+							{
+								if (xmlReader.NodeType == XmlNodeType.Element && xmlReader.Name == "IKConstraint")
+								{
+									XDocument ikConstraintDoc = XDocument.Load(xmlReader.ReadSubtree());
+									string constraintName = ikConstraintDoc.Descendants("Node").First().Value;
+									if (ikConstraintDoc.Descendants("Bank").Any() && rotationMax == 0 && rotationMin == 0)
+									{
+										double.TryParse(ikConstraintDoc.Descendants("Bank").First().Attribute("max")?.Value, NumberStyles.Float, CultureInfo.InvariantCulture, out rotationMax);
+										double.TryParse(ikConstraintDoc.Descendants("Bank").First().Attribute("min")?.Value, NumberStyles.Float, CultureInfo.InvariantCulture, out rotationMin);
+									}
+									if (ikConstraintDoc.Descendants("X").Any())
+									{
+										double dist = double.Parse(ikConstraintDoc.Descendants("X").First().Attribute("max")?.Value!, NumberStyles.Float, CultureInfo.InvariantCulture)
+													- double.Parse(ikConstraintDoc.Descendants("X").First().Attribute("min")?.Value!, NumberStyles.Float, CultureInfo.InvariantCulture);
+										mainHandleExtensionNodeNamesDist.Add((constraintName, dist));
+									}
+								}
+							}
+							for (int i = 0; i < simObj.position.Count; i++)
+							{
+								long lonLocal = (long)(simObj.position[i].Y * 100000);
+								long latLocal = (long)(simObj.position[i].X * 100000);
+								UInt128 seed = new((ulong)lonLocal, (ulong)latLocal);
+								StringBuilder simObjIdBuilder = new($"{simObj.containerTitle}-");
+								while (seed % 62 > 0)
+								{
+									int charIndex = (int)(seed % 62);
+									char c = charIndex < 10 ? (char)('0' + charIndex) : (charIndex < 36 ? (char)('a' + charIndex - 10) : (char)('A' + charIndex - 36));
+									simObjIdBuilder.Append(c);
+									seed /= 62;
+								}
+								string simObjId = simObjIdBuilder.ToString();
+								// Rename all the things in the scene to have the custom prefix
+								foreach (InstanceBuilder instance in scene.Instances)
+								{
+									if (!instance.Content.Name.StartsWith(simObjId))
+									{
+										instance.Content.Name = $"{simObjId}_{instance.Content.Name[prevIdLength..]}";
+									}
+									if (instance.Content is RigidTransformer rigid && rigid.Transform.Parent != null)
+									{
+										if (!rigid.Transform.Parent.Name.StartsWith(simObjId))
+										{
+											rigid.Transform.Parent.Name = $"{simObjId}_{rigid.Transform.Parent.Name[prevIdLength..]}";
+										}
+									}
+								}
+								prevIdLength = simObjId.Length + 1;
+								Matrix4x4 placementTransform = CreatePlacementTransform(simObj, center.X, center.Y, center.Z, i);
+								tileSceneGltf.AddScene(scene, placementTransform);
+								List<XDocument> jetwayDriverAnimation = [];
+								// Add in the driver code for all top-level nodes
+								double distMainHandleInit = Vector3.Distance(mainHandleStartPos, mainHandleEndPos);
+								double distMainHandleFinal = distMainHandleInit + mainHandleExtensionNodeNamesDist.Sum(n => n.dist);
+								string driverCode = GenerateJetwayDriverCode(
+									simObj.position[i].X,
+									simObj.position[i].Y,
+									simObj.position[i].Z,
+									simObj.orientation[i].Z,
+									distMainHandleInit,
+									distMainHandleFinal,
+									Vector3.Distance(secondaryHandleStartPos, secondaryHandleEndPos),
+									new Vector2(wheelsGroundLockStartPos.X, wheelsGroundLockStartPos.Z),
+									new Vector2((float)mainHandleExtensionNodeNamesDist.Sum(n => n.dist)),
+									simObjId
+									);
+								jetwayDriverAnimation.Add(new(
+									new XElement("animation",
+										new XElement("type", "pick"),
+										new XElement("object-name", $"{simObjId}_{IKMainHandleStart}"),
+										new XElement("action",
+											new XElement("touch", 0),
+											new XElement("repeatable", false),
+											new XElement("binding",
+												new XElement("command", "nasal"),
+												new XElement("script", new XCData(driverCode)))))));
+								// Get the rotation of the secondary handle first
+								jetwayDriverAnimation.Add(new(
+									new XElement("animation",
+										new XElement("type", "rotate"),
+										new XElement("object-name", $"{simObjId}_{IKSecondaryHandleStart}"),
+										new XElement("property", $"scone/jetway-{simObjId}/secondary-handle-rotation-deg"),
+										new XElement("axis",
+											new XElement("y", "1")),
+										new XElement("center",
+											new XElement("x-m", secondaryHandleStartPos.X.ToString(CultureInfo.InvariantCulture)),
+											new XElement("y-m", secondaryHandleStartPos.Y.ToString(CultureInfo.InvariantCulture)),
+											new XElement("z-m", secondaryHandleStartPos.Z.ToString(CultureInfo.InvariantCulture))))));
+								// Then the extension
+								foreach ((string nodeName, double dist) in mainHandleExtensionNodeNamesDist)
+								{
+									jetwayDriverAnimation.Add(new(
+										new XElement("animation",
+											new XElement("type", "translate"),
+											new XElement("object-name", $"{simObjId}_{nodeName}"),
+											new XElement("property", $"scone/jetway-{simObjId}/extension-m"),
+											new XElement("factor", (dist / (distMainHandleFinal - distMainHandleInit)).ToString(CultureInfo.InvariantCulture)),
+											new XElement("axis",
+												new XElement("x", "1")))));
+								}
+								// And then the main handle rotation
+								jetwayDriverAnimation.Add(new(
+									new XElement("animation",
+										new XElement("type", "rotate"),
+										new XElement("object-name", $"{simObjId}_{IKMainHandleStart}"),
+										new XElement("property", $"scone/jetway-{simObjId}/main-handle-rotation-deg"),
+										new XElement("axis",
+											new XElement("y", "1")),
+										new XElement("center",
+											new XElement("x-m", mainHandleStartPos.X.ToString(CultureInfo.InvariantCulture)),
+											new XElement("y-m", mainHandleStartPos.Y.ToString(CultureInfo.InvariantCulture)),
+											new XElement("z-m", mainHandleStartPos.Z.ToString(CultureInfo.InvariantCulture))))));
+								
+								animations.AddRange(jetwayDriverAnimation);
+							}
+						}
+					}
+					else
+					{
+						Logger.Warning($"Could not find {simObj.containerTitle} in SimObject container file: {simObj.containerPath}");
+						continue;
+					}
+				}
 			}
 			if (isAc3d)
 			{
@@ -1355,200 +1443,29 @@ public class SceneryConverter : INotifyPropertyChanged
 					ImageWriting = ResourceWriteMode.SatelliteFile,
 					// This name doesn't matter; we will fix up the URIs in the postprocessor
 					ImageWriteCallback = (context, assetName, image) => { return ""; },
-					JsonPostprocessor = (json) =>
-					{
-						JObject gltfText = JObject.Parse(json);
-						Dictionary<string, int> imageUriToIndex = [];
-						JArray images = [];
-						// Assign proper sources for textures using extensions
-						foreach (JObject mat in gltfText["materials"]?.Cast<JObject>() ?? [])
-						{
-							if (mat["pbrMetallicRoughness"]?["baseColorTexture"] != null)
-							{
-								string baseColorTex = mat["extras"]!["baseColorTexture"]!.Value<string>() ?? "";
-								int texIndex = mat["pbrMetallicRoughness"]!["baseColorTexture"]!["index"]!.Value<int>();
-								JObject currentTexture = new()
-								{
-									["extensions"] = new JObject
-									{
-										["MSFT_texture_dds"] = new JObject
-										{
-											["source"] = images.Count
-										}
-									},
-									["source"] = images.Count
-								};
-								if (imageUriToIndex.TryGetValue(baseColorTex, out int existingIndex))
-								{
-									currentTexture["source"] = existingIndex;
-									currentTexture["extensions"]!["MSFT_texture_dds"]!["source"] = existingIndex;
-								}
-								else
-								{
-									imageUriToIndex[baseColorTex] = images.Count;
-									images.Add(new JObject
-									{
-										["uri"] = Path.GetFileName(baseColorTex)
-									});
-								}
-								gltfText["textures"]?[texIndex] = currentTexture;
-								if (!File.Exists(Path.Combine(path, Path.GetFileName(baseColorTex))))
-									File.Copy(baseColorTex, Path.Combine(path, Path.GetFileName(baseColorTex)));
-							}
-							if (mat["pbrMetallicRoughness"]?["metallicRoughnessTexture"] != null)
-							{
-								string metallicRoughnessTex = mat["extras"]!["metallicRoughnessTexture"]!.Value<string>() ?? "";
-								int texIndex = mat["pbrMetallicRoughness"]!["metallicRoughnessTexture"]!["index"]!.Value<int>();
-								JObject currentTexture = new()
-								{
-									["extensions"] = new JObject
-									{
-										["MSFT_texture_dds"] = new JObject
-										{
-											["source"] = images.Count
-										}
-									},
-									["source"] = images.Count
-								};
-								if (imageUriToIndex.TryGetValue(metallicRoughnessTex, out int existingIndex))
-								{
-									currentTexture["source"] = existingIndex;
-									currentTexture["extensions"]!["MSFT_texture_dds"]!["source"] = existingIndex;
-								}
-								else
-								{
-									imageUriToIndex[metallicRoughnessTex] = images.Count;
-									images.Add(new JObject
-									{
-										["uri"] = Path.GetFileName(metallicRoughnessTex)
-									});
-								}
-								gltfText["textures"]?[texIndex] = currentTexture;
-								if (!File.Exists(Path.Combine(path, Path.GetFileName(metallicRoughnessTex))))
-									File.Copy(metallicRoughnessTex, Path.Combine(path, Path.GetFileName(metallicRoughnessTex)), true);
-							}
-							if (mat["normalTexture"] != null)
-							{
-								string normaTex = mat["extras"]!["normalTexture"]!.Value<string>() ?? "";
-								int texIndex = mat["normalTexture"]!["index"]!.Value<int>();
-								JObject currentTexture = new()
-								{
-									["extensions"] = new JObject
-									{
-										["MSFT_texture_dds"] = new JObject
-										{
-											["source"] = images.Count
-										}
-									},
-									["source"] = images.Count
-								};
-								if (imageUriToIndex.TryGetValue(normaTex, out int existingIndex))
-								{
-									currentTexture["source"] = existingIndex;
-									currentTexture["extensions"]!["MSFT_texture_dds"]!["source"] = existingIndex;
-								}
-								else
-								{
-									imageUriToIndex[normaTex] = images.Count;
-									images.Add(new JObject
-									{
-										["uri"] = Path.GetFileName(normaTex)
-									});
-								}
-								gltfText["textures"]?[texIndex] = currentTexture;
-								if (!File.Exists(Path.Combine(path, Path.GetFileName(normaTex))))
-									File.Copy(normaTex, Path.Combine(path, Path.GetFileName(normaTex)), true);
-							}
-							if (mat["occlusionTexture"] != null)
-							{
-								string occlusionTex = mat["extras"]!["occlusionTexture"]!.Value<string>() ?? "";
-								int texIndex = mat["occlusionTexture"]!["index"]!.Value<int>();
-								JObject currentTexture = new()
-								{
-									["extensions"] = new JObject
-									{
-										["MSFT_texture_dds"] = new JObject
-										{
-											["source"] = images.Count
-										}
-									},
-									["source"] = images.Count
-								};
-								if (imageUriToIndex.TryGetValue(occlusionTex, out int existingIndex))
-								{
-									currentTexture["source"] = existingIndex;
-									currentTexture["extensions"]!["MSFT_texture_dds"]!["source"] = existingIndex;
-								}
-								else
-								{
-									imageUriToIndex[occlusionTex] = images.Count;
-									images.Add(new JObject
-									{
-										["uri"] = Path.GetFileName(occlusionTex)
-									});
-								}
-								gltfText["textures"]?[texIndex] = currentTexture;
-								if (!File.Exists(Path.Combine(path, Path.GetFileName(occlusionTex))))
-									File.Copy(occlusionTex, Path.Combine(path, Path.GetFileName(occlusionTex)), true);
-							}
-							if (mat["emissiveTexture"] != null)
-							{
-								string emissiveTex = mat["extras"]!["emissiveTexture"]!.Value<string>() ?? "";
-								int texIndex = mat["emissiveTexture"]!["index"]!.Value<int>();
-								JObject currentTexture = new()
-								{
-									["extensions"] = new JObject
-									{
-										["MSFT_texture_dds"] = new JObject
-										{
-											["source"] = images.Count
-										}
-									},
-									["source"] = images.Count
-								};
-								if (imageUriToIndex.TryGetValue(emissiveTex, out int existingIndex))
-								{
-									currentTexture["source"] = existingIndex;
-									currentTexture["extensions"]!["MSFT_texture_dds"]!["source"] = existingIndex;
-								}
-								else
-								{
-									imageUriToIndex[emissiveTex] = images.Count;
-									images.Add(new JObject
-									{
-										["uri"] = Path.GetFileName(emissiveTex)
-									});
-								}
-								gltfText["textures"]?[texIndex] = currentTexture;
-								if (!File.Exists(Path.Combine(path, Path.GetFileName(emissiveTex))))
-									File.Copy(emissiveTex, Path.Combine(path, Path.GetFileName(emissiveTex)), true);
-							}
-						}
-						gltfText["images"] = images;
-						return gltfText.ToString();
-					}
+					JsonPostprocessor = (json) => JsonPostprocessor(json, path)
 				});
 			}
 
-			bool hasXml = isGltf && isAc3d;
+			bool hasXml = (isGltf && isAc3d) || animations.Count > 0;
 			string activeName = $"{tileIndex}.{(hasXml ? "xml" : (isGltf ? "gltf" : "ac"))}";
 			string placementStr = $"OBJECT_STATIC {activeName} {center.Y.ToString(CultureInfo.InvariantCulture)} {center.X.ToString(CultureInfo.InvariantCulture)} {center.Z.ToString(CultureInfo.InvariantCulture)} {(hasXml ? 0 : (isAc3d && !isGltf ? 90 : 270))} {0} {(isAc3d && !isGltf ? 0 : 90)}";
 			if (hasXml)
 			{
 				XDocument doc = new(
 				new XElement("PropertyList",
-					new XElement("model",
+					/* new XElement("model",
 						new XElement("name", $"ac-{tileIndex}"),
 						new XElement("path", $"{tileIndex}.ac")),
 					new XElement("model",
-						new XElement("name", $"gltf-{tileIndex}"),
-						new XElement("path", $"{tileIndex}.gltf")),
-					new XElement("animation",
+						new XElement("name", $"gltf-{tileIndex}"), */
+						new XElement("path", $"{tileIndex}.gltf"),
+					/* new XElement("animation",
 						new XElement("object-name", $"ac-{tileIndex}"),
 						new XElement("type", "rotate"),
 						new XElement("offset-deg", "90"),
 						new XElement("axis",
-							new XElement("z", "1"))),
+							new XElement("z", "1"))), */
 					new XElement("animation",
 						new XElement("object-name", $"gltf-{tileIndex}"),
 						new XElement("type", "rotate"),
@@ -1568,14 +1485,18 @@ public class SceneryConverter : INotifyPropertyChanged
 							new XElement("not",
 								new XElement("equals",
 									new XElement("property", "/sim/version/flightgear"),
-									new XElement("value", "2024.2.0"))))),
+									new XElement("value", "2024.2.0")))))/* ,
 					new XElement("animation",
 						new XElement("object-name", $"ac-{tileIndex}"),
 						new XElement("type", "select"),
 						new XElement("condition",
 							new XElement("equals",
 								new XElement("property", "/sim/version/flightgear"),
-								new XElement("value", "2024.2.0"))))));
+								new XElement("value", "2024.2.0")))) */));
+				foreach (XDocument anim in animations)
+				{
+					doc.Root!.Add(anim.Root!);
+				}
 
 				doc.Save(Path.Combine(path, $"{tileIndex}.xml"));
 			}
@@ -1616,6 +1537,194 @@ public class SceneryConverter : INotifyPropertyChanged
 		Logger.FlushToFile();
 	}
 
+	private static string JsonPostprocessor(string json, string outputDir)
+	{
+		JObject gltfText = JObject.Parse(json);
+		Dictionary<string, int> imageUriToIndex = [];
+		JArray images = [];
+		// Assign proper sources for textures using extensions
+		foreach (JObject mat in gltfText["materials"]?.Cast<JObject>() ?? [])
+		{
+			if (mat["pbrMetallicRoughness"]?["baseColorTexture"] != null)
+			{
+				string baseColorTex = mat["extras"]!["baseColorTexture"]!.Value<string>() ?? "";
+				int texIndex = mat["pbrMetallicRoughness"]!["baseColorTexture"]!["index"]!.Value<int>();
+				JObject currentTexture = new()
+				{
+					["extensions"] = new JObject
+					{
+						["MSFT_texture_dds"] = new JObject
+						{
+							["source"] = images.Count
+						}
+					},
+					["source"] = images.Count
+				};
+				if (imageUriToIndex.TryGetValue(baseColorTex, out int existingIndex))
+				{
+					currentTexture["source"] = existingIndex;
+					currentTexture["extensions"]!["MSFT_texture_dds"]!["source"] = existingIndex;
+				}
+				else
+				{
+					imageUriToIndex[baseColorTex] = images.Count;
+					images.Add(new JObject
+					{
+						["uri"] = Path.GetFileName(baseColorTex)
+					});
+				}
+				gltfText["textures"]?[texIndex] = currentTexture;
+				if (!File.Exists(Path.Combine(outputDir, Path.GetFileName(baseColorTex))))
+					File.Copy(baseColorTex, Path.Combine(outputDir, Path.GetFileName(baseColorTex)));
+			}
+			if (mat["pbrMetallicRoughness"]?["metallicRoughnessTexture"] != null)
+			{
+				string metallicRoughnessTex = mat["extras"]!["metallicRoughnessTexture"]!.Value<string>() ?? "";
+				int texIndex = mat["pbrMetallicRoughness"]!["metallicRoughnessTexture"]!["index"]!.Value<int>();
+				JObject currentTexture = new()
+				{
+					["extensions"] = new JObject
+					{
+						["MSFT_texture_dds"] = new JObject
+						{
+							["source"] = images.Count
+						}
+					},
+					["source"] = images.Count
+				};
+				if (imageUriToIndex.TryGetValue(metallicRoughnessTex, out int existingIndex))
+				{
+					currentTexture["source"] = existingIndex;
+					currentTexture["extensions"]!["MSFT_texture_dds"]!["source"] = existingIndex;
+				}
+				else
+				{
+					imageUriToIndex[metallicRoughnessTex] = images.Count;
+					images.Add(new JObject
+					{
+						["uri"] = Path.GetFileName(metallicRoughnessTex)
+					});
+				}
+				gltfText["textures"]?[texIndex] = currentTexture;
+				if (!File.Exists(Path.Combine(outputDir, Path.GetFileName(metallicRoughnessTex))))
+					File.Copy(metallicRoughnessTex, Path.Combine(outputDir, Path.GetFileName(metallicRoughnessTex)), true);
+			}
+			if (mat["normalTexture"] != null)
+			{
+				string normaTex = mat["extras"]!["normalTexture"]!.Value<string>() ?? "";
+				int texIndex = mat["normalTexture"]!["index"]!.Value<int>();
+				JObject currentTexture = new()
+				{
+					["extensions"] = new JObject
+					{
+						["MSFT_texture_dds"] = new JObject
+						{
+							["source"] = images.Count
+						}
+					},
+					["source"] = images.Count
+				};
+				if (imageUriToIndex.TryGetValue(normaTex, out int existingIndex))
+				{
+					currentTexture["source"] = existingIndex;
+					currentTexture["extensions"]!["MSFT_texture_dds"]!["source"] = existingIndex;
+				}
+				else
+				{
+					imageUriToIndex[normaTex] = images.Count;
+					images.Add(new JObject
+					{
+						["uri"] = Path.GetFileName(normaTex)
+					});
+				}
+				gltfText["textures"]?[texIndex] = currentTexture;
+				if (!File.Exists(Path.Combine(outputDir, Path.GetFileName(normaTex))))
+					File.Copy(normaTex, Path.Combine(outputDir, Path.GetFileName(normaTex)), true);
+			}
+			if (mat["occlusionTexture"] != null)
+			{
+				string occlusionTex = mat["extras"]!["occlusionTexture"]!.Value<string>() ?? "";
+				int texIndex = mat["occlusionTexture"]!["index"]!.Value<int>();
+				JObject currentTexture = new()
+				{
+					["extensions"] = new JObject
+					{
+						["MSFT_texture_dds"] = new JObject
+						{
+							["source"] = images.Count
+						}
+					},
+					["source"] = images.Count
+				};
+				if (imageUriToIndex.TryGetValue(occlusionTex, out int existingIndex))
+				{
+					currentTexture["source"] = existingIndex;
+					currentTexture["extensions"]!["MSFT_texture_dds"]!["source"] = existingIndex;
+				}
+				else
+				{
+					imageUriToIndex[occlusionTex] = images.Count;
+					images.Add(new JObject
+					{
+						["uri"] = Path.GetFileName(occlusionTex)
+					});
+				}
+				gltfText["textures"]?[texIndex] = currentTexture;
+				if (!File.Exists(Path.Combine(outputDir, Path.GetFileName(occlusionTex))))
+					File.Copy(occlusionTex, Path.Combine(outputDir, Path.GetFileName(occlusionTex)), true);
+			}
+			if (mat["emissiveTexture"] != null)
+			{
+				string emissiveTex = mat["extras"]!["emissiveTexture"]!.Value<string>() ?? "";
+				int texIndex = mat["emissiveTexture"]!["index"]!.Value<int>();
+				JObject currentTexture = new()
+				{
+					["extensions"] = new JObject
+					{
+						["MSFT_texture_dds"] = new JObject
+						{
+							["source"] = images.Count
+						}
+					},
+					["source"] = images.Count
+				};
+				if (imageUriToIndex.TryGetValue(emissiveTex, out int existingIndex))
+				{
+					currentTexture["source"] = existingIndex;
+					currentTexture["extensions"]!["MSFT_texture_dds"]!["source"] = existingIndex;
+				}
+				else
+				{
+					imageUriToIndex[emissiveTex] = images.Count;
+					images.Add(new JObject
+					{
+						["uri"] = Path.GetFileName(emissiveTex)
+					});
+				}
+				gltfText["textures"]?[texIndex] = currentTexture;
+				if (!File.Exists(Path.Combine(outputDir, Path.GetFileName(emissiveTex))))
+					File.Copy(emissiveTex, Path.Combine(outputDir, Path.GetFileName(emissiveTex)), true);
+			}
+		}
+		gltfText["images"] = images;
+		return gltfText.ToString();
+	}
+
+	private static string GenerateJetwayDriverCode(double jetwayLongitude, double jetwayLatitude, double jetwayAltitude, double jetwayHeading, double distMainHandleInit, double distMainHandleFinal, double distSecondaryHandle, Vector2 centerWheelsGroundLock, Vector2 jetwayLimits, string jetwayId)
+	{
+		string[] jetwayTemplate = File.ReadAllLines("jetway-template.nas");
+		jetwayTemplate[4] = $"var jetwayLongitude = {jetwayLongitude};";
+		jetwayTemplate[5] = $"var jetwayLatitude = {jetwayLatitude};";
+		jetwayTemplate[6] = $"var jetwayAltitude = {jetwayAltitude};";
+		jetwayTemplate[7] = $"var jetwayHeading = {jetwayHeading};";
+		jetwayTemplate[8] = $"var distMainHandleInit = {distMainHandleInit};";
+		jetwayTemplate[9] = $"var distMainHandleFinal = {distMainHandleFinal};";
+		jetwayTemplate[10] = $"var distSecondaryHandle = {distSecondaryHandle};";
+		jetwayTemplate[11] = $"var centerWheelsGroundLock = [{centerWheelsGroundLock.X}, {centerWheelsGroundLock.Y}];";
+		jetwayTemplate[12] = $"var jetwayLimits = [{jetwayLimits.X}, {jetwayLimits.Y}]; # length and height";
+		jetwayTemplate[13] = $"var jetwayId = \"{jetwayId}\";";
+		return string.Join("\n", jetwayTemplate);
+	}
 
 	public SceneBuilder ConvertSceneryGltf(string inputPath, string outputPath, KeyValuePair<int, List<ModelReference>> kvp, Vector3 center)
 	{
@@ -1740,15 +1849,6 @@ public class SceneryConverter : INotifyPropertyChanged
 
 							SceneBuilder sceneLocal = CreateGltfModelFromGlb(glbBytes, inputPath, modelRef.file);
 
-							// Write GLB with unique filename (include index to avoid overwrites)
-							string safeName = name;
-							string outName = glbIndex < lods.Count ? lods[glbIndex].name : $"{safeName}_glb{glbIndex}";
-							modelObjects.Add(new ModelObject
-							{
-								name = outName.Replace(" ", "_"),
-								minSize = glbIndex < lods.Count ? lods[glbIndex].minSize : 0,
-								model = sceneLocal
-							});
 							foreach (LibraryObject libObj in libraryObjectsForModel)
 							{
 								if (Terrain.GetTileIndex(libObj.latitude, libObj.longitude) != tileIndex)
@@ -1996,6 +2096,7 @@ public class SceneryConverter : INotifyPropertyChanged
 		JArray materials = (JArray)json["materials"]!;
 		JArray textures = (JArray)json["textures"]!;
 		JArray nodes = (JArray)json["nodes"]!;
+		JArray animations = (JArray)json["animations"]!;
 		JArray topLevelNodes = (JArray)json["scenes"]![json["scene"]!.Value<int>()]!["nodes"]!;
 		List<MeshBuilder<VertexPositionNormalTangent, VertexTexture2, VertexEmpty>> meshBuilders = [];
 		foreach (JObject mesh in meshes.Cast<JObject>())
@@ -2046,7 +2147,26 @@ public class SceneryConverter : INotifyPropertyChanged
 			}
 			if (nodeJson["mesh"] != null)
 			{
-				scene.AddRigidMesh(meshBuilders[nodeJson["mesh"]!.Value<int>()], nodeBuilder);
+				MeshBuilder<VertexPositionNormalTangent, VertexTexture2, VertexEmpty> mesh = meshBuilders[nodeJson["mesh"]!.Value<int>()];
+				scene.AddRigidMesh(mesh, nodeBuilder);
+			}
+			if (animations != null)
+			{
+				foreach (JObject anim in animations.Cast<JObject>())
+				{
+					JArray channels = (JArray)anim["channels"]!;
+					JArray samplers = (JArray)anim["samplers"]!;
+					for (int i = 0; i < channels.Count; i++)
+					{
+						if (channels[i]["target"]?["node"]?.Value<int>() == nodeIndex)
+						{
+							if (channels[i]["target"]?["path"]?.Value<string>() == "translation")
+							{
+								// TODO: Support animations
+							}
+						}
+					}
+				}
 			}
 			return nodeBuilder;
 		}
@@ -2228,21 +2348,43 @@ public class SceneryConverter : INotifyPropertyChanged
 		return lodElem;
 	}
 
-	private static Matrix4x4 CreatePlacementTransform(LibraryObject libObj, double latOrigin, double lonOrigin, double altOrigin)
+	private static Matrix4x4 CreatePlacementTransform(object sceneryObject, double latOrigin, double lonOrigin, double altOrigin, int index = 0)
 	{
 		const double deg2rad = Math.PI / 180.0;
-		double lonOffsetMeters = -(libObj.longitude - lonOrigin) * 111320.0 * Math.Cos(latOrigin * deg2rad);
-		double latOffsetMeters = (libObj.latitude - latOrigin) * 110540.0;
-		double altOffsetMeters = libObj.altitude - altOrigin;
+		if (sceneryObject is LibraryObject libObj)
+		{
+			double lonOffsetMeters = -(libObj.longitude - lonOrigin) * 111320.0 * Math.Cos(latOrigin * deg2rad);
+			double latOffsetMeters = (libObj.latitude - latOrigin) * 110540.0;
+			double altOffsetMeters = libObj.altitude - altOrigin;
 
-		Vector3 translation = new((float)lonOffsetMeters, (float)altOffsetMeters, (float)latOffsetMeters);
-		float yaw = (float)(-libObj.heading * deg2rad);
-		float pitch = (float)(libObj.pitch * deg2rad);
-		float roll = (float)(libObj.bank * deg2rad);
-		Quaternion rotation = Quaternion.CreateFromYawPitchRoll(yaw, pitch, roll);
-		Vector3 scale = new((float)libObj.scale);
+			Vector3 translation = new((float)lonOffsetMeters, (float)altOffsetMeters, (float)latOffsetMeters);
+			float yaw = (float)(-libObj.heading * deg2rad);
+			float pitch = (float)(libObj.pitch * deg2rad);
+			float roll = (float)(libObj.bank * deg2rad);
+			Quaternion rotation = Quaternion.CreateFromYawPitchRoll(yaw, pitch, roll);
+			Vector3 scale = new((float)libObj.scale);
 
-		return Matrix4x4.CreateScale(scale) * Matrix4x4.CreateFromQuaternion(rotation) * Matrix4x4.CreateTranslation(translation);
+			return Matrix4x4.CreateScale(scale) * Matrix4x4.CreateFromQuaternion(rotation) * Matrix4x4.CreateTranslation(translation);
+		}
+		else if (sceneryObject is SimObject simObj)
+		{
+			double lonOffsetMeters = -(simObj.position[index].X - lonOrigin) * 111320.0 * Math.Cos(latOrigin * deg2rad);
+			double latOffsetMeters = (simObj.position[index].Y - latOrigin) * 110540.0;
+			double altOffsetMeters = simObj.position[index].Z - altOrigin;
+
+			Vector3 translation = new((float)lonOffsetMeters, (float)altOffsetMeters, (float)latOffsetMeters);
+			float yaw = (float)(-simObj.orientation[index].Z * deg2rad);
+			float pitch = (float)(simObj.orientation[index].Y * deg2rad);
+			float roll = (float)(simObj.orientation[index].X * deg2rad);
+			Quaternion rotation = Quaternion.CreateFromYawPitchRoll(yaw, pitch, roll);
+			Vector3 scale = new((float)simObj.scale[index]);
+
+			return Matrix4x4.CreateScale(scale) * Matrix4x4.CreateFromQuaternion(rotation) * Matrix4x4.CreateTranslation(translation);
+		}
+		else
+		{
+			return Matrix4x4.Identity;
+		}
 	}
 
 	private static Matrix4x4 ConvertToAcTransform(Matrix4x4 gltfTransform)
@@ -2286,6 +2428,11 @@ public class SceneryConverter : INotifyPropertyChanged
 			(float)Math.Round(BitConverter.ToInt16(bytes, 20) * (360.0 / 65536.0), 3),
 			(float)Math.Round(BitConverter.ToInt16(bytes, 22) * (360.0 / 65536.0), 3)
 		);
+		Flags[] flags = [.. Enum.GetValues<Flags>().Where(f => (BitConverter.ToInt16(bytes, 16) & (1 << (int)f)) != 0)];
+		if (flags.Contains(Flags.IsAboveAGL))
+		{
+			position.Z += (float)Terrain.GetElevation(position.Y, position.X);
+		}
 		float scale = BitConverter.ToSingle(bytes, 44);
 		int containerTitleLength = BitConverter.ToUInt16(bytes, 48);
 		int containerPathLength = BitConverter.ToUInt16(bytes, 50);
@@ -2329,7 +2476,7 @@ public class SceneryConverter : INotifyPropertyChanged
 			simObjectsByTile[tileIndex][containerTitle] = new SimObject
 			{
 				position = [position],
-				flags = [.. Enum.GetValues<Flags>().Where(f => (BitConverter.ToInt16(bytes, 16) & (1 << (int)f)) != 0)],
+				flags = flags,
 				orientation = [orientation],
 				imageComplexity = BitConverter.ToUInt16(bytes, 24),
 				scale = [scale],
