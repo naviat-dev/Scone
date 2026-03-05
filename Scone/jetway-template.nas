@@ -1,7 +1,7 @@
 # Absoulte center of the current jetway
 # The property that the jetway is tied to will be a function of these coordinates
 # These are the only things that should change throughout this script
-# NOTE: jetways face 90 degrees by default, so ensure to add 90 degrees to the heading before calculations
+# NOTE: jetways face 270 degrees by default, so ensure to add 270 degrees to the heading before calculations
 var jetwayLongitude = 0;
 var jetwayLatitude = 0;
 var jetwayAltitude = 0;
@@ -83,15 +83,15 @@ for (var i = 0; i < size(doors); i+=1) {
 	var lon2 = (math.mod((lambda2 * 180 / math.pi) + 540, 360)) - 180;
 
 	var distance = math.sqrt(math.pow(door[0] - jetwayLongitude, 2) + math.pow(door[1] - jetwayLatitude, 2) + math.pow(door[2] - jetwayAltitude, 2));
-	if (distance < closestDoorDistance and distance < distMainHandleFinal and distance > distMainHandleInit) {
+	if (distance < closestDoorDistance) {
 		closestDoorDistance = distance;
 		closestDoorIndex = i;
-		closestDoorPivotPoint = [lon2, lat2, jetwayAltitude + jetwayLimits[2]];
+		closestDoorPivotPoint = [lon2, lat2, jetwayAltitude];
 	}
 }
 
 if (closestDoorIndex == -1) {
-	gui.popupTip("Cannot extend jetway: No aircraft door is within the extension limits of the jetway.");
+	gui.popupTip("Cannot extend jetway: No aircraft door was found.");
 } else {
 	var closestDoor = doors[closestDoorIndex];
 	# Calculate the required extension of the jetway to reach the door
@@ -108,6 +108,7 @@ if (closestDoorIndex == -1) {
 	var horizontalDistance = R * c;
 
 	var requiredExtension = math.sqrt(math.pow(horizontalDistance, 2) + math.pow(closestDoorPivotPoint[2] - jetwayAltitude, 2));
+	var requiredHeading = math.mod(math.atan2(closestDoorPivotPoint[0] - jetwayLongitude, closestDoorPivotPoint[1] - jetwayLatitude) * 180 / math.pi + 360, 360);
 	if (requiredExtension > distMainHandleFinal) {
 		gui.popupTip("Cannot extend jetway: The closest door is " ~ math.round(requiredExtension, 2) ~ " meters away, which exceeds the maximum extension limit of " ~ distMainHandleFinal ~ " meters.");
 	} else if (requiredExtension < distMainHandleInit) {
@@ -116,5 +117,6 @@ if (closestDoorIndex == -1) {
 		# Extend the jetway to the required extension
 		setprop(jetwayPropNode ~ "/extension-m", requiredExtension);
 		setprop(jetwayPropNode ~ "/secondary-handle-rotation-deg", heading - jetwayHeading);
+		setprop(jetwayPropNode ~ "/main-handle-rotation-deg", requiredHeading - jetwayHeading);
 	}
 }

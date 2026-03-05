@@ -1245,12 +1245,12 @@ public class SceneryConverter : INotifyPropertyChanged
 						{
 							// Parse the glTF once more to get the IK handle nodes
 							JArray nodes = (JArray)json["nodes"]!;
-							JObject mainHandleStartNode = (JObject)nodes.First(n => n["name"]?.ToString() == IKMainHandleStart);
-							JObject mainHandleEndNode = (JObject)nodes.First(n => n["name"]?.ToString() == IKMainHandleEnd);
-							JObject secondaryHandleStartNode = (JObject)nodes.First(n => n["name"]?.ToString() == IKSecondaryHandleStart);
-							JObject secondaryHandleEndNode = (JObject)nodes.First(n => n["name"]?.ToString() == IKSecondaryHandleEnd);
-							JObject wheelsGroundLockStartNode = (JObject)nodes.First(n => n["name"]?.ToString() == IKWheelsGroundLockStart);
-							JObject wheelsGroundLockEndNode = (JObject)nodes.First(n => n["name"]?.ToString() == IKWheelsGroundLockEnd);
+							JObject mainHandleStartNode = (JObject)nodes.First(n => n["name"]?.ToString()?.Equals(IKMainHandleStart, StringComparison.OrdinalIgnoreCase) == true);
+							JObject mainHandleEndNode = (JObject)nodes.First(n => n["name"]?.ToString()?.Equals(IKMainHandleEnd, StringComparison.OrdinalIgnoreCase) == true);
+							JObject secondaryHandleStartNode = (JObject)nodes.First(n => n["name"]?.ToString()?.Equals(IKSecondaryHandleStart, StringComparison.OrdinalIgnoreCase) == true);
+							JObject secondaryHandleEndNode = (JObject)nodes.First(n => n["name"]?.ToString()?.Equals(IKSecondaryHandleEnd, StringComparison.OrdinalIgnoreCase) == true);
+							JObject wheelsGroundLockStartNode = (JObject)nodes.First(n => n["name"]?.ToString()?.Equals(IKWheelsGroundLockStart, StringComparison.OrdinalIgnoreCase) == true);
+							JObject wheelsGroundLockEndNode = (JObject)nodes.First(n => n["name"]?.ToString()?.Equals(IKWheelsGroundLockEnd, StringComparison.OrdinalIgnoreCase) == true);
 							mainHandleStartPos = new Vector3(
 								mainHandleStartNode["translation"]?[0]?.ToObject<float>() ?? 0,
 								mainHandleStartNode["translation"]?[1]?.ToObject<float>() ?? 0,
@@ -1341,12 +1341,12 @@ public class SceneryConverter : INotifyPropertyChanged
 									simObj.position[i].X,
 									simObj.position[i].Y,
 									simObj.position[i].Z,
-									simObj.orientation[i].Z,
+									(simObj.orientation[i].Z + 270) % 360, // Jetways face 270 degrees by default, so add this
 									distMainHandleInit,
 									distMainHandleFinal,
 									Vector3.Distance(secondaryHandleStartPos, secondaryHandleEndPos),
 									new Vector2(wheelsGroundLockStartPos.X, wheelsGroundLockStartPos.Z),
-									new Vector2((float)mainHandleExtensionNodeNamesDist.Sum(n => n.dist)),
+									new Vector2((float)mainHandleExtensionNodeNamesDist.Sum(n => n.dist), Vector3.Distance(wheelsGroundLockStartPos, wheelsGroundLockEndPos)),
 									simObjId
 									);
 								jetwayDriverAnimation.Add(new(
@@ -2097,8 +2097,10 @@ public class SceneryConverter : INotifyPropertyChanged
 		JArray textures = (JArray)json["textures"]!;
 		JArray nodes = (JArray)json["nodes"]!;
 		JArray animations = (JArray)json["animations"]!;
+		JArray skins = (JArray)json["skins"]!;
 		JArray topLevelNodes = (JArray)json["scenes"]![json["scene"]!.Value<int>()]!["nodes"]!;
 		List<MeshBuilder<VertexPositionNormalTangent, VertexTexture2, VertexEmpty>> meshBuilders = [];
+		List<Skin> skinBuilders = [];
 		foreach (JObject mesh in meshes.Cast<JObject>())
 		{
 			meshBuilders.Add(GlbBuilder.BuildMesh(inputPath, file, mesh, accessors, bufferViews, materials, textures, images, glbBinBytes));
@@ -2149,24 +2151,6 @@ public class SceneryConverter : INotifyPropertyChanged
 			{
 				MeshBuilder<VertexPositionNormalTangent, VertexTexture2, VertexEmpty> mesh = meshBuilders[nodeJson["mesh"]!.Value<int>()];
 				scene.AddRigidMesh(mesh, nodeBuilder);
-			}
-			if (animations != null)
-			{
-				foreach (JObject anim in animations.Cast<JObject>())
-				{
-					JArray channels = (JArray)anim["channels"]!;
-					JArray samplers = (JArray)anim["samplers"]!;
-					for (int i = 0; i < channels.Count; i++)
-					{
-						if (channels[i]["target"]?["node"]?.Value<int>() == nodeIndex)
-						{
-							if (channels[i]["target"]?["path"]?.Value<string>() == "translation")
-							{
-								// TODO: Support animations
-							}
-						}
-					}
-				}
 			}
 			return nodeBuilder;
 		}
