@@ -13,10 +13,13 @@ public sealed class AcBuilder
 	private static readonly CultureInfo Culture = CultureInfo.InvariantCulture;
 	private readonly List<AcMaterial> _materials = [];
 	private readonly List<AcMeshObject> _objects = [];
+	private readonly List<SceneNode> _rootNodes = [];
+	private readonly List<AcMeshObject> _looseObjects = [];
 	private readonly Dictionary<string, int> _materialCache = new(StringComparer.OrdinalIgnoreCase);
 	private readonly Dictionary<string, string> _textureCopyTargets = new(StringComparer.OrdinalIgnoreCase);
 	private readonly HashSet<string> _textureOutputNames = new(StringComparer.OrdinalIgnoreCase);
 	private const float VertexQuantizationScale = 10000f;
+	private static readonly Matrix4x4 AxisFlip = Matrix4x4.CreateScale(1f, 1f, -1f);
 
 	public string WorldName { get; set; } = "SconeExport";
 
@@ -55,28 +58,66 @@ public sealed class AcBuilder
 			// If a glTF chunk contains meshes but no nodes, treat each mesh as root.
 			for (int meshIdx = 0; meshIdx < meshes.Count; meshIdx++)
 			{
-				ProcessMeshInstance(meshes, meshIdx, null, Matrix4x4.Identity, accessors, bufferViews, materials, textures, images, glbBinBytes, assetRoot, sourceBgl);
+				List<AcMeshObject> loose = BuildMeshInstances(meshes, meshIdx, null, accessors, bufferViews, materials, textures, images, glbBinBytes, assetRoot, sourceBgl);
+				foreach (AcMeshObject mesh in loose)
+				{
+					_objects.Add(mesh);
+					_looseObjects.Add(mesh);
+				}
 			}
 			return;
 		}
 
-		int[] parentMap = BuildParentMap(nodes);
-		Matrix4x4[] worldTransforms = BuildWorldTransforms(nodes, parentMap);
-		for (int nodeIndex = 0; nodeIndex < nodes.Count; nodeIndex++)
+		List<int> rootNodes = ResolveRootNodes(json, nodes);
+
+		SceneNode? TraverseNode(int nodeIndex)
 		{
+			if (nodeIndex < 0 || nodeIndex >= nodes.Count)
+			{
+				return null;
+			}
 			JObject node = (JObject)nodes[nodeIndex]!;
-			if (node["mesh"] == null)
+			Matrix4x4 local = ParseLocalTransform(node);
+			Matrix4x4 localAc = ConvertNodeTransform(local);
+			string nodeName = node["name"]?.Value<string>() ?? $"Node_{nodeIndex}";
+			SceneNode sceneNode = new(nodeName, localAc);
+
+			if (node["mesh"] != null)
 			{
-				continue;
+				int meshIndex = node["mesh"]!.Value<int>();
+				if (meshIndex >= 0 && meshIndex < meshes.Count)
+				{
+					List<AcMeshObject> nodeMeshes = BuildMeshInstances(meshes, meshIndex, nodeName, accessors, bufferViews, materials, textures, images, glbBinBytes, assetRoot, sourceBgl);
+					foreach (AcMeshObject mesh in nodeMeshes)
+					{
+						_objects.Add(mesh);
+						sceneNode.Meshes.Add(mesh);
+					}
+				}
 			}
-			int meshIndex = node["mesh"]!.Value<int>();
-			if (meshIndex < 0 || meshIndex >= meshes.Count)
+
+			if (node["children"] is JArray children)
 			{
-				continue;
+				foreach (JToken child in children)
+				{
+					SceneNode? childNode = TraverseNode(child.Value<int>());
+					if (childNode != null)
+					{
+						sceneNode.Children.Add(childNode);
+					}
+				}
 			}
-			string? nodeName = node["name"]?.Value<string>();
-			Matrix4x4 world = worldTransforms.Length > nodeIndex ? worldTransforms[nodeIndex] : Matrix4x4.Identity;
-			ProcessMeshInstance(meshes, meshIndex, nodeName, world, accessors, bufferViews, materials, textures, images, glbBinBytes, assetRoot, sourceBgl);
+
+			return sceneNode.Children.Count == 0 && sceneNode.Meshes.Count == 0 ? null : sceneNode;
+		}
+
+		foreach (int rootIndex in rootNodes)
+		{
+			SceneNode? rootNode = TraverseNode(rootIndex);
+			if (rootNode != null)
+			{
+				_rootNodes.Add(rootNode);
+			}
 		}
 	}
 
@@ -89,8 +130,14 @@ public sealed class AcBuilder
 			materialRemap[i] = targetIndex;
 		}
 
-		foreach (AcMeshObject mesh in other._objects)
+		Dictionary<AcMeshObject, AcMeshObject> meshCloneMap = [];
+
+		AcMeshObject CloneMesh(AcMeshObject mesh)
 		{
+			if (meshCloneMap.TryGetValue(mesh, out AcMeshObject? existing))
+			{
+				return existing;
+			}
 			AcMeshObject clone = mesh.Clone();
 			clone.ApplyTransform(transform);
 			if (!string.IsNullOrEmpty(clone.TextureSource))
@@ -102,7 +149,43 @@ public sealed class AcBuilder
 				}
 			}
 			clone.RemapMaterials(materialRemap);
+			meshCloneMap[mesh] = clone;
 			_objects.Add(clone);
+			return clone;
+		}
+
+		SceneNode? CloneNode(SceneNode source)
+		{
+			SceneNode cloneNode = new(source.Name, source.LocalTransform);
+			foreach (SceneNode child in source.Children)
+			{
+				SceneNode? clonedChild = CloneNode(child);
+				if (clonedChild != null)
+				{
+					cloneNode.Children.Add(clonedChild);
+				}
+			}
+			foreach (AcMeshObject mesh in source.Meshes)
+			{
+				AcMeshObject clonedMesh = CloneMesh(mesh);
+				cloneNode.Meshes.Add(clonedMesh);
+			}
+			return cloneNode.Children.Count == 0 && cloneNode.Meshes.Count == 0 ? null : cloneNode;
+		}
+
+		foreach (SceneNode root in other._rootNodes)
+		{
+			SceneNode? clonedRoot = CloneNode(root);
+			if (clonedRoot != null)
+			{
+				_rootNodes.Add(clonedRoot);
+			}
+		}
+
+		foreach (AcMeshObject mesh in other._looseObjects)
+		{
+			AcMeshObject clone = CloneMesh(mesh);
+			_looseObjects.Add(clone);
 		}
 
 		foreach (var kvp in other._textureCopyTargets)
@@ -131,8 +214,13 @@ public sealed class AcBuilder
 
 		writer.WriteLine("OBJECT world");
 		writer.WriteLine($"name \"{Sanitize(WorldName)}\"");
-		writer.WriteLine($"kids {_objects.Count}");
-		foreach (AcMeshObject obj in _objects)
+		int totalKids = _rootNodes.Count + _looseObjects.Count;
+		writer.WriteLine($"kids {totalKids}");
+		foreach (SceneNode node in _rootNodes)
+		{
+			WriteNode(node, writer);
+		}
+		foreach (AcMeshObject obj in _looseObjects)
 		{
 			obj.Write(writer);
 		}
@@ -160,11 +248,60 @@ public sealed class AcBuilder
 		}
 	}
 
-	private void ProcessMeshInstance(
+	private static void WriteNode(SceneNode node, StreamWriter writer)
+	{
+		writer.WriteLine("OBJECT group");
+		writer.WriteLine($"name \"{node.Name}\"");
+		WriteTransform(node.LocalTransform, writer);
+		int childCount = node.Children.Count + node.Meshes.Count;
+		writer.WriteLine($"kids {childCount}");
+		foreach (SceneNode child in node.Children)
+		{
+			WriteNode(child, writer);
+		}
+		foreach (AcMeshObject mesh in node.Meshes)
+		{
+			mesh.Write(writer);
+		}
+	}
+
+	private static void WriteTransform(Matrix4x4 transform, StreamWriter writer)
+	{
+		if (!IsIdentityTranslation(transform))
+		{
+			writer.WriteLine($"loc {FormatFloat(transform.M41)} {FormatFloat(transform.M42)} {FormatFloat(transform.M43)}");
+		}
+		if (!IsIdentityRotation(transform))
+		{
+			writer.WriteLine(
+				$"rot {FormatFloat(transform.M11)} {FormatFloat(transform.M12)} {FormatFloat(transform.M13)} " +
+				$" {FormatFloat(transform.M21)} {FormatFloat(transform.M22)} {FormatFloat(transform.M23)} " +
+				$" {FormatFloat(transform.M31)} {FormatFloat(transform.M32)} {FormatFloat(transform.M33)}");
+		}
+	}
+
+	private static bool IsIdentityTranslation(Matrix4x4 transform)
+	{
+		return NearlyEqual(transform.M41, 0f) && NearlyEqual(transform.M42, 0f) && NearlyEqual(transform.M43, 0f);
+	}
+
+	private static bool IsIdentityRotation(Matrix4x4 transform)
+	{
+		return NearlyEqual(transform.M11, 1f) && NearlyEqual(transform.M22, 1f) && NearlyEqual(transform.M33, 1f) &&
+			NearlyEqual(transform.M12, 0f) && NearlyEqual(transform.M13, 0f) &&
+			NearlyEqual(transform.M21, 0f) && NearlyEqual(transform.M23, 0f) &&
+			NearlyEqual(transform.M31, 0f) && NearlyEqual(transform.M32, 0f);
+	}
+
+	private static bool NearlyEqual(float left, float right, float epsilon = 1e-5f)
+	{
+		return MathF.Abs(left - right) <= epsilon;
+	}
+
+	private List<AcMeshObject> BuildMeshInstances(
 		JArray meshes,
 		int meshIndex,
 		string? nodeName,
-		Matrix4x4 worldMatrix,
 		JArray accessors,
 		JArray bufferViews,
 		JArray materials,
@@ -174,6 +311,7 @@ public sealed class AcBuilder
 		string assetRoot,
 		string sourceBgl)
 	{
+		List<AcMeshObject> meshResults = [];
 		JObject meshJson = (JObject)meshes[meshIndex]!;
 		string meshBaseName = meshJson["name"]?.Value<string>() ?? nodeName ?? $"mesh_{meshIndex}";
 		JArray primitives = (JArray?)meshJson["primitives"] ?? [];
@@ -199,8 +337,8 @@ public sealed class AcBuilder
 			Vector3[] transformed = new Vector3[primData.Positions.Length];
 			for (int i = 0; i < primData.Positions.Length; i++)
 			{
-				Vector3 world = Vector3.Transform(primData.Positions[i], worldMatrix);
-				transformed[i] = new Vector3(world.X, world.Y, -world.Z);
+				Vector3 position = primData.Positions[i];
+				transformed[i] = new Vector3(position.X, position.Y, -position.Z);
 			}
 			Dictionary<VertexKey, int> vertexCache = [];
 
@@ -268,9 +406,11 @@ public sealed class AcBuilder
 
 			if (meshObject.Surfaces.Count > 0)
 			{
-				_objects.Add(meshObject);
+				meshResults.Add(meshObject);
 			}
 		}
+
+		return meshResults;
 	}
 
 	private MaterialBuildResult BuildMaterialForPrimitive(
@@ -409,24 +549,44 @@ public sealed class AcBuilder
 		return parents;
 	}
 
-	private static Matrix4x4[] BuildWorldTransforms(JArray nodes, int[] parentMap)
+	private static List<int> ResolveRootNodes(JObject json, JArray nodes)
 	{
-		Matrix4x4[] transforms = new Matrix4x4[nodes.Count];
-		for (int i = 0; i < nodes.Count; i++)
+		if (json["scenes"] is JArray scenes && scenes.Count > 0)
 		{
-			Matrix4x4 world = Matrix4x4.Identity;
-			int? current = i;
-			while (current != null && current >= 0)
+			int sceneIndex = json["scene"]?.Value<int>() ?? 0;
+			sceneIndex = Math.Clamp(sceneIndex, 0, scenes.Count - 1);
+			if (scenes[sceneIndex]?["nodes"] is JArray sceneNodes && sceneNodes.Count > 0)
 			{
-				JObject node = (JObject)nodes[current.Value]!;
-				Matrix4x4 local = ParseLocalTransform(node);
-				world = local * world;
-				int parentIndex = parentMap[current.Value];
-				current = parentIndex >= 0 ? parentIndex : null;
+				List<int> resolved = [];
+				foreach (JToken nodeToken in sceneNodes)
+				{
+					int nodeIndex = nodeToken.Value<int>();
+					if (nodeIndex >= 0 && nodeIndex < nodes.Count)
+					{
+						resolved.Add(nodeIndex);
+					}
+				}
+				if (resolved.Count > 0)
+				{
+					return resolved;
+				}
 			}
-			transforms[i] = world;
 		}
-		return transforms;
+
+		int[] parentMap = BuildParentMap(nodes);
+		List<int> roots = [];
+		for (int i = 0; i < parentMap.Length; i++)
+		{
+			if (parentMap[i] == -1)
+			{
+				roots.Add(i);
+			}
+		}
+		if (roots.Count == 0)
+		{
+			roots.AddRange(Enumerable.Range(0, nodes.Count));
+		}
+		return roots;
 	}
 
 	private static Matrix4x4 ParseLocalTransform(JObject node)
@@ -450,6 +610,12 @@ public sealed class AcBuilder
 			? new Vector3(s[0]!.Value<float>(), s[1]!.Value<float>(), s[2]!.Value<float>())
 			: Vector3.One;
 		return Matrix4x4.CreateScale(scale) * Matrix4x4.CreateFromQuaternion(Quaternion.Normalize(rotation)) * Matrix4x4.CreateTranslation(translation);
+	}
+
+	private static Matrix4x4 ConvertNodeTransform(Matrix4x4 gltfTransform)
+	{
+		Matrix4x4 temp = Matrix4x4.Multiply(AxisFlip, gltfTransform);
+		return Matrix4x4.Multiply(temp, AxisFlip);
 	}
 
 	private static PrimData LoadPrimData(JObject primitive, JArray accessors, JArray bufferViews, byte[] glbBinBytes)
@@ -696,6 +862,20 @@ public sealed class AcBuilder
 		public int MaterialIndex { get; init; }
 		public bool DoubleSided { get; init; }
 		public string? TextureSource { get; init; }
+	}
+
+	private sealed class SceneNode
+	{
+		public string Name { get; }
+		public List<SceneNode> Children { get; } = [];
+		public List<AcMeshObject> Meshes { get; } = [];
+		public Matrix4x4 LocalTransform { get; }
+
+		public SceneNode(string name, Matrix4x4 localTransform)
+		{
+			Name = Sanitize(name);
+			LocalTransform = localTransform;
+		}
 	}
 
 	private sealed class PrimData
