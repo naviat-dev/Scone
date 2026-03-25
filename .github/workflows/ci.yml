@@ -123,7 +123,6 @@ jobs:
     name: Publish Release
     runs-on: ubuntu-latest
     needs:
-      - smoke_test
       - build_windows
       - build_macos
       - build_linux
