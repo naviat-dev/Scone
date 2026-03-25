@@ -1154,7 +1154,7 @@ public class SceneryConverter : INotifyPropertyChanged
 						continue;
 					}
 					string simObjContainer = File.ReadAllText(simObj.containerPath);
-					Match match = new Regex(@$"title={simObj.containerTitle}\r?\nmodel=(.*)\r?\ntexture=(.*)", RegexOptions.Multiline).Match(simObjContainer);
+					Match match = new Regex(@$"title={Regex.Escape(simObj.containerTitle)}\r?\nmodel=(.*)\r?\ntexture=(.*)", RegexOptions.Multiline | RegexOptions.IgnoreCase).Match(simObjContainer);
 					if (match.Success)
 					{
 						string modelCfgFile = Path.Combine(Path.GetDirectoryName(simObj.containerPath)!, match.Groups[1].Value.Trim() == "" ? "model" : $"model.{match.Groups[1].Value.Replace("\r", "").Replace("\"", "").Trim()}", "model.cfg");
