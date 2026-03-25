@@ -22,8 +22,16 @@ public partial class App : Application
 		}
 		if (File.Exists(ConfigPath))
 		{
-			string json = File.ReadAllText(ConfigPath);
-			AppConfig = System.Text.Json.JsonSerializer.Deserialize<Config>(json);
+			try
+			{
+				string json = File.ReadAllText(ConfigPath);
+				AppConfig = System.Text.Json.JsonSerializer.Deserialize<Config>(json);
+			}
+			catch (Exception ex)
+			{
+				Logger.Error($"Failed to load config: {ex}");
+				AppConfig = new();
+			}
 		}
 		Suspending += static (s, e) =>
 		{
