@@ -1715,7 +1715,7 @@ public class SceneryConverter : INotifyPropertyChanged
 
 	private static string GenerateJetwayDriverCode(double jetwayLongitude, double jetwayLatitude, double jetwayAltitude, double jetwayHeading, double distMainHandleInit, double distMainHandleFinal, double distSecondaryHandle, Vector2 centerWheelsGroundLock, Vector2 jetwayLimits, string jetwayId)
 	{
-		string[] jetwayTemplate = File.ReadAllLines("jetway-template.nas");
+		string[] jetwayTemplate = File.ReadAllLines(Path.Combine(AppContext.BaseDirectory, "jetway-template.nas"));
 		jetwayTemplate[4] = $"var jetwayLongitude = {jetwayLongitude};";
 		jetwayTemplate[5] = $"var jetwayLatitude = {jetwayLatitude};";
 		jetwayTemplate[6] = $"var jetwayAltitude = {jetwayAltitude};";
