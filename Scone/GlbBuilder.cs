@@ -19,7 +19,7 @@ public class GlbBuilder
 		public int[] Indices { get; set; } = [];
 	}
 
-	static int ComponentSize(int componentType)
+	private static int ComponentSize(int componentType)
 	{
 		return componentType switch
 		{
@@ -32,7 +32,7 @@ public class GlbBuilder
 			_ => throw new Exception("Unknown componentType")
 		};
 	}
-	static int ComponentCount(string type)
+	private static int ComponentCount(string type)
 	{
 		return type switch
 		{
@@ -68,7 +68,7 @@ public class GlbBuilder
 		return node;
 	}
 
-	public static MeshBuilder<VertexPositionNormalTangent, VertexTexture2, VertexEmpty>? BuildMesh(string srcPath, string srcBgl, JObject meshJson, JArray accJson, JArray bvJson, JArray matsJson, JArray texJson, JArray imgJson, byte[] glbBinBytes)
+	public static MeshBuilder<VertexPositionNormalTangent, VertexTexture2, VertexEmpty> BuildMesh(string srcPath, string srcBgl, JObject meshJson, JArray accJson, JArray bvJson, JArray matsJson, JArray texJson, JArray imgJson, byte[] glbBinBytes)
 	{
 
 		MeshBuilder<VertexPositionNormalTangent, VertexTexture2, VertexEmpty> mesh = new(meshJson["name"]?.Value<string>() ?? "UnnamedMesh");
@@ -77,7 +77,7 @@ public class GlbBuilder
 			JObject matJson = (JObject)matsJson[primJson["material"]!.Value<int>()];
 			if (matJson["extensions"]?["ASOBO_material_invisible"] != null || matJson["extensions"]?["ASOBO_material_environment_occluder"] != null)
 			{
-				return null;
+				continue;
 			}
 			PrimitiveBuilder<MaterialBuilder, VertexPositionNormalTangent, VertexTexture2, VertexEmpty> prim = mesh.UsePrimitive(BuildMaterial(matJson, texJson, imgJson, srcPath, srcBgl));
 			JObject attributes = (JObject)primJson["attributes"]!;

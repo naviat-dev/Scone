@@ -105,7 +105,7 @@ public sealed partial class MainPage : Page
 		catch { /* Ignore errors loading config */ }
 	}
 
-	private void SaveConfig()
+	private static void SaveConfig()
 	{
 		try
 		{
@@ -126,7 +126,7 @@ public sealed partial class MainPage : Page
 
 		// Show the overlay dialog
 		AddTaskOverlay.Visibility = Visibility.Visible;
-        _ = FolderPathInput.Focus(FocusState.Programmatic);
+		_ = FolderPathInput.Focus(FocusState.Programmatic);
 	}
 
 	private async void BrowseButton_Click(object sender, RoutedEventArgs e)
@@ -264,7 +264,7 @@ public sealed partial class MainPage : Page
 			XamlRoot = XamlRoot
 		};
 
-        _ = await dialog.ShowAsync();
+		_ = await dialog.ShowAsync();
 	}
 
 	private async void StartDownloadTask(DownloadTask task)

@@ -2,8 +2,8 @@ namespace Scone;
 
 public partial class App : Application
 {
-	public static readonly string TempPath = Path.GetTempPath() + "scone";
-	public static readonly string StorePath = ApplicationData.Current.LocalFolder.Path;
+	public static readonly string TempPath = Path.Combine(Path.GetTempPath(), "scone");
+	public static readonly string StorePath = Path.Combine(ApplicationData.Current.LocalFolder.Path, "scone");
 	public static readonly string ConfigPath = Path.Combine(StorePath, "config.json");
 	public static Config AppConfig = new();
 	/// <summary>
@@ -14,22 +14,30 @@ public partial class App : Application
 	{
 		if (!Directory.Exists(TempPath))
 		{
-            _ = Directory.CreateDirectory(TempPath);
+			_ = Directory.CreateDirectory(TempPath);
 		}
 		if (!Directory.Exists(StorePath))
 		{
-            _ = Directory.CreateDirectory(StorePath);
+			_ = Directory.CreateDirectory(StorePath);
 		}
-		/* if (File.Exists(ConfigPath))
+		if (File.Exists(ConfigPath))
 		{
-			string json = File.ReadAllText(ConfigPath);
-			// AppConfig = System.Text.Json.JsonSerializer.Deserialize<Config>(json);
+			try
+			{
+				string json = File.ReadAllText(ConfigPath);
+				AppConfig = System.Text.Json.JsonSerializer.Deserialize<Config>(json);
+			}
+			catch (Exception ex)
+			{
+				Logger.Error($"Failed to load config: {ex}");
+				AppConfig = new();
+			}
 		}
 		Suspending += static (s, e) =>
 		{
 			// Save config on exit
 			File.WriteAllText(ConfigPath, System.Text.Json.JsonSerializer.Serialize(AppConfig));
-		}; */
+		};
 		InitializeComponent();
 	}
 
@@ -74,7 +82,7 @@ public partial class App : Application
 	/// </summary>
 	/// <param name="sender">The Frame which failed navigation</param>
 	/// <param name="e">Details about the navigation failure</param>
-	void OnNavigationFailed(object sender, NavigationFailedEventArgs e)
+	private void OnNavigationFailed(object sender, NavigationFailedEventArgs e)
 	{
 		throw new InvalidOperationException($"Failed to load {e.SourcePageType.FullName}: {e.Exception}");
 	}
