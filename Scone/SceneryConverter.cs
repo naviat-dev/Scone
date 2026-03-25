@@ -218,7 +218,6 @@ public class SceneryConverter : INotifyPropertyChanged
 					ushort paintedLineCt = br.ReadUInt16();
 					ushort paintedPolygonCt = br.ReadUInt16();
 					ushort paintedHatchedAreaCt = br.ReadUInt16();
-					Console.WriteLine($"stream position before airport records: 0x{br.BaseStream.Position:X}");
 					uint airportBytesRead = 0x44; // Start with 0x44 bytes we've already read
 
 					while (airportBytesRead < size)
