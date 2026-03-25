@@ -1758,7 +1758,6 @@ public class SceneryConverter : INotifyPropertyChanged
 			{
 				continue;
 			}
-			List<ModelObject> modelObjects = [];
 			// Enter this model and get LOD info, GLB files, and mesh data
 			for (int i = 8; i < mdlBytes.Length; i += 4)
 			{
@@ -1883,10 +1882,6 @@ public class SceneryConverter : INotifyPropertyChanged
 					// Advance i past the GLBD chunk payload
 					i += size;
 				}
-			}
-			if (modelObjects.Count == 0)
-			{
-				continue;
 			}
 			if (AbortAndSave)
 			{
@@ -3145,22 +3140,6 @@ public class SceneryConverter : INotifyPropertyChanged
 	{
 		public string name;
 		public int minSize;
-	}
-
-	private struct ModelObject
-	{
-		public string name;
-		public int minSize;
-		public SceneBuilder model;
-		public float radius;
-	}
-
-	private struct ModelData
-	{
-		public Guid guid;
-		public string name;
-		public List<ModelObject> modelObjects;
-		public List<LightObject> lightObjects;
 	}
 
 	public struct ModelReference
