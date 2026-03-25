@@ -19,7 +19,7 @@ public class GlbBuilder
 		public int[] Indices { get; set; } = [];
 	}
 
-	static int ComponentSize(int componentType)
+	private static int ComponentSize(int componentType)
 	{
 		return componentType switch
 		{
@@ -32,7 +32,7 @@ public class GlbBuilder
 			_ => throw new Exception("Unknown componentType")
 		};
 	}
-	static int ComponentCount(string type)
+	private static int ComponentCount(string type)
 	{
 		return type switch
 		{

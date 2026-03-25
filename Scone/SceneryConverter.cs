@@ -32,13 +32,12 @@ public class SceneryConverter : INotifyPropertyChanged
 	private int totalModelCount = 0;
 
 	// Track which GUIDs have models
-	HashSet<Guid> guidsWithModels = [];
-	Dictionary<int, List<ModelReference>> modelReferencesByTile = [];
-	Dictionary<Guid, List<LibraryObject>> libraryObjects = [];
-	Dictionary<string, List<SimObject>> simObjects = [];
-	Dictionary<int, Dictionary<string, SimObject>> simObjectsByTile = [];
-	List<Airport> airports = [];
-	private static readonly Matrix4x4 FlipZMatrix = Matrix4x4.CreateScale(1f, 1f, -1f);
+	private HashSet<Guid> guidsWithModels = [];
+	private Dictionary<int, List<ModelReference>> modelReferencesByTile = [];
+	private Dictionary<Guid, List<LibraryObject>> libraryObjects = [];
+	private Dictionary<string, List<SimObject>> simObjects = [];
+	private Dictionary<int, Dictionary<string, SimObject>> simObjectsByTile = [];
+	private List<Airport> airports = [];
 
 	public void ConvertScenery(string inputPath, string outputPath, bool isGltf, bool isAc3d)
 	{
@@ -1124,7 +1123,6 @@ public class SceneryConverter : INotifyPropertyChanged
 
 		totalModelCount = modelReferencesByTile.Values.Sum(l => l.Count) + simObjectsByTile.Values.Sum(l => l.Count);
 		int[] simObjectOnlyTileIndices = [.. simObjectsByTile.Where(kvp => !modelReferencesByTile.ContainsKey(kvp.Key)).Select(kvp => kvp.Key)];
-		if (isGltf && isAc3d) totalModelCount *= 2;
 		Logger.Info($"Found {totalModelCount} models");
 		if (totalModelCount == 0)
 		{
@@ -1145,12 +1143,10 @@ public class SceneryConverter : INotifyPropertyChanged
 				(float)(libraryObjectsForTile.Count > 0 ? libraryObjectsForTile.Sum(lo => lo.longitude) / libraryObjectsForTile.Count : 0.0),
 				(float)(libraryObjectsForTile.Count > 0 ? libraryObjectsForTile.Sum(lo => lo.altitude) / libraryObjectsForTile.Count : 0.0)
 			);
-			SceneBuilder tileSceneGltf = new();
-			AcBuilder tileSceneAc = new();
+			SceneBuilder tileSceneGltf = ConvertSceneryGltf(inputPath, outputPath, kvp, center);
+
 			if (isGltf)
 			{
-				tileSceneGltf = ConvertSceneryGltf(inputPath, outputPath, kvp, center);
-
 				// Add in SimObjects here, and detect jetways to add in their drivers as well
 				foreach (SimObject simObj in simObjectsForTile)
 				{
@@ -1395,7 +1391,7 @@ public class SceneryConverter : INotifyPropertyChanged
 											new XElement("x-m", mainHandleStartPos.X.ToString(CultureInfo.InvariantCulture)),
 											new XElement("y-m", mainHandleStartPos.Y.ToString(CultureInfo.InvariantCulture)),
 											new XElement("z-m", mainHandleStartPos.Z.ToString(CultureInfo.InvariantCulture))))));
-								
+
 								animations.AddRange(jetwayDriverAnimation);
 							}
 						}
@@ -1407,10 +1403,6 @@ public class SceneryConverter : INotifyPropertyChanged
 					}
 				}
 			}
-			if (isAc3d)
-			{
-				tileSceneAc = ConvertSceneryAc3d(inputPath, outputPath, kvp, center);
-			}
 			(double lat, double lon) = Terrain.GetLatLon(tileIndex);
 			string lonHemi = lon >= 0 ? "e" : "w";
 			string latHemi = lat >= 0 ? "n" : "s";
@@ -1420,31 +1412,43 @@ public class SceneryConverter : INotifyPropertyChanged
 				_ = Directory.CreateDirectory(path);
 			}
 
-			if (isAc3d)
+			bool needsGltfArtifact = isGltf || isAc3d;
+			string? gltfFilePath = null;
+			if (needsGltfArtifact)
 			{
-				string outAcPath = Path.Combine(path, $"{tileIndex}.ac");
-				if (tileSceneAc.Objects.Count == 0)
-				{
-					Logger.Info($"Tile {tileIndex} produced no geometry for AC3D export; skipping file generation.");
-				}
-				else
-				{
-					Status = "Saving model to disk...";
-					tileSceneAc.WriteToFile(outAcPath);
-				}
-			}
-
-			if (isGltf)
-			{
-				string outGlbPath = Path.Combine(path, $"{tileIndex}.gltf");
-				Status = "Saving model to disk...";
-				tileSceneGltf.ToGltf2().SaveGLTF(outGlbPath, new WriteSettings
+				gltfFilePath = Path.Combine(path, $"{tileIndex}.gltf");
+				Status = "Saving glTF to disk...";
+				tileSceneGltf.ToGltf2().SaveGLTF(gltfFilePath, new WriteSettings
 				{
 					ImageWriting = ResourceWriteMode.SatelliteFile,
 					// This name doesn't matter; we will fix up the URIs in the postprocessor
 					ImageWriteCallback = (context, assetName, image) => { return ""; },
 					JsonPostprocessor = (json) => JsonPostprocessor(json, path)
 				});
+			}
+
+			if (isAc3d && gltfFilePath != null)
+			{
+				(AcBuilder builder, List<string> bufferFiles) = BuildAcSceneFromGltf(gltfFilePath);
+				builder.WorldName = $"Tile_{tileIndex}";
+				string outAcPath = Path.Combine(path, $"{tileIndex}.ac");
+				if (builder.Objects.Count == 0)
+				{
+					Logger.Info($"Tile {tileIndex} produced no geometry for AC3D export; skipping file generation.");
+				}
+				else
+				{
+					Status = "Saving AC3D model to disk...";
+					builder.WriteToFile(outAcPath);
+				}
+				if (!isGltf)
+				{
+					File.Delete(gltfFilePath);
+					foreach (string bufferFile in bufferFiles)
+					{
+						File.Delete(bufferFile);
+					}
+				}
 			}
 
 			bool hasXml = (isGltf && isAc3d) || animations.Count > 0;
@@ -1454,11 +1458,11 @@ public class SceneryConverter : INotifyPropertyChanged
 			{
 				XDocument doc = new(
 				new XElement("PropertyList",
-					/* new XElement("model",
-						new XElement("name", $"ac-{tileIndex}"),
-						new XElement("path", $"{tileIndex}.ac")),
-					new XElement("model",
-						new XElement("name", $"gltf-{tileIndex}"), */
+						/* new XElement("model",
+							new XElement("name", $"ac-{tileIndex}"),
+							new XElement("path", $"{tileIndex}.ac")),
+						new XElement("model",
+							new XElement("name", $"gltf-{tileIndex}"), */
 						new XElement("path", $"{tileIndex}.gltf"),
 					/* new XElement("animation",
 						new XElement("object-name", $"ac-{tileIndex}"),
@@ -1912,179 +1916,6 @@ public class SceneryConverter : INotifyPropertyChanged
 		return scene;
 	}
 
-	public AcBuilder ConvertSceneryAc3d(string inputPath, string outputPath, KeyValuePair<int, List<ModelReference>> kvp, Vector3 center)
-	{
-		int tileIndex = kvp.Key;
-		List<ModelReference> modelRefs = [.. kvp.Value.OrderByDescending(mr => mr.size)];
-		AcBuilder tileScene = new()
-		{
-			WorldName = $"Tile_{tileIndex}"
-		};
-		double latOrigin = center.X;
-		double lonOrigin = center.Y;
-		double altOrigin = center.Z;
-		foreach (ModelReference modelRef in modelRefs)
-		{
-			if (AbortAndCancel)
-			{
-				Logger.Info("Conversion aborted by user.");
-				return tileScene;
-			}
-			modelsProcessed++;
-			List<LibraryObject> libraryObjectsForModel = libraryObjects.TryGetValue(modelRef.guid, out List<LibraryObject>? value) ? value : [];
-			BinaryReader brModel = new(new FileStream(modelRef.file, FileMode.Open, FileAccess.Read));
-			_ = brModel.BaseStream.Seek(modelRef.offset, SeekOrigin.Begin);
-			byte[] mdlBytes = brModel.ReadBytes(modelRef.size);
-			Logger.Debug($"Model reference: {modelRef.file} at offset 0x{modelRef.offset:X} size {modelRef.size} guid {modelRef.guid}");
-			string name = "";
-			List<LodData> lods = [];
-			List<LightObject> lightObjects = [];
-			string chunkID = Encoding.ASCII.GetString(mdlBytes, 0, Math.Min(4, mdlBytes.Length));
-			if (chunkID != "RIFF")
-			{
-				continue;
-			}
-			// Enter this model and get LOD info, GLB files, and mesh data
-			for (int i = 8; i < mdlBytes.Length; i += 4)
-			{
-				string chunk = Encoding.ASCII.GetString(mdlBytes, i, Math.Min(4, mdlBytes.Length - i));
-				if (chunk == "GXML")
-				{
-					int size = BitConverter.ToInt32(mdlBytes, i + 4);
-					string gxmlContent = Encoding.UTF8.GetString(mdlBytes, i + 8, size);
-					try
-					{
-						XmlDocument xmlDoc = new();
-						xmlDoc.LoadXml(gxmlContent);
-						name = xmlDoc.GetElementsByTagName("ModelInfo")[0]?.Attributes?["name"]?.Value.Replace(".gltf", "").Replace(" ", "_") ?? "Unnamed_Model";
-						XmlNodeList lodNodes = xmlDoc.GetElementsByTagName("LOD");
-						foreach (XmlNode lodNode in lodNodes)
-						{
-							string lodObjName = lodNode?.Attributes?["ModelFile"]?.Value.Replace(".gltf", "") ?? "Unnamed";
-							int minSize = 0;
-							try
-							{
-								minSize = int.Parse(lodNode?.Attributes?["minSize"]?.Value ?? "0");
-							}
-							catch (FormatException)
-							{
-								continue;
-							}
-							if (lodObjName != "Unnamed")
-							{
-								lods.Add(new LodData
-								{
-									name = lodObjName,
-									minSize = minSize
-								});
-							}
-						}
-					}
-					catch (XmlException)
-					{
-						Logger.Warning($"Failed to parse GXML for model {modelRef.guid:X}");
-					}
-					i += size;
-				}
-				else if (chunk == "GLBD")
-				{
-					Logger.Info($"Processing GLBD chunk for model {name} ({modelRef.guid:X}) in {modelRef.file}");
-					Status = $"Processing model {name} ({modelsProcessed} of {totalModelCount})...";
-					int size = BitConverter.ToInt32(mdlBytes, i + 4);
-					int glbIndex = 0; // for unique filenames per GLB in this chunk
-
-					// Scan GLBD payload and skip past each GLB block once processed
-					for (int j = i + 8; j < i + 8 + size;)
-					{
-						// Ensure there are at least 8 bytes for type + size
-						if (j + 8 > mdlBytes.Length) break;
-
-						string sig = Encoding.ASCII.GetString(mdlBytes, j, Math.Min(4, mdlBytes.Length - j));
-						if (sig == "GLB\0")
-						{
-							int glbSize = BitConverter.ToInt32(mdlBytes, j + 4);
-							// byte[] glbBytesPre = br.ReadBytes(glbSize);
-							byte[] glbBytes = mdlBytes[(j + 8)..(j + 8 + glbSize)];
-
-							// Fill the end of the JSON chunk with spaces, and replace non-printable characters with spaces.
-							uint JSONLength = BitConverter.ToUInt32(glbBytes, 0x0C);
-							for (int k = 0x14; k < 0x14 + JSONLength; k++)
-							{
-								if (glbBytes[k] < 0x20 || glbBytes[k] > 0x7E)
-								{
-									glbBytes[k] = 0x20;
-								}
-							}
-
-							JObject json = JObject.Parse(Encoding.UTF8.GetString(glbBytes, 0x14, (int)JSONLength).Trim());
-							JArray meshes = (JArray)json["meshes"]! ?? [];
-							JArray accessors = (JArray)json["accessors"]! ?? [];
-							JArray bufferViews = (JArray)json["bufferViews"]! ?? [];
-							JArray images = (JArray)json["images"]! ?? [];
-							JArray materials = (JArray)json["materials"]! ?? [];
-							JArray textures = (JArray)json["textures"]! ?? [];
-
-							if (bufferViews.Count == 0 || accessors.Count == 0 || meshes.Count == 0)
-							{
-								Logger.Info($"GLB in model {name} ({modelRef.guid:X}) has no mesh data; skipping.");
-								// Advance j past this GLB record (type[4] + size[4] + payload[glbSize])
-								j += 8 + glbSize;
-								continue;
-							}
-
-							uint binLength = BitConverter.ToUInt32(glbBytes, 0x14 + (int)JSONLength);
-							byte[] glbBinBytes = glbBytes[(0x14 + (int)JSONLength + 8)..(0x14 + (int)JSONLength + 8 + (int)binLength)];
-
-							AcBuilder sceneLocal = CreateAcModelFromGlb(glbBytes, inputPath, modelRef.file);
-							if (!sceneLocal.Objects.Any())
-							{
-								continue;
-							}
-
-							// Write GLB with unique filename (include index to avoid overwrites)
-							string safeName = name;
-							string outName = glbIndex < lods.Count ? lods[glbIndex].name : $"{safeName}_glb{glbIndex}";
-							foreach (LibraryObject libObj in libraryObjectsForModel)
-							{
-								if (Terrain.GetTileIndex(libObj.latitude, libObj.longitude) != tileIndex)
-								{
-									continue;
-								}
-								Matrix4x4 gltfTransform = CreatePlacementTransform(libObj, latOrigin, lonOrigin, altOrigin);
-								Matrix4x4 acTransform = ConvertToAcTransform(gltfTransform);
-								tileScene.Merge(sceneLocal, acTransform);
-							}
-							glbIndex++;
-
-							// Advance j past this GLB record (type[4] + size[4] + payload[glbSize])
-							j += 8 + glbSize;
-							if (glbIndex >= 1)
-							{
-								Logger.Info($"More than one LOD present for {name}; skipping remaining GLB in chunk.");
-								// The highest LOD is the first GLB; break after processing it
-								break;
-							}
-						}
-						else
-						{
-							// Not a GLB block; advance reasonably (try to skip unknown 8-byte header or 4-byte step)
-							// Prefer 4-byte alignment advance to find next signature
-							j += 4;
-						}
-					}
-
-					// Advance i past the GLBD chunk payload
-					i += size;
-				}
-			}
-			if (AbortAndSave)
-			{
-				Logger.Info("Conversion aborted by user; saving progress.");
-				break;
-			}
-		}
-		return tileScene;
-	}
 
 	private static SceneBuilder CreateGltfModelFromGltf(byte[] glbBinBytes, JObject json, string inputPath, string file)
 	{
@@ -2179,29 +2010,79 @@ public class SceneryConverter : INotifyPropertyChanged
 		return CreateGltfModelFromGltf(glbBinBytes, json, inputPath, file);
 	}
 
-	private static AcBuilder CreateAcModelFromGltf(byte[] glbBinBytes, JObject json, string inputPath, string file)
+	private static (AcBuilder builder, List<string> bufferFiles) BuildAcSceneFromGltf(string gltfFilePath)
 	{
-		return AcBuilder.FromGltf(glbBinBytes, json, inputPath, file);
-	}
-
-	private static AcBuilder CreateAcModelFromGlb(byte[] glbBytes, string inputPath, string file)
-	{
-		// Fill the end of the JSON chunk with spaces, and replace non-printable characters with spaces.
-		uint JSONLength = BitConverter.ToUInt32(glbBytes, 0x0C);
-		for (int k = 0x14; k < 0x14 + JSONLength; k++)
+		if (!File.Exists(gltfFilePath))
 		{
-			if (glbBytes[k] < 0x20 || glbBytes[k] > 0x7E)
+			throw new FileNotFoundException($"glTF file not found: {gltfFilePath}", gltfFilePath);
+		}
+
+		string assetRoot = Path.GetDirectoryName(gltfFilePath) ?? Directory.GetCurrentDirectory();
+		JObject json = JObject.Parse(File.ReadAllText(gltfFilePath));
+		JArray bufferArray = (JArray?)json["buffers"] ?? [];
+		List<string> bufferFiles = [];
+		byte[] combinedBuffer = [];
+
+		if (bufferArray.Count > 0)
+		{
+			Dictionary<int, int> bufferOffsets = [];
+			using MemoryStream bufferStream = new();
+			for (int i = 0; i < bufferArray.Count; i++)
 			{
-				glbBytes[k] = 0x20;
+				JObject buffer = (JObject)bufferArray[i]!;
+				string? uri = buffer["uri"]?.Value<string>();
+				byte[] bufferBytes;
+				if (string.IsNullOrWhiteSpace(uri))
+				{
+					bufferBytes = [];
+				}
+				else if (uri.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+				{
+					int commaIndex = uri.IndexOf(',');
+					if (commaIndex < 0)
+					{
+						bufferBytes = [];
+					}
+					else
+					{
+						string base64 = uri[(commaIndex + 1)..];
+						bufferBytes = Convert.FromBase64String(base64);
+					}
+				}
+				else
+				{
+					string absolutePath = Path.GetFullPath(Path.Combine(assetRoot, uri));
+					if (!File.Exists(absolutePath))
+					{
+						throw new FileNotFoundException($"glTF buffer missing: {absolutePath}", absolutePath);
+					}
+					bufferFiles.Add(absolutePath);
+					bufferBytes = File.ReadAllBytes(absolutePath);
+				}
+
+				bufferOffsets[i] = (int)bufferStream.Length;
+				bufferStream.Write(bufferBytes, 0, bufferBytes.Length);
+			}
+
+			combinedBuffer = bufferStream.ToArray();
+
+			if (json["bufferViews"] is JArray bufferViews && bufferArray.Count > 1)
+			{
+				foreach (JObject view in bufferViews.OfType<JObject>())
+				{
+					int bufferIndex = view["buffer"]?.Value<int>() ?? 0;
+					int baseOffset = bufferOffsets.TryGetValue(bufferIndex, out int offset) ? offset : 0;
+					int viewOffset = view["byteOffset"]?.Value<int>() ?? 0;
+					view["byteOffset"] = baseOffset + viewOffset;
+					view["buffer"] = 0;
+				}
 			}
 		}
 
-		uint binLength = BitConverter.ToUInt32(glbBytes, 0x14 + (int)JSONLength);
-		byte[] glbBinBytes = glbBytes[(0x14 + (int)JSONLength + 8)..(0x14 + (int)JSONLength + 8 + (int)binLength)];
-		JObject json = JObject.Parse(Encoding.UTF8.GetString(glbBytes, 0x14, (int)JSONLength).Trim());
-
-		return CreateAcModelFromGltf(glbBinBytes, json, inputPath, file);
+		AcBuilder builder = AcBuilder.FromGltf(combinedBuffer, json, assetRoot, gltfFilePath);
+		return (builder, bufferFiles);
 	}
+
 
 	private static XmlNode CreateLightElement(XmlDocument doc, LightObject light)
 	{
@@ -2371,12 +2252,6 @@ public class SceneryConverter : INotifyPropertyChanged
 		}
 	}
 
-	private static Matrix4x4 ConvertToAcTransform(Matrix4x4 gltfTransform)
-	{
-		Matrix4x4 temp = Matrix4x4.Multiply(FlipZMatrix, gltfTransform);
-		return Matrix4x4.Multiply(temp, FlipZMatrix);
-	}
-
 	private static LibraryObject BuildLibraryObject(byte[] bytes)
 	{
 		double longitude = (BitConverter.ToInt32(bytes, 4) * (360.0 / 805306368.0)) - 180.0;
@@ -2538,7 +2413,7 @@ public class SceneryConverter : INotifyPropertyChanged
 		public double altitude;
 	}
 
-	enum Designator
+	private enum Designator
 	{
 		None,
 		Left,
@@ -2549,7 +2424,7 @@ public class SceneryConverter : INotifyPropertyChanged
 		B
 	}
 
-	enum Surface
+	private enum Surface
 	{
 		Concrete,
 		Grass,
@@ -2575,7 +2450,7 @@ public class SceneryConverter : INotifyPropertyChanged
 		UseFs20ApronMaterial = 0xff03
 	}
 
-	enum RunwayMarkingType
+	private enum RunwayMarkingType
 	{
 		Edges,
 		Threshold,
@@ -2598,7 +2473,7 @@ public class SceneryConverter : INotifyPropertyChanged
 		NoThresholdEndArrows
 	}
 
-	enum RunwayLightType
+	private enum RunwayLightType
 	{
 		EdgeNone,
 		EdgeLowIntensity,
@@ -2611,7 +2486,7 @@ public class SceneryConverter : INotifyPropertyChanged
 		CenterRed
 	}
 
-	enum RunwayPatternType
+	private enum RunwayPatternType
 	{
 		PrimaryTakeoff,
 		PrimaryLanding,
@@ -2621,7 +2496,7 @@ public class SceneryConverter : INotifyPropertyChanged
 		SecondaryPattern
 	}
 
-	enum VasiChildType
+	private enum VasiChildType
 	{
 		PrimaryLeft,
 		PrimaryRight,
@@ -2629,7 +2504,7 @@ public class SceneryConverter : INotifyPropertyChanged
 		SecondaryRight
 	}
 
-	enum VasiType
+	private enum VasiType
 	{
 		Vasi21,
 		Vasi31,
@@ -2679,7 +2554,7 @@ public class SceneryConverter : INotifyPropertyChanged
 		public double width;
 	}
 
-	enum ApproachLightType
+	private enum ApproachLightType
 	{
 		None,
 		ODALS,
@@ -2751,7 +2626,7 @@ public class SceneryConverter : INotifyPropertyChanged
 		public FacilityMaterial facilityMaterial;
 	}
 
-	enum RunwayStartType
+	private enum RunwayStartType
 	{
 		Runway,
 		Water,
@@ -2769,7 +2644,7 @@ public class SceneryConverter : INotifyPropertyChanged
 		public RunwayStartType type;
 	}
 
-	enum TaxiPointType
+	private enum TaxiPointType
 	{
 		Unknown = 0,
 		Normal,
@@ -2779,7 +2654,7 @@ public class SceneryConverter : INotifyPropertyChanged
 		IlsHoldShortNoDraw,
 	}
 
-	enum TaxiPointOrientation
+	private enum TaxiPointOrientation
 	{
 		Foward = 0,
 		Reverse
@@ -2793,7 +2668,7 @@ public class SceneryConverter : INotifyPropertyChanged
 		public TaxiPointOrientation orientation;
 	}
 
-	enum ParkingName
+	private enum ParkingName
 	{
 		None,
 		Parking,
@@ -2835,7 +2710,7 @@ public class SceneryConverter : INotifyPropertyChanged
 		GateZ
 	}
 
-	enum ParkingPushback
+	private enum ParkingPushback
 	{
 		None,
 		Left,
@@ -2843,7 +2718,7 @@ public class SceneryConverter : INotifyPropertyChanged
 		Both
 	}
 
-	enum ParkingType
+	private enum ParkingType
 	{
 		None,
 		RampGa,
@@ -2885,7 +2760,7 @@ public class SceneryConverter : INotifyPropertyChanged
 		public double numberHeading;
 	}
 
-	enum TaxiwayPathMaterialType
+	private enum TaxiwayPathMaterialType
 	{
 		BaseTiled,
 		Border,
@@ -2904,7 +2779,7 @@ public class SceneryConverter : INotifyPropertyChanged
 		public float falloff;
 	}
 
-	enum TaxiwayPathType
+	private enum TaxiwayPathType
 	{
 		Unknown,
 		Taxi,
@@ -2916,7 +2791,7 @@ public class SceneryConverter : INotifyPropertyChanged
 		Road
 	}
 
-	enum TaxiwayEdgeType
+	private enum TaxiwayEdgeType
 	{
 		None,
 		Solid,
@@ -2983,7 +2858,7 @@ public class SceneryConverter : INotifyPropertyChanged
 		public string label;
 	}
 
-	enum PaintedLineType
+	private enum PaintedLineType
 	{
 		Default,
 		HoldShortForward,
@@ -3029,7 +2904,7 @@ public class SceneryConverter : INotifyPropertyChanged
 		EnhancedCenterLighted
 	}
 
-	enum PaintedLineTrueAngle
+	private enum PaintedLineTrueAngle
 	{
 		None,
 		Begin,
@@ -3073,7 +2948,7 @@ public class SceneryConverter : INotifyPropertyChanged
 		public float length;
 	}
 
-	enum LegType
+	private enum LegType
 	{
 		Af,
 		Ca,
@@ -3100,7 +2975,7 @@ public class SceneryConverter : INotifyPropertyChanged
 		Vr
 	}
 
-	enum AltitudeDescriptor
+	private enum AltitudeDescriptor
 	{
 		Empty,
 		A,
@@ -3115,7 +2990,7 @@ public class SceneryConverter : INotifyPropertyChanged
 		V
 	}
 
-	enum TurnDirection
+	private enum TurnDirection
 	{
 		Null,
 		Left,
@@ -3123,7 +2998,7 @@ public class SceneryConverter : INotifyPropertyChanged
 		Either
 	}
 
-	enum ApproachType
+	private enum ApproachType
 	{
 		Unknown,
 		Gps,
@@ -3139,7 +3014,7 @@ public class SceneryConverter : INotifyPropertyChanged
 		LocalizerBackcourse
 	}
 
-	enum FixType
+	private enum FixType
 	{
 		Unknown,
 		Airport,
@@ -3208,7 +3083,7 @@ public class SceneryConverter : INotifyPropertyChanged
 		public List<Vector3> edges; // radius, vertex1, vertex2
 	}
 
-	enum HelipadType
+	private enum HelipadType
 	{
 		None,
 		H,

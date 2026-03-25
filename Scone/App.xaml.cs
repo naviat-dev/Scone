@@ -14,11 +14,11 @@ public partial class App : Application
 	{
 		if (!Directory.Exists(TempPath))
 		{
-            _ = Directory.CreateDirectory(TempPath);
+			_ = Directory.CreateDirectory(TempPath);
 		}
 		if (!Directory.Exists(StorePath))
 		{
-            _ = Directory.CreateDirectory(StorePath);
+			_ = Directory.CreateDirectory(StorePath);
 		}
 		if (File.Exists(ConfigPath))
 		{
@@ -74,7 +74,7 @@ public partial class App : Application
 	/// </summary>
 	/// <param name="sender">The Frame which failed navigation</param>
 	/// <param name="e">Details about the navigation failure</param>
-	void OnNavigationFailed(object sender, NavigationFailedEventArgs e)
+	private void OnNavigationFailed(object sender, NavigationFailedEventArgs e)
 	{
 		throw new InvalidOperationException($"Failed to load {e.SourcePageType.FullName}: {e.Exception}");
 	}

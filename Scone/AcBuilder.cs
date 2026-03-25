@@ -659,7 +659,7 @@ public sealed class AcBuilder
 		int bufferViewIndex = accessor["bufferView"]!.Value<int>();
 		if (bufferViewIndex < 0 || bufferViewIndex >= bufferViews.Count)
 		{
-			return Array.Empty<Vector3>();
+			return [];
 		}
 		JObject bufferView = (JObject)bufferViews[bufferViewIndex]!;
 		int accessorByteOffset = accessor["byteOffset"]?.Value<int>() ?? 0;
@@ -685,7 +685,7 @@ public sealed class AcBuilder
 		int bufferViewIndex = accessor["bufferView"]!.Value<int>();
 		if (bufferViewIndex < 0 || bufferViewIndex >= bufferViews.Count)
 		{
-			return Array.Empty<int>();
+			return [];
 		}
 		JObject bufferView = (JObject)bufferViews[bufferViewIndex]!;
 		int accessorByteOffset = accessor["byteOffset"]?.Value<int>() ?? 0;
@@ -714,7 +714,7 @@ public sealed class AcBuilder
 		int bufferViewIndex = accessor["bufferView"]!.Value<int>();
 		if (bufferViewIndex < 0 || bufferViewIndex >= bufferViews.Count)
 		{
-			return Array.Empty<Vector2>();
+			return [];
 		}
 		JObject bufferView = (JObject)bufferViews[bufferViewIndex]!;
 		int accessorByteOffset = accessor["byteOffset"]?.Value<int>() ?? 0;
@@ -880,9 +880,9 @@ public sealed class AcBuilder
 
 	private sealed class PrimData
 	{
-		public Vector3[] Positions { get; set; } = Array.Empty<Vector3>();
-		public int[] Indices { get; set; } = Array.Empty<int>();
-		public Vector2[] TexCoords0 { get; set; } = Array.Empty<Vector2>();
+		public Vector3[] Positions { get; set; } = [];
+		public int[] Indices { get; set; } = [];
+		public Vector2[] TexCoords0 { get; set; } = [];
 	}
 
 	public sealed class AcMeshObject
