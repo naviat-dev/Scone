@@ -25,7 +25,7 @@ Scone turns Microsoft Flight Simulator (MSFS) scenery packages into addons that 
 1. Hit the **+** floating button.
 2. **Scenery Folder Path** – browse to the root folder you prepared.
 3. **Task Name** – optional; defaults to the folder name.
-4. **Output Format** – toggle **glTF** and/or **AC3D**. You can export both simultaneously.
+4. **Output Format** – toggle **glTF** or **AC3D**.
 5. Click **Add Task** to queue it.
 
 Tasks appear as cards showing status, current step, and cancellation options.
