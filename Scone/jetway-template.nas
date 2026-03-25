@@ -1,4 +1,4 @@
-# Absoulte center of the current jetway
+# Absolute center of the current jetway
 # The property that the jetway is tied to will be a function of these coordinates
 # These are the only things that should change throughout this script
 # NOTE: jetways face 270 degrees by default, so ensure to add 270 degrees to the heading before calculations
@@ -17,7 +17,7 @@ var jetwayPropNode = "scone/jetway-" ~ jetwayId;
 # Initial position of the aircraft
 var longitude = getprop("position/longitude-deg");
 var latitude = getprop("position/latitude-deg");
-var altitude = getprop("position/altitude-ft");
+var altitude-m = getprop("position/altitude-ft") * 0.3048;
 var heading = getprop("orientation/heading-deg");
 
 # List of doors defined on the aircraft
@@ -43,7 +43,7 @@ for (var i = 0; i < size(doors); i+=1) {
 	var door = doors[i];
 	var doorLongitude = longitude + (door[0] / (111320 * math.cos(latitude * 3.141592653589793 / 180)));
 	var doorLatitude = latitude + (door[1] / 110540);
-	var doorAltitude = altitude + door[2];
+	var doorAltitude = altitude-m + door[2];
 	doors[i] = [doorLongitude, doorLatitude, doorAltitude];
 }
 
@@ -56,37 +56,24 @@ for (var i = 0; i < size(doors); i+=1) {
 	# Actually calculate the distance the jetway would have to extend to reach the door
 	var R = 6371000; # Earth radius in meters
 
-	# convert to radians
-	var phi1 = latitude * math.pi / 180;
-	var lambda1 = longitude * math.pi / 180;
-	var theta  = heading * math.pi / 180;
+	# Use haversine formula for horizontal distance in meters
+	var phi1 = jetwayLatitude * math.pi / 180;
+	var phi2 = door[1] * math.pi / 180;
+	var deltaPhi = (door[1] - jetwayLatitude) * math.pi / 180;
+	var deltaLambda = (door[0] - jetwayLongitude) * math.pi / 180;
 
-	var delta = distSecondaryHandle / R; # angular distance
+	var a = math.sin(deltaPhi / 2) * math.sin(deltaPhi / 2) +
+	math.cos(phi1) * math.cos(phi2) *
+	math.sin(deltaLambda / 2) * math.sin(deltaLambda / 2);
+	var c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a));
+	var horizontalDistance = R * c;
 
-	var sinPhi1 = math.sin(phi1);
-	var cosPhi1 = math.cos(phi1);
-	var sinDelta = math.sin(delta);
-	var cosDelta = math.cos(delta);
-
-	var phi2 = math.asin(
-		sinPhi1 * cosDelta +
-		cosPhi1 * sinDelta * math.cos(theta)
-	);
-
-	var lambda2 = lambda1 + math.atan2(
-		math.sin(theta) * sinDelta * cosPhi1,
-		cosDelta - sinPhi1 * math.sin(phi2)
-	);
-
-	# convert back to degrees
-	var lat2 = phi2 * 180 / math.pi;
-	var lon2 = (math.mod((lambda2 * 180 / math.pi) + 540, 360)) - 180;
-
-	var distance = math.sqrt(math.pow(door[0] - jetwayLongitude, 2) + math.pow(door[1] - jetwayLatitude, 2) + math.pow(door[2] - jetwayAltitude, 2));
+	# Combine horizontal distance with vertical distance
+	var distance = math.sqrt(math.pow(horizontalDistance, 2) + math.pow(door[2] - jetwayAltitude, 2));
 	if (distance < closestDoorDistance) {
 		closestDoorDistance = distance;
 		closestDoorIndex = i;
-		closestDoorPivotPoint = [lon2, lat2, jetwayAltitude];
+		closestDoorPivotPoint = [door[0], door[1], jetwayAltitude];
 	}
 }
 
