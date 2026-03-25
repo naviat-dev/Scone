@@ -947,7 +947,7 @@ public class SceneryConverter : INotifyPropertyChanged
 		}
 
 		// Dump SimObjects to a folder for debugging
-		foreach (KeyValuePair<int, Dictionary<string, SimObject>> kvp in simObjectsByTile)
+		/* foreach (KeyValuePair<int, Dictionary<string, SimObject>> kvp in simObjectsByTile)
 		{
 			foreach (KeyValuePair<string, SimObject> kvp2 in kvp.Value)
 			{
@@ -1016,8 +1016,8 @@ public class SceneryConverter : INotifyPropertyChanged
 					continue;
 				}
 			}
-		}
-
+		}*/
+		
 		// Models need to be written combined on a tile-by-tile basis to minimize RAM consumption
 		// We have all the placements and their GUIDs, so run through the model BGLs and create a Dictionary
 		// The key will be the tile index, and the value will be a list of access points of models (file, binary address, size)
