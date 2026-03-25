@@ -1302,7 +1302,7 @@ public class SceneryConverter : INotifyPropertyChanged
 								long latLocal = (long)(simObj.position[i].X * 100000);
 								UInt128 seed = new((ulong)lonLocal, (ulong)latLocal);
 								StringBuilder simObjIdBuilder = new($"{simObj.containerTitle}-");
-								while (seed % 62 > 0)
+								while (seed / 62 > 0)
 								{
 									int charIndex = (int)(seed % 62);
 									char c = charIndex < 10 ? (char)('0' + charIndex) : (charIndex < 36 ? (char)('a' + charIndex - 10) : (char)('A' + charIndex - 36));
