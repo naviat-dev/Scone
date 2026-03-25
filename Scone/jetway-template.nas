@@ -47,7 +47,7 @@ for (var i = 0; i < size(doors); i+=1) {
 	doors[i] = [doorLongitude, doorLatitude, doorAltitude];
 }
 
-# Find the closest door to the jetway's end and see if it is within the varraints
+# Find the closest door to the jetway's end and see if it is within the constraints
 var closestDoorIndex = -1;
 var closestDoorDistance = 1000000;
 var closestDoorPivotPoint = [0, 0, 0];
