@@ -77,7 +77,7 @@ public class GlbBuilder
 			JObject matJson = (JObject)matsJson[primJson["material"]!.Value<int>()];
 			if (matJson["extensions"]?["ASOBO_material_invisible"] != null || matJson["extensions"]?["ASOBO_material_environment_occluder"] != null)
 			{
-				break;
+				continue;
 			}
 			PrimitiveBuilder<MaterialBuilder, VertexPositionNormalTangent, VertexTexture2, VertexEmpty> prim = mesh.UsePrimitive(BuildMaterial(matJson, texJson, imgJson, srcPath, srcBgl));
 			JObject attributes = (JObject)primJson["attributes"]!;
