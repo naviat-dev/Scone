@@ -48,9 +48,11 @@ public static class BtgParser
 		ushort version = br.ReadUInt16();
 		ushort magic = br.ReadUInt16(); // 'SG'
 		uint creationTime = br.ReadUInt32();
-		ushort objectCount = br.ReadUInt16();
+		bool use32BitLayout = version >= 10;
+		uint objectCountRaw = use32BitLayout ? br.ReadUInt32() : br.ReadUInt16();
+		int objectCount = objectCountRaw > int.MaxValue ? int.MaxValue : (int)objectCountRaw;
 
-		Logger.Debug($"BTG Header: version={version}, magic=0x{magic:X4}, time={creationTime}, objects={objectCount}");
+		Logger.Debug($"BTG Header: version={version}, magic=0x{magic:X4}, time={creationTime}, objects={objectCountRaw}");
 
 		if (magic != 0x5347)
 		{
@@ -58,9 +60,9 @@ public static class BtgParser
 			throw new InvalidDataException("Invalid BTG file");
 		}
 
-		if (objectCount > 10000)
+		if (objectCountRaw > 100000)
 		{
-			Logger.Warning($"Suspicious object count {objectCount}. File may be corrupted.");
+			Logger.Warning($"Suspicious object count {objectCountRaw}. File may be corrupted.");
 			return new BtgParseResult();
 		}
 
@@ -75,25 +77,28 @@ public static class BtgParser
 		for (int i = 0; i < objectCount; i++)
 		{
 			// Check if we have enough bytes to read object header
-			if (br.BaseStream.Position + 5 > br.BaseStream.Length)
+			int objectHeaderSize = use32BitLayout ? 9 : 5;
+			if (br.BaseStream.Position + objectHeaderSize > br.BaseStream.Length)
 			{
 					Logger.Warning($"Not enough data for object {i} header. Stopping parse.");
 					break;
 			}
 
 			byte objType = br.ReadByte();
-			ushort propCount = br.ReadUInt16();
-			ushort elemCount = br.ReadUInt16();
+			uint propCountRaw = use32BitLayout ? br.ReadUInt32() : br.ReadUInt16();
+			uint elemCountRaw = use32BitLayout ? br.ReadUInt32() : br.ReadUInt16();
+			int propCount = propCountRaw > int.MaxValue ? int.MaxValue : (int)propCountRaw;
+			int elemCount = elemCountRaw > int.MaxValue ? int.MaxValue : (int)elemCountRaw;
 
 			// Sanity check: if propCount or elemCount are absurdly high, the file is likely corrupted
-			if (propCount > 1000 || elemCount > 100000)
+			if (propCountRaw > 1000 || elemCountRaw > 100000)
 			{
-					Logger.Warning($"Object {i} has suspicious counts (props={propCount}, elems={elemCount}). Skipping.");
+					Logger.Warning($"Object {i} has suspicious counts (props={propCountRaw}, elems={elemCountRaw}). Skipping.");
 					break;
 			}
 
 			// ----- PROPERTIES (ignored for bounding sphere) -----
-			byte indexTypeFlags = 0;
+			byte? indexTypeFlags = null;
 
 			for (int p = 0; p < propCount; p++)
 			{
@@ -126,17 +131,16 @@ public static class BtgParser
 				if (propType == 1 && propSize > 0) // Index Types
 				{
 					indexTypeFlags = br.ReadByte();
-					// Skip any remaining bytes in this property
 					long bytesRead = br.BaseStream.Position - propStart;
 					if (bytesRead < propSize)
 					{
-                        _ = br.BaseStream.Seek(propSize - bytesRead, SeekOrigin.Current);
+							_ = br.BaseStream.Seek(propSize - bytesRead, SeekOrigin.Current);
 					}
 				}
 				else
 				{
-                    // Skip the entire property
-                    _ = br.BaseStream.Seek(propSize, SeekOrigin.Current);
+					// Skip the entire property
+					_ = br.BaseStream.Seek(propSize, SeekOrigin.Current);
 				}
 
 				// Ensure we're at the correct position
@@ -148,6 +152,8 @@ public static class BtgParser
 			}
 
 			// ----- ELEMENTS -----
+			byte resolvedIndexFlags = ResolveIndexTypeFlags(objType, indexTypeFlags);
+
 			for (int e = 0; e < elemCount; e++)
 			{
 				// Check if we can read element size
@@ -211,17 +217,17 @@ public static class BtgParser
 
 					// ---- Individual Triangles (Type 10) ----
 					case 10:
-						ReadTriangleElements(br, mesh, elemSize, indexTypeFlags, objType);
+						ReadTriangleElements(br, mesh, elemSize, resolvedIndexFlags, objType, use32BitLayout);
 						break;
 
 					// ---- Triangle Strip (Type 11) ----
 					case 11:
-						ReadTriangleStrip(br, mesh, elemSize, indexTypeFlags);
+						ReadTriangleStrip(br, mesh, elemSize, resolvedIndexFlags, use32BitLayout);
 						break;
 
 					// ---- Triangle Fan (Type 12) ----
 					case 12:
-						ReadTriangleFan(br, mesh, elemSize, indexTypeFlags);
+						ReadTriangleFan(br, mesh, elemSize, resolvedIndexFlags, use32BitLayout);
 						break;
 
 					default:
@@ -248,74 +254,125 @@ public static class BtgParser
 
 	// ===== Helpers that respect index type flags =====
 
-	private static int CalcTupleSize(byte flags, byte objType)
+	private static byte ResolveIndexTypeFlags(byte objType, byte? rawFlags)
 	{
+		if (rawFlags.HasValue)
+		{
+			return rawFlags.Value;
+		}
+
+		return objType switch
+		{
+			9 => 0x01,             // points default to vertex indices only
+			10 or 11 or 12 => 0x09, // triangles default to vertex + texcoord
+			_ => 0,
+		};
+	}
+
+	private static int CalcTupleSize(byte flags, byte objType, bool use32BitIndices)
+	{
+		int indexSize = use32BitIndices ? 4 : 2;
 		if (flags == 0)
 		{
-			if (objType == 9) return 2;       // Points default: vertex only
-			return 4;                         // vertex + texcoord default
+			if (objType == 9) return indexSize;
+			return indexSize * 2;
 		}
 
 		int size = 0;
-		if ((flags & 1) != 0) size += 2;
-		if ((flags & 2) != 0) size += 2;
-		if ((flags & 4) != 0) size += 2;
-		if ((flags & 8) != 0) size += 2;
+		if ((flags & 1) != 0) size += indexSize;
+		if ((flags & 2) != 0) size += indexSize;
+		if ((flags & 4) != 0) size += indexSize;
+		if ((flags & 8) != 0) size += indexSize;
 		return size;
 	}
 
-	private static void ReadTriangleElements(BinaryReader br, DMesh3 mesh, uint elemSize, byte flags, byte objType)
+	private static void ReadTriangleElements(BinaryReader br, DMesh3 mesh, uint elemSize, byte flags, byte objType, bool use32BitIndices)
 	{
-		int tupleSize = CalcTupleSize(flags, objType);
-		int count = (int)elemSize / tupleSize;
+		int tupleSize = CalcTupleSize(flags, objType, use32BitIndices);
+		if (tupleSize <= 0)
+		{
+			_ = br.BaseStream.Seek(elemSize, SeekOrigin.Current);
+			return;
+		}
 
+		int count = (int)elemSize / tupleSize;
 		List<int> verts = new(count);
 
 		for (int i = 0; i < count; i++)
-			verts.Add(ReadVertexIndex(br, tupleSize));
+		{
+			verts.Add(ReadVertexIndex(br, tupleSize, use32BitIndices));
+		}
 
 		for (int i = 0; i + 2 < verts.Count; i += 3)
-            _ = mesh.AppendTriangle(verts[i], verts[i + 2], verts[i + 1]);
+		{
+			_ = mesh.AppendTriangle(verts[i], verts[i + 2], verts[i + 1]);
+		}
 	}
 
-	private static void ReadTriangleStrip(BinaryReader br, DMesh3 mesh, uint elemSize, byte flags)
+	private static void ReadTriangleStrip(BinaryReader br, DMesh3 mesh, uint elemSize, byte flags, bool use32BitIndices)
 	{
-		int tupleSize = CalcTupleSize(flags, 11);
+		int tupleSize = CalcTupleSize(flags, 11, use32BitIndices);
+		if (tupleSize <= 0)
+		{
+			_ = br.BaseStream.Seek(elemSize, SeekOrigin.Current);
+			return;
+		}
+
 		int count = (int)elemSize / tupleSize;
 		List<int> v = new(count);
 
 		for (int i = 0; i < count; i++)
-			v.Add(ReadVertexIndex(br, tupleSize));
+		{
+			v.Add(ReadVertexIndex(br, tupleSize, use32BitIndices));
+		}
 
 		for (int i = 0; i + 2 < v.Count; i++)
 		{
 			if ((i & 1) == 0)
-                _ = mesh.AppendTriangle(v[i], v[i + 1], v[i + 2]);
+			{
+				_ = mesh.AppendTriangle(v[i], v[i + 1], v[i + 2]);
+			}
 			else
-                _ = mesh.AppendTriangle(v[i + 1], v[i], v[i + 2]);
+			{
+				_ = mesh.AppendTriangle(v[i + 1], v[i], v[i + 2]);
+			}
 		}
 	}
 
-	private static void ReadTriangleFan(BinaryReader br, DMesh3 mesh, uint elemSize, byte flags)
+	private static void ReadTriangleFan(BinaryReader br, DMesh3 mesh, uint elemSize, byte flags, bool use32BitIndices)
 	{
-		int tupleSize = CalcTupleSize(flags, 12);
+		int tupleSize = CalcTupleSize(flags, 12, use32BitIndices);
+		if (tupleSize <= 0)
+		{
+			_ = br.BaseStream.Seek(elemSize, SeekOrigin.Current);
+			return;
+		}
+
 		int count = (int)elemSize / tupleSize;
 		List<int> v = new(count);
 
 		for (int i = 0; i < count; i++)
-			v.Add(ReadVertexIndex(br, tupleSize));
+		{
+			v.Add(ReadVertexIndex(br, tupleSize, use32BitIndices));
+		}
 
 		for (int i = 1; i + 1 < v.Count; i++)
-            _ = mesh.AppendTriangle(v[0], v[i], v[i + 1]);
+		{
+			_ = mesh.AppendTriangle(v[0], v[i], v[i + 1]);
+		}
 	}
 
 	// Only read vertex index, skip rest of tuple
-	private static int ReadVertexIndex(BinaryReader br, int tupleSize)
+	private static int ReadVertexIndex(BinaryReader br, int tupleSize, bool use32BitIndices)
 	{
-		ushort v = br.ReadUInt16();
-		int skip = tupleSize - 2;
-		if (skip > 0) _ = br.ReadBytes(skip);
-		return v;
+		int indexSize = use32BitIndices ? 4 : 2;
+		int vertex = use32BitIndices ? (int)br.ReadUInt32() : br.ReadUInt16();
+		int skip = tupleSize - indexSize;
+		if (skip > 0)
+		{
+			_ = br.BaseStream.Seek(skip, SeekOrigin.Current);
+		}
+		return vertex;
 	}
 }
 
