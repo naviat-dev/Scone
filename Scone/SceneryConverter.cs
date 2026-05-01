@@ -1349,7 +1349,7 @@ public class SceneryConverter : INotifyPropertyChanged
 										new XElement("type", "pick"),
 										new XElement("object-name", $"{simObjId}_{IKMainHandleStart}"),
 										new XElement("action",
-											new XElement("touch", 0),
+											new XElement("button", 0),
 											new XElement("repeatable", false),
 											new XElement("binding",
 												new XElement("command", "nasal"),
@@ -1452,7 +1452,7 @@ public class SceneryConverter : INotifyPropertyChanged
 
 			bool hasXml = (isGltf && isAc3d) || animations.Count > 0;
 			string activeName = $"{tileIndex}.{(hasXml ? "xml" : (isGltf ? "gltf" : "ac"))}";
-			string placementStr = $"OBJECT_STATIC {activeName} {center.Y.ToString(CultureInfo.InvariantCulture)} {center.X.ToString(CultureInfo.InvariantCulture)} {center.Z.ToString(CultureInfo.InvariantCulture)} {(hasXml ? 0 : (isAc3d && !isGltf ? 90 : 270))} {0} {(isAc3d && !isGltf ? 0 : 90)}";
+			string placementStr = $"OBJECT_STATIC {activeName} {center.Y.ToString(CultureInfo.InvariantCulture)} {center.X.ToString(CultureInfo.InvariantCulture)} {center.Z.ToString(CultureInfo.InvariantCulture)} {(isAc3d && !isGltf ? 90 : 270)} {0} {(isAc3d && !isGltf ? 0 : 90)}";
 			if (hasXml)
 			{
 				XDocument doc = new(

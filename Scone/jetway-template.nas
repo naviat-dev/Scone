@@ -17,7 +17,7 @@ var jetwayPropNode = "scone/jetway-" ~ jetwayId;
 # Initial position of the aircraft
 var longitude = getprop("position/longitude-deg");
 var latitude = getprop("position/latitude-deg");
-var altitude-m = getprop("position/altitude-ft") * 0.3048;
+var altitude_m = getprop("position/altitude-ft") * 0.3048;
 var heading = getprop("orientation/heading-deg");
 
 # List of doors defined on the aircraft
@@ -43,7 +43,7 @@ for (var i = 0; i < size(doors); i+=1) {
 	var door = doors[i];
 	var doorLongitude = longitude + (door[0] / (111320 * math.cos(latitude * 3.141592653589793 / 180)));
 	var doorLatitude = latitude + (door[1] / 110540);
-	var doorAltitude = altitude-m + door[2];
+	var doorAltitude = altitude_m + door[2];
 	doors[i] = [doorLongitude, doorLatitude, doorAltitude];
 }
 
