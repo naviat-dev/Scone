@@ -29,9 +29,10 @@
 		</UnoFeatures>
 	</PropertyGroup>
 	<ItemGroup>
-	  <PackageReference Include="geometry3Sharp" />
-	  <PackageReference Include="Newtonsoft.Json" />
-	  <PackageReference Include="SharpGLTF.Toolkit" />
+		<PackageReference Include="geometry3Sharp" />
+		<PackageReference Include="Newtonsoft.Json" />
+		<PackageReference Include="SharpGLTF.Toolkit" />
+		<None Include="jetway-template.nas" CopyToOutputDirectory="PreserveNewest" />
 	</ItemGroup>
 
 </Project>

@@ -1017,7 +1017,7 @@ public class SceneryConverter : INotifyPropertyChanged
 				}
 			}
 		}*/
-		
+
 		// Models need to be written combined on a tile-by-tile basis to minimize RAM consumption
 		// We have all the placements and their GUIDs, so run through the model BGLs and create a Dictionary
 		// The key will be the tile index, and the value will be a list of access points of models (file, binary address, size)
@@ -1715,7 +1715,11 @@ public class SceneryConverter : INotifyPropertyChanged
 
 	private static string GenerateJetwayDriverCode(double jetwayLongitude, double jetwayLatitude, double jetwayAltitude, double jetwayHeading, double distMainHandleInit, double distMainHandleFinal, double distSecondaryHandle, Vector2 centerWheelsGroundLock, Vector2 jetwayLimits, string jetwayId)
 	{
+#if DEBUG
+		string[] jetwayTemplate = File.ReadAllLines("jetway-template.nas");
+#else
 		string[] jetwayTemplate = File.ReadAllLines(Path.Combine(AppContext.BaseDirectory, "jetway-template.nas"));
+#endif
 		jetwayTemplate[4] = $"var jetwayLongitude = {jetwayLongitude};";
 		jetwayTemplate[5] = $"var jetwayLatitude = {jetwayLatitude};";
 		jetwayTemplate[6] = $"var jetwayAltitude = {jetwayAltitude};";
