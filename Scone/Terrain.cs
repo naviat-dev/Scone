@@ -392,7 +392,7 @@ public class Terrain
 		string latHemi = latitude >= 0 ? "n" : "s";
 		string terrainDir = $"Terrain/{lonHemi}{Math.Abs(Math.Floor(longitude / 10)) * 10:000}{latHemi}{Math.Abs(Math.Floor(latitude / 10)) * 10:00}/{lonHemi}{Math.Abs(Math.Floor(longitude)):000}{latHemi}{Math.Abs(Math.Floor(latitude)):00}";
 		string urlTopLevel = $"https://terramaster.flightgear.org/terrasync/ws2/{terrainDir}";
-		double elevation = 0;
+		double elevation = double.MinValue;
 		try
 		{
 			if (!tileCache.TryGetValue(index, out TileKey? value))
@@ -600,7 +600,7 @@ public class Terrain
 			}
 		}
 
-		return nearest ?? 0;
+		return nearest ?? double.MinValue;
 	}
 
 	private static bool TryBarycentric(
