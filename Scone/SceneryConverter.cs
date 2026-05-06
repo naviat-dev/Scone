@@ -7,6 +7,7 @@ using System.Xml.Linq;
 using Newtonsoft.Json.Linq;
 using SharpGLTF.Geometry;
 using SharpGLTF.Geometry.VertexTypes;
+using SharpGLTF.Materials;
 using SharpGLTF.Scenes;
 using SharpGLTF.Schema2;
 using Uno.Extensions.Specialized;
@@ -209,11 +210,11 @@ public class SceneryConverter : INotifyPropertyChanged
 					airport.apronEdgeLights = [];
 					airport.helipads = [];
 
-					br.BaseStream.Seek(subOffset + bytesRead + 0x37, SeekOrigin.Begin); // Skip ahead to departure count
+					_ = br.BaseStream.Seek(subOffset + bytesRead + 0x37, SeekOrigin.Begin); // Skip ahead to departure count
 					int departureCt = br.ReadByte();
-					br.BaseStream.Seek(subOffset + bytesRead + 0x39, SeekOrigin.Begin); // Skip ahead to arrival count
+					_ = br.BaseStream.Seek(subOffset + bytesRead + 0x39, SeekOrigin.Begin); // Skip ahead to arrival count
 					int arrivalCt = br.ReadByte();
-					br.BaseStream.Seek(subOffset + bytesRead + 0x3c, SeekOrigin.Begin); // Skip ahead to remaining useful records
+					_ = br.BaseStream.Seek(subOffset + bytesRead + 0x3c, SeekOrigin.Begin); // Skip ahead to remaining useful records
 					ushort apronCt = br.ReadUInt16();
 					ushort paintedLineCt = br.ReadUInt16();
 					ushort paintedPolygonCt = br.ReadUInt16();
@@ -233,7 +234,7 @@ public class SceneryConverter : INotifyPropertyChanged
 						}
 						else if (recordId == 0x00ce) // Runway
 						{
-							br.BaseStream.Seek(2, SeekOrigin.Current); // Skip not-useful data
+							_ = br.BaseStream.Seek(2, SeekOrigin.Current); // Skip not-useful data
 							Runway runway = new()
 							{
 								primaryNumber = br.ReadByte(),
@@ -327,14 +328,14 @@ public class SceneryConverter : INotifyPropertyChanged
 							runway.patternTypes = [.. patternTypes];
 							runway.groundMerging = (patternValue & (1 << 6)) != 0;
 							runway.excludeVegetationAround = (patternValue & (1 << 7)) != 0;
-							br.BaseStream.Seek(0x14, SeekOrigin.Current);
+							_ = br.BaseStream.Seek(0x14, SeekOrigin.Current);
 							runway.falloff = br.ReadSingle();
 							runway.surface = new(br.ReadBytes(16));
 							runway.coloration = [br.ReadByte(), br.ReadByte(), br.ReadByte(), br.ReadByte()];
 							uint runwayBytesRead = 0x60;
 							while (runwayBytesRead < recordSize)
 							{
-								br.BaseStream.Seek(subOffset + bytesRead + airportBytesRead + runwayBytesRead, SeekOrigin.Begin);
+								_ = br.BaseStream.Seek(subOffset + bytesRead + airportBytesRead + runwayBytesRead, SeekOrigin.Begin);
 								ushort runwayRecordId = br.ReadUInt16();
 								uint runwayRecordSize = br.ReadUInt32();
 								if (runwayRecordId >= 0x000b && runwayRecordId <= 0x000e) // VASI
@@ -393,17 +394,17 @@ public class SceneryConverter : INotifyPropertyChanged
 										offset = br.ReadSingle(),
 										slope = br.ReadSingle(),
 									});
-									br.BaseStream.Seek(4, SeekOrigin.Current); // Skip unknown field
+									_ = br.BaseStream.Seek(4, SeekOrigin.Current); // Skip unknown field
 								}
 								else if (runwayRecordId == 0x00cb) // FacilityMaterial
 								{
-									br.BaseStream.Seek(1, SeekOrigin.Current); // Skip unknown field
+									_ = br.BaseStream.Seek(1, SeekOrigin.Current); // Skip unknown field
 									runway.facilityMaterial = new FacilityMaterial
 									{
 										opacity = br.ReadByte(),
 										guid = new(br.ReadBytes(16))
 									};
-									br.BaseStream.Seek(4, SeekOrigin.Current); // Skip another unknown field
+									_ = br.BaseStream.Seek(4, SeekOrigin.Current); // Skip another unknown field
 									runway.facilityMaterial.tilingU = br.ReadSingle();
 									runway.facilityMaterial.tilingV = br.ReadSingle();
 									runway.facilityMaterial.width = br.ReadSingle();
@@ -438,7 +439,7 @@ public class SceneryConverter : INotifyPropertyChanged
 									type = (TaxiPointType)br.ReadByte(),
 									orientation = (TaxiPointOrientation)br.ReadByte(),
 								};
-								br.BaseStream.Seek(2, SeekOrigin.Current); // Skip unknown field
+								_ = br.BaseStream.Seek(2, SeekOrigin.Current); // Skip unknown field
 								taxiwayPoint.longitude = (br.ReadUInt32() * (360.0 / 805306368.0)) - 180.0;
 								taxiwayPoint.latitude = 90.0 - (br.ReadUInt32() * (180.0 / 536870912.0));
 								airport.taxiwayPoints.Add(taxiwayPoint);
@@ -472,7 +473,7 @@ public class SceneryConverter : INotifyPropertyChanged
 								}
 								taxiwayParking.numberMarking = br.ReadBoolean();
 								taxiwayParking.suffix = (ParkingName)br.ReadByte();
-								br.BaseStream.Seek(5, SeekOrigin.Current); // Skip unknown fields
+								_ = br.BaseStream.Seek(5, SeekOrigin.Current); // Skip unknown fields
 								taxiwayParking.numberBiasX = br.ReadSingle();
 								taxiwayParking.numberBiasZ = br.ReadSingle();
 								taxiwayParking.numberHeading = br.ReadSingle() * (360.0 / 65536.0);
@@ -514,7 +515,7 @@ public class SceneryConverter : INotifyPropertyChanged
 								taxiwayPath.fsXSurface = (Surface)br.ReadByte();
 								taxiwayPath.width = br.ReadSingle();
 								taxiwayPath.weightLimit = br.ReadUInt32();
-								br.BaseStream.Seek(8, SeekOrigin.Current); // Skip unknown field
+								_ = br.BaseStream.Seek(8, SeekOrigin.Current); // Skip unknown field
 								taxiwayPath.surface = new(br.ReadBytes(16));
 								taxiwayPath.coloration = [br.ReadByte(), br.ReadByte(), br.ReadByte(), br.ReadByte()];
 								int materialCt = br.ReadByte();
@@ -1094,7 +1095,7 @@ public class SceneryConverter : INotifyPropertyChanged
 					}
 
 					// Mark this GUID as having a model
-					guidsWithModels.Add(guid);
+					_ = guidsWithModels.Add(guid);
 
 					List<int> tileIndices = [.. libraryObjects[guid].Select(lo => Terrain.GetTileIndex(lo.latitude, lo.longitude)).Distinct()];
 					foreach (int tileIndex in tileIndices)
@@ -1285,8 +1286,8 @@ public class SceneryConverter : INotifyPropertyChanged
 									string constraintName = ikConstraintDoc.Descendants("Node").First().Value;
 									if (ikConstraintDoc.Descendants("Bank").Any() && rotationMax == 0 && rotationMin == 0)
 									{
-										double.TryParse(ikConstraintDoc.Descendants("Bank").First().Attribute("max")?.Value, NumberStyles.Float, CultureInfo.InvariantCulture, out rotationMax);
-										double.TryParse(ikConstraintDoc.Descendants("Bank").First().Attribute("min")?.Value, NumberStyles.Float, CultureInfo.InvariantCulture, out rotationMin);
+										_ = double.TryParse(ikConstraintDoc.Descendants("Bank").First().Attribute("max")?.Value, NumberStyles.Float, CultureInfo.InvariantCulture, out rotationMax);
+										_ = double.TryParse(ikConstraintDoc.Descendants("Bank").First().Attribute("min")?.Value, NumberStyles.Float, CultureInfo.InvariantCulture, out rotationMin);
 									}
 									if (ikConstraintDoc.Descendants("X").Any())
 									{
@@ -1306,12 +1307,12 @@ public class SceneryConverter : INotifyPropertyChanged
 								{
 									int charIndex = (int)(seed % 62);
 									char c = charIndex < 10 ? (char)('0' + charIndex) : (charIndex < 36 ? (char)('a' + charIndex - 10) : (char)('A' + charIndex - 36));
-									simObjIdBuilder.Append(c);
+									_ = simObjIdBuilder.Append(c);
 									seed /= 62;
 								}
 								string simObjId = simObjIdBuilder.ToString();
 								// Rename all the things in the scene to have the custom prefix
-								foreach (InstanceBuilder instance in scene.Instances)
+								foreach (InstanceBuilder instance in scene.Instances.Where(instance => instance.Content is not SkinnedTransformer))
 								{
 									if (!instance.Content.Name.StartsWith(simObjId))
 									{
@@ -1327,7 +1328,7 @@ public class SceneryConverter : INotifyPropertyChanged
 								}
 								prevIdLength = simObjId.Length + 1;
 								Matrix4x4 placementTransform = CreatePlacementTransform(simObj, center.X, center.Y, center.Z, i);
-								tileSceneGltf.AddScene(scene, placementTransform);
+								_ = tileSceneGltf.AddScene(scene, placementTransform);
 								List<XDocument> jetwayDriverAnimation = [];
 								// Add in the driver code for all top-level nodes
 								double distMainHandleInit = Vector3.Distance(mainHandleStartPos, mainHandleEndPos);
@@ -1342,8 +1343,7 @@ public class SceneryConverter : INotifyPropertyChanged
 									Vector3.Distance(secondaryHandleStartPos, secondaryHandleEndPos),
 									new Vector2(wheelsGroundLockStartPos.X, wheelsGroundLockStartPos.Z),
 									new Vector2((float)mainHandleExtensionNodeNamesDist.Sum(n => n.dist), Vector3.Distance(wheelsGroundLockStartPos, wheelsGroundLockEndPos)),
-									simObjId
-									);
+									simObjId);
 								jetwayDriverAnimation.Add(new(
 									new XElement("animation",
 										new XElement("type", "pick"),
@@ -1359,7 +1359,18 @@ public class SceneryConverter : INotifyPropertyChanged
 									new XElement("animation",
 										new XElement("type", "rotate"),
 										new XElement("object-name", $"{simObjId}_{IKSecondaryHandleStart}"),
-										new XElement("property", $"scone/jetway-{simObjId}/secondary-handle-rotation-deg"),
+										new XElement("expression",
+											new XElement("max",
+												new XElement("value", 0),
+												new XElement("min",
+													new XElement("property", $"scone/jetway-{simObjId}/secondary-handle-rotation-deg"),
+													new XElement("prod",
+													new XElement("dif",
+														new XElement("property", $"scone/jetway-{simObjId}/target-time-secondary-handle"),
+														new XElement("property", "sim/time/elapsed-sec")),
+													new XElement("value", 10)))
+												)),
+										// new XElement("property", $"scone/jetway-{simObjId}/secondary-handle-rotation-deg"),
 										new XElement("axis",
 											new XElement("y", "1")),
 										new XElement("center",
@@ -1373,8 +1384,18 @@ public class SceneryConverter : INotifyPropertyChanged
 										new XElement("animation",
 											new XElement("type", "translate"),
 											new XElement("object-name", $"{simObjId}_{nodeName}"),
-											new XElement("property", $"scone/jetway-{simObjId}/extension-m"),
-											new XElement("factor", (dist / (distMainHandleFinal - distMainHandleInit)).ToString(CultureInfo.InvariantCulture)),
+											new XElement("expression",
+												new XElement("max",
+													new XElement("value", 0),
+													new XElement("min",
+														new XElement("property", $"scone/jetway-{simObjId}/extension-delta-m"),
+														new XElement("prod",
+														new XElement("dif",
+															new XElement("property", $"scone/jetway-{simObjId}/target-time-extension"),
+															new XElement("property", "sim/time/elapsed-sec")),
+														new XElement("value", (0.1 * (dist / (distMainHandleFinal - distMainHandleInit))).ToString(CultureInfo.InvariantCulture))))
+													)),
+											// new XElement("factor", (dist / (distMainHandleFinal - distMainHandleInit)).ToString(CultureInfo.InvariantCulture)),
 											new XElement("axis",
 												new XElement("x", "1")))));
 								}
@@ -1383,7 +1404,18 @@ public class SceneryConverter : INotifyPropertyChanged
 									new XElement("animation",
 										new XElement("type", "rotate"),
 										new XElement("object-name", $"{simObjId}_{IKMainHandleStart}"),
-										new XElement("property", $"scone/jetway-{simObjId}/main-handle-rotation-deg"),
+										new XElement("expression",
+											new XElement("max",
+												new XElement("value", 0),
+												new XElement("min",
+													new XElement("property", $"scone/jetway-{simObjId}/main-handle-rotation-deg"),
+													new XElement("prod",
+													new XElement("dif",
+														new XElement("property", $"scone/jetway-{simObjId}/target-time-main-handle"),
+														new XElement("property", "sim/time/elapsed-sec")),
+													new XElement("value", 5)))
+												)),
+										// new XElement("property", $"scone/jetway-{simObjId}/main-handle-rotation-deg"),
 										new XElement("axis",
 											new XElement("y", "1")),
 										new XElement("center",
@@ -1455,47 +1487,7 @@ public class SceneryConverter : INotifyPropertyChanged
 			string placementStr = $"OBJECT_STATIC {activeName} {center.Y.ToString(CultureInfo.InvariantCulture)} {center.X.ToString(CultureInfo.InvariantCulture)} {center.Z.ToString(CultureInfo.InvariantCulture)} {(isAc3d && !isGltf ? 90 : 270)} {0} {(isAc3d && !isGltf ? 0 : 90)}";
 			if (hasXml)
 			{
-				XDocument doc = new(
-				new XElement("PropertyList",
-						/* new XElement("model",
-							new XElement("name", $"ac-{tileIndex}"),
-							new XElement("path", $"{tileIndex}.ac")),
-						new XElement("model",
-							new XElement("name", $"gltf-{tileIndex}"), */
-						new XElement("path", $"{tileIndex}.gltf"),
-					/* new XElement("animation",
-						new XElement("object-name", $"ac-{tileIndex}"),
-						new XElement("type", "rotate"),
-						new XElement("offset-deg", "90"),
-						new XElement("axis",
-							new XElement("z", "1"))), */
-					new XElement("animation",
-						new XElement("object-name", $"gltf-{tileIndex}"),
-						new XElement("type", "rotate"),
-						new XElement("offset-deg", "270"),
-						new XElement("axis",
-							new XElement("z", "1"))),
-					new XElement("animation",
-						new XElement("object-name", $"gltf-{tileIndex}"),
-						new XElement("type", "rotate"),
-						new XElement("offset-deg", "90"),
-						new XElement("axis",
-							new XElement("x", "1"))),
-					new XElement("animation",
-						new XElement("object-name", $"gltf-{tileIndex}"),
-						new XElement("type", "select"),
-						new XElement("condition",
-							new XElement("not",
-								new XElement("equals",
-									new XElement("property", "/sim/version/flightgear"),
-									new XElement("value", "2024.2.0")))))/* ,
-					new XElement("animation",
-						new XElement("object-name", $"ac-{tileIndex}"),
-						new XElement("type", "select"),
-						new XElement("condition",
-							new XElement("equals",
-								new XElement("property", "/sim/version/flightgear"),
-								new XElement("value", "2024.2.0")))) */));
+				XDocument doc = new(new XElement("PropertyList"));
 				foreach (XDocument anim in animations)
 				{
 					doc.Root!.Add(anim.Root!);
@@ -1576,7 +1568,7 @@ public class SceneryConverter : INotifyPropertyChanged
 						["uri"] = Path.GetFileName(baseColorTex)
 					});
 				}
-				gltfText["textures"]?[texIndex] = currentTexture;
+				_ = (gltfText["textures"]?[texIndex] = currentTexture);
 				if (!File.Exists(Path.Combine(outputDir, Path.GetFileName(baseColorTex))))
 					File.Copy(baseColorTex, Path.Combine(outputDir, Path.GetFileName(baseColorTex)));
 			}
@@ -1608,7 +1600,7 @@ public class SceneryConverter : INotifyPropertyChanged
 						["uri"] = Path.GetFileName(metallicRoughnessTex)
 					});
 				}
-				gltfText["textures"]?[texIndex] = currentTexture;
+				_ = (gltfText["textures"]?[texIndex] = currentTexture);
 				if (!File.Exists(Path.Combine(outputDir, Path.GetFileName(metallicRoughnessTex))))
 					File.Copy(metallicRoughnessTex, Path.Combine(outputDir, Path.GetFileName(metallicRoughnessTex)), true);
 			}
@@ -1640,7 +1632,7 @@ public class SceneryConverter : INotifyPropertyChanged
 						["uri"] = Path.GetFileName(normaTex)
 					});
 				}
-				gltfText["textures"]?[texIndex] = currentTexture;
+				_ = (gltfText["textures"]?[texIndex] = currentTexture);
 				if (!File.Exists(Path.Combine(outputDir, Path.GetFileName(normaTex))))
 					File.Copy(normaTex, Path.Combine(outputDir, Path.GetFileName(normaTex)), true);
 			}
@@ -1672,7 +1664,7 @@ public class SceneryConverter : INotifyPropertyChanged
 						["uri"] = Path.GetFileName(occlusionTex)
 					});
 				}
-				gltfText["textures"]?[texIndex] = currentTexture;
+				_ = (gltfText["textures"]?[texIndex] = currentTexture);
 				if (!File.Exists(Path.Combine(outputDir, Path.GetFileName(occlusionTex))))
 					File.Copy(occlusionTex, Path.Combine(outputDir, Path.GetFileName(occlusionTex)), true);
 			}
@@ -1704,7 +1696,7 @@ public class SceneryConverter : INotifyPropertyChanged
 						["uri"] = Path.GetFileName(emissiveTex)
 					});
 				}
-				gltfText["textures"]?[texIndex] = currentTexture;
+				_ = (gltfText["textures"]?[texIndex] = currentTexture);
 				if (!File.Exists(Path.Combine(outputDir, Path.GetFileName(emissiveTex))))
 					File.Copy(emissiveTex, Path.Combine(outputDir, Path.GetFileName(emissiveTex)), true);
 			}
@@ -1925,68 +1917,139 @@ public class SceneryConverter : INotifyPropertyChanged
 		JArray materials = (JArray)json["materials"]!;
 		JArray textures = (JArray)json["textures"]!;
 		JArray nodes = (JArray)json["nodes"]!;
-		JArray animations = (JArray)json["animations"]!;
-		JArray skins = (JArray)json["skins"]!;
-		JArray topLevelNodes = (JArray)json["scenes"]![json["scene"]!.Value<int>()]!["nodes"]!;
-		List<MeshBuilder<VertexPositionNormalTangent, VertexTexture2, VertexEmpty>> meshBuilders = [];
-		List<Skin> skinBuilders = [];
+		JArray? skins = (JArray?)json["skins"];
+		JArray topLevelNodes = (JArray)json["scenes"]![json["scene"]?.Value<int>() ?? 0]!["nodes"]!;
+
+		List<IMeshBuilder<MaterialBuilder>> meshBuilders = [];
 		foreach (JObject mesh in meshes.Cast<JObject>())
 		{
-			meshBuilders.Add(GlbBuilder.BuildMesh(inputPath, file, mesh, accessors, bufferViews, materials, textures, images, glbBinBytes));
+			if (mesh["primitives"]?[0]?["attributes"]?["JOINTS_0"] != null)
+			{
+				meshBuilders.Add(GlbBuilder.BuildSkinnedMesh(inputPath, file, mesh, accessors, bufferViews, materials, textures, images, glbBinBytes));
+			}
+			else
+			{
+				meshBuilders.Add(GlbBuilder.BuildMesh(inputPath, file, mesh, accessors, bufferViews, materials, textures, images, glbBinBytes));
+			}
 		}
 
-		NodeBuilder GetChildNodes(int nodeIndex)
+		// PASS 1: Create a NodeBuilder for every node in the document and apply its local transform.
+		// This guarantees every joint referenced by any skin already has a NodeBuilder before we
+		// add skinned meshes to the scene.
+		NodeBuilder[] nodeBuilders = new NodeBuilder[nodes.Count];
+		for (int i = 0; i < nodes.Count; i++)
+		{
+			JObject nodeJson = (JObject)nodes[i]!;
+			NodeBuilder nb = new(nodeJson["name"]?.Value<string>() ?? $"Node_{i}");
+			ApplyNodeLocalTransform(nb, nodeJson);
+			nodeBuilders[i] = nb;
+		}
+
+		// PASS 2: Establish parent/child relationships between NodeBuilders.
+		bool[] isChild = new bool[nodes.Count];
+		for (int i = 0; i < nodes.Count; i++)
+		{
+			JObject nodeJson = (JObject)nodes[i]!;
+			JToken? children = nodeJson["children"];
+			if (children is null) continue;
+			foreach (int childIndex in children.Values<int>())
+			{
+				NodeBuilder child = nodeBuilders[childIndex];
+				NodeBuilder parent = nodeBuilders[i];
+				// AddNode appends the existing node as a child, preserving its local transform.
+				parent.AddNode(child);
+				isChild[childIndex] = true;
+			}
+		}
+
+		// PASS 3: Walk the scene from the top-level scene nodes (which are roots) and emit meshes.
+		// Skinned meshes use the IBM-aware overload, with joints in the order specified by skin.joints.
+		void EmitMeshesFromNode(int nodeIndex)
 		{
 			JObject nodeJson = (JObject)nodes[nodeIndex]!;
-			NodeBuilder nodeBuilder = new()
+			NodeBuilder nb = nodeBuilders[nodeIndex];
+
+			if (nodeJson["mesh"] != null)
 			{
-				Name = nodeJson["name"]?.Value<string>() ?? $"Node_{nodeIndex}",
-			};
-			List<NodeBuilder> children = [];
-			if (nodeJson["children"] != null)
-			{
-				foreach (int childIndex in nodeJson["children"]!.Values<int>())
+				int meshIndex = nodeJson["mesh"]!.Value<int>();
+				IMeshBuilder<MaterialBuilder> meshBuilder = meshBuilders[meshIndex];
+
+				if (nodeJson["skin"] != null && skins != null)
 				{
-					nodeBuilder.AddNode(GetChildNodes(childIndex));
+					int skinIndex = nodeJson["skin"]!.Value<int>();
+					JObject skinJson = (JObject)skins[skinIndex]!;
+					int[] jointNodeIndices = [.. skinJson["joints"]!.Values<int>()];
+
+					// Inverse bind matrices: same order as skinJson["joints"]; default to identity if missing.
+					Matrix4x4[] ibms;
+					if (skinJson["inverseBindMatrices"] != null)
+					{
+						int ibmAcc = skinJson["inverseBindMatrices"]!.Value<int>();
+						ibms = GlbBuilder.LoadInverseBindMatrices((JObject)accessors[ibmAcc]!, bufferViews, glbBinBytes);
+					}
+					else
+					{
+						ibms = new Matrix4x4[jointNodeIndices.Length];
+						for (int k = 0; k < ibms.Length; k++) ibms[k] = Matrix4x4.Identity;
+					}
+
+					(NodeBuilder Joint, Matrix4x4 InverseBindMatrix)[] joints = new (NodeBuilder, Matrix4x4)[jointNodeIndices.Length];
+					for (int k = 0; k < jointNodeIndices.Length; k++)
+					{
+						joints[k] = (nodeBuilders[jointNodeIndices[k]], ibms[k]);
+					}
+
+					_ = scene.AddSkinnedMesh((MeshBuilder<VertexPositionNormalTangent, VertexTexture2, VertexJoints8>)meshBuilder, joints);
+				}
+				else
+				{
+					_ = scene.AddRigidMesh(meshBuilder, nb);
 				}
 			}
 
-			// Apply transformations if present
-			if (nodeJson["translation"] != null)
+			JToken? children = nodeJson["children"];
+			if (children is null) return;
+			foreach (int childIndex in children.Values<int>())
 			{
-				JArray translation = (JArray)nodeJson["translation"]!;
-				_ = nodeBuilder.WithLocalTranslation(new Vector3(translation[0].Value<float>(), translation[1].Value<float>(), translation[2].Value<float>()));
+				EmitMeshesFromNode(childIndex);
 			}
-			if (nodeJson["rotation"] != null)
-			{
-				JArray rotation = (JArray)nodeJson["rotation"]!;
-				_ = nodeBuilder.WithLocalRotation(new Quaternion(rotation[0].Value<float>(), rotation[1].Value<float>(), rotation[2].Value<float>(), rotation[3].Value<float>()));
-			}
-			if (nodeJson["scale"] != null)
-			{
-				JArray scale = (JArray)nodeJson["scale"]!;
-				_ = nodeBuilder.WithLocalScale(new Vector3(scale[0].Value<float>(), scale[1].Value<float>(), scale[2].Value<float>()));
-			}
-			if (nodeJson["matrix"] != null)
-			{
-				JArray matrix = (JArray)nodeJson["matrix"]!;
-				nodeBuilder.LocalMatrix = new Matrix4x4(
-					matrix[0].Value<float>(), matrix[1].Value<float>(), matrix[2].Value<float>(), matrix[3].Value<float>(),
-					matrix[4].Value<float>(), matrix[5].Value<float>(), matrix[6].Value<float>(), matrix[7].Value<float>(),
-					matrix[8].Value<float>(), matrix[9].Value<float>(), matrix[10].Value<float>(), matrix[11].Value<float>(),
-					matrix[12].Value<float>(), matrix[13].Value<float>(), matrix[14].Value<float>(), matrix[15].Value<float>());
-			}
-			if (nodeJson["mesh"] != null)
-			{
-				MeshBuilder<VertexPositionNormalTangent, VertexTexture2, VertexEmpty> mesh = meshBuilders[nodeJson["mesh"]!.Value<int>()];
-				scene.AddRigidMesh(mesh, nodeBuilder);
-			}
-			return nodeBuilder;
 		}
 
-		NodeBuilder[] nodeTree = [.. topLevelNodes.Select(nodeIndex => GetChildNodes(nodeIndex.Value<int>()))];
+		foreach (int rootIndex in topLevelNodes.Values<int>())
+		{
+			EmitMeshesFromNode(rootIndex);
+		}
 
 		return scene;
+	}
+
+	private static void ApplyNodeLocalTransform(NodeBuilder nb, JObject nodeJson)
+	{
+		if (nodeJson["matrix"] != null)
+		{
+			JArray m = (JArray)nodeJson["matrix"]!;
+			nb.LocalMatrix = new Matrix4x4(
+				m[0].Value<float>(), m[1].Value<float>(), m[2].Value<float>(), m[3].Value<float>(),
+				m[4].Value<float>(), m[5].Value<float>(), m[6].Value<float>(), m[7].Value<float>(),
+				m[8].Value<float>(), m[9].Value<float>(), m[10].Value<float>(), m[11].Value<float>(),
+				m[12].Value<float>(), m[13].Value<float>(), m[14].Value<float>(), m[15].Value<float>());
+			return;
+		}
+		if (nodeJson["translation"] != null)
+		{
+			JArray t = (JArray)nodeJson["translation"]!;
+			_ = nb.WithLocalTranslation(new Vector3(t[0].Value<float>(), t[1].Value<float>(), t[2].Value<float>()));
+		}
+		if (nodeJson["rotation"] != null)
+		{
+			JArray r = (JArray)nodeJson["rotation"]!;
+			_ = nb.WithLocalRotation(new Quaternion(r[0].Value<float>(), r[1].Value<float>(), r[2].Value<float>(), r[3].Value<float>()));
+		}
+		if (nodeJson["scale"] != null)
+		{
+			JArray s = (JArray)nodeJson["scale"]!;
+			_ = nb.WithLocalScale(new Vector3(s[0].Value<float>(), s[1].Value<float>(), s[2].Value<float>()));
+		}
 	}
 
 	private static SceneBuilder CreateGltfModelFromGlb(byte[] glbBytes, string inputPath, string file)
@@ -2356,7 +2419,7 @@ public class SceneryConverter : INotifyPropertyChanged
 			char c = charVal == 0 ? ' ' :
 				charVal > 1 && charVal < 12 ? (char)('0' + charVal - 2) :
 											  (char)('A' + charVal - 12);
-			sb.Insert(0, c);
+			_ = sb.Insert(0, c);
 		}
 		return sb.ToString();
 	}
