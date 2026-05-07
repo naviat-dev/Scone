@@ -16,7 +16,7 @@ public sealed partial class MainPage : Page
 	{
 		InitializeComponent();
 		TasksList.ItemsSource = tasks;
-		LoadConfig();
+        LoadConfig();
 		UpdateEmptyState();
 	}
 
@@ -80,7 +80,7 @@ public sealed partial class MainPage : Page
 		SettingsOverlay.Visibility = Visibility.Collapsed;
 	}
 
-	private void LoadConfig()
+	private static void LoadConfig()
 	{
 		try
 		{
