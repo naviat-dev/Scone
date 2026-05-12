@@ -1277,7 +1277,7 @@ public class SceneryConverter : INotifyPropertyChanged
 								wheelsGroundLockEndNode["translation"]?[1]?.ToObject<float>() ?? 0,
 								wheelsGroundLockEndNode["translation"]?[2]?.ToObject<float>() ?? 0
 							);
-							int prevIdLength = 0;
+							List<(NodeBuilder node, string baseName)> sceneNodeBaseNames = CaptureSceneNodeBaseNames(scene);
 							while (xmlReader.Read())
 							{
 								if (xmlReader.NodeType == XmlNodeType.Element && xmlReader.Name == "IKConstraint")
@@ -1311,22 +1311,7 @@ public class SceneryConverter : INotifyPropertyChanged
 									seed /= 62;
 								}
 								string simObjId = simObjIdBuilder.ToString();
-								// Rename all the things in the scene to have the custom prefix
-								foreach (InstanceBuilder instance in scene.Instances.Where(instance => instance.Content is not SkinnedTransformer))
-								{
-									if (!instance.Content.Name.StartsWith(simObjId))
-									{
-										instance.Content.Name = $"{simObjId}_{instance.Content.Name[prevIdLength..]}";
-									}
-									if (instance.Content is RigidTransformer rigid && rigid.Transform.Parent != null)
-									{
-										if (!rigid.Transform.Parent.Name.StartsWith(simObjId))
-										{
-											rigid.Transform.Parent.Name = $"{simObjId}_{rigid.Transform.Parent.Name[prevIdLength..]}";
-										}
-									}
-								}
-								prevIdLength = simObjId.Length + 1;
+								ApplySimObjectPrefixToSceneNodes(sceneNodeBaseNames, simObjId);
 								Matrix4x4 placementTransform = CreatePlacementTransform(simObj, center.X, center.Y, center.Z, i);
 								_ = tileSceneGltf.AddScene(scene, placementTransform);
 								List<XDocument> jetwayDriverAnimation = [];
@@ -1904,6 +1889,41 @@ public class SceneryConverter : INotifyPropertyChanged
 			return scene;
 		}
 		return scene;
+	}
+
+	private static List<(NodeBuilder node, string baseName)> CaptureSceneNodeBaseNames(SceneBuilder scene)
+	{
+		HashSet<NodeBuilder> seenNodes = [];
+		List<(NodeBuilder node, string baseName)> result = [];
+
+		foreach (InstanceBuilder instance in scene.Instances)
+		{
+			NodeBuilder? root = instance.Content.GetArmatureRoot()?.Root;
+			if (root == null)
+			{
+				continue;
+			}
+
+			foreach (NodeBuilder node in NodeBuilder.Flatten(root))
+			{
+				if (!seenNodes.Add(node) || string.IsNullOrEmpty(node.Name))
+				{
+					continue;
+				}
+
+				result.Add((node, node.Name));
+			}
+		}
+
+		return result;
+	}
+
+	private static void ApplySimObjectPrefixToSceneNodes(IEnumerable<(NodeBuilder node, string baseName)> sceneNodeBaseNames, string simObjId)
+	{
+		foreach ((NodeBuilder node, string baseName) in sceneNodeBaseNames)
+		{
+			node.Name = $"{simObjId}_{baseName}";
+		}
 	}
 
 
