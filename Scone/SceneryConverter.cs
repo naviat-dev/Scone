@@ -962,7 +962,6 @@ public class SceneryConverter : INotifyPropertyChanged
 				if (match.Success)
 				{
 					string modelCfgFile = Path.Combine(Path.GetDirectoryName(simObj.containerPath)!, match.Groups[1].Value.Trim() == "" ? "model" : $"model.{match.Groups[1].Value.Replace("\r", "").Replace("\"", "").Trim()}", "model.cfg");
-					string texturePath = Path.Combine(Path.GetDirectoryName(simObj.containerPath)!, match.Groups[2].Value.Trim() == "" ? "texture" : $"texture.{match.Groups[2].Value.Replace("\r", "").Replace("\"", "").Trim()}");
 					string dirName = Path.GetDirectoryName(modelCfgFile)!;
 					string modelSource = new Regex(@"normal=(.+)", RegexOptions.Multiline).Match(File.ReadAllText(modelCfgFile)).Groups[1].Value;
 					string xmlPath = Path.Combine(dirName, modelSource);
@@ -999,9 +998,13 @@ public class SceneryConverter : INotifyPropertyChanged
 						continue;
 					}
 					string simObjOutputDir = Path.Combine(App.StorePath, "SimObjects", simObj.containerTitle);
-					JObject json = JObject.Parse(File.ReadAllText(Path.Combine(Path.GetDirectoryName(xmlPath)!, gltfFile)));
-					string bufferDir = Path.Combine(Path.GetDirectoryName(xmlPath)!, json["buffers"]![0]!["uri"]!.ToString());
-					SceneBuilder scene = CreateGltfModelFromGltf(File.ReadAllBytes(bufferDir), json, texturePath, Path.GetDirectoryName(modelCfgFile)!);
+					string sourceGltfPath = Path.Combine(Path.GetDirectoryName(xmlPath)!, gltfFile);
+					string repairedGltfPath = Path.Combine(simObjOutputDir, $"{simObj.containerTitle}.gltf");
+					MsfsGltfRepairResult repairResult = MsfsGltfRepair.ExportFixedGltf(sourceGltfPath, repairedGltfPath);
+					Logger.Info($"Repaired {Path.GetFileName(sourceGltfPath)} for scene assembly ({repairResult.RewrittenTexCoordAccessorCount} TEXCOORD accessor(s), {repairResult.NormalizedNodeScaleCount} non-uniform scale node(s)).");
+					JObject json = JObject.Parse(File.ReadAllText(repairResult.OutputPath));
+					(byte[] combinedBuffer, _) = LoadCombinedGltfBuffers(json, simObjOutputDir);
+					SceneBuilder scene = CreateGltfModelFromGltf(combinedBuffer, json, simObjOutputDir, Path.GetDirectoryName(modelCfgFile)!);
 					Directory.CreateDirectory(simObjOutputDir);
 					scene.ToGltf2().SaveGLTF(Path.Combine(simObjOutputDir, $"{simObj.containerTitle}.gltf"), new WriteSettings
 					{
@@ -1159,7 +1162,6 @@ public class SceneryConverter : INotifyPropertyChanged
 					if (match.Success)
 					{
 						string modelCfgFile = Path.Combine(Path.GetDirectoryName(simObj.containerPath)!, match.Groups[1].Value.Trim() == "" ? "model" : $"model.{match.Groups[1].Value.Replace("\r", "").Replace("\"", "").Trim()}", "model.cfg");
-						string texturePath = Path.Combine(Path.GetDirectoryName(simObj.containerPath)!, match.Groups[2].Value.Trim() == "" ? "texture" : $"texture.{match.Groups[2].Value.Replace("\r", "").Replace("\"", "").Trim()}");
 						string dirName = Path.GetDirectoryName(modelCfgFile)!;
 						string modelSource = new Regex(@"normal=(.+)", RegexOptions.Multiline).Match(File.ReadAllText(modelCfgFile)).Groups[1].Value;
 						string xmlPath = Path.Combine(dirName, modelSource);
@@ -1196,9 +1198,13 @@ public class SceneryConverter : INotifyPropertyChanged
 							continue;
 						}
 						string simObjOutputDir = Path.Combine(App.StorePath, "SimObjects", simObj.containerTitle);
-						JObject json = JObject.Parse(File.ReadAllText(Path.Combine(Path.GetDirectoryName(xmlPath)!, gltfFile)));
-						string bufferDir = Path.Combine(Path.GetDirectoryName(xmlPath)!, json["buffers"]![0]!["uri"]!.ToString());
-						SceneBuilder scene = CreateGltfModelFromGltf(File.ReadAllBytes(bufferDir), json, texturePath, Path.GetDirectoryName(modelCfgFile)!);
+						string sourceGltfPath = Path.Combine(Path.GetDirectoryName(xmlPath)!, gltfFile);
+						string repairedGltfPath = Path.Combine(simObjOutputDir, $"{simObj.containerTitle}.gltf");
+						MsfsGltfRepairResult repairResult = MsfsGltfRepair.ExportFixedGltf(sourceGltfPath, repairedGltfPath);
+						Logger.Info($"Repaired {Path.GetFileName(sourceGltfPath)} for scene assembly ({repairResult.RewrittenTexCoordAccessorCount} TEXCOORD accessor(s), {repairResult.NormalizedNodeScaleCount} non-uniform scale node(s)).");
+						JObject json = JObject.Parse(File.ReadAllText(repairResult.OutputPath));
+						(byte[] combinedBuffer, _) = LoadCombinedGltfBuffers(json, simObjOutputDir);
+						SceneBuilder scene = CreateGltfModelFromGltf(combinedBuffer, json, simObjOutputDir, Path.GetDirectoryName(modelCfgFile)!);
 
 						// Find out if this is a jetway by looking for the 3 IKChain names
 						xmlReader = XmlReader.Create(xmlPath, new XmlReaderSettings { ConformanceLevel = ConformanceLevel.Fragment });
@@ -2100,68 +2106,74 @@ public class SceneryConverter : INotifyPropertyChanged
 
 		string assetRoot = Path.GetDirectoryName(gltfFilePath) ?? Directory.GetCurrentDirectory();
 		JObject json = JObject.Parse(File.ReadAllText(gltfFilePath));
+		(byte[] combinedBuffer, List<string> bufferFiles) = LoadCombinedGltfBuffers(json, assetRoot);
+		AcBuilder builder = AcBuilder.FromGltf(combinedBuffer, json, assetRoot, gltfFilePath);
+		return (builder, bufferFiles);
+	}
+
+	private static (byte[] combinedBuffer, List<string> bufferFiles) LoadCombinedGltfBuffers(JObject json, string assetRoot)
+	{
 		JArray bufferArray = (JArray?)json["buffers"] ?? [];
 		List<string> bufferFiles = [];
 		byte[] combinedBuffer = [];
 
-		if (bufferArray.Count > 0)
+		if (bufferArray.Count == 0)
 		{
-			Dictionary<int, int> bufferOffsets = [];
-			using MemoryStream bufferStream = new();
-			for (int i = 0; i < bufferArray.Count; i++)
+			return (combinedBuffer, bufferFiles);
+		}
+
+		Dictionary<int, int> bufferOffsets = [];
+		using MemoryStream bufferStream = new();
+		for (int i = 0; i < bufferArray.Count; i++)
+		{
+			JObject buffer = (JObject)bufferArray[i]!;
+			string? uri = buffer["uri"]?.Value<string>();
+			byte[] bufferBytes;
+			if (string.IsNullOrWhiteSpace(uri))
 			{
-				JObject buffer = (JObject)bufferArray[i]!;
-				string? uri = buffer["uri"]?.Value<string>();
-				byte[] bufferBytes;
-				if (string.IsNullOrWhiteSpace(uri))
+				bufferBytes = [];
+			}
+			else if (uri.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+			{
+				int commaIndex = uri.IndexOf(',');
+				if (commaIndex < 0)
 				{
-					bufferBytes = [];
-				}
-				else if (uri.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
-				{
-					int commaIndex = uri.IndexOf(',');
-					if (commaIndex < 0)
-					{
-						bufferBytes = [];
-					}
-					else
-					{
-						string base64 = uri[(commaIndex + 1)..];
-						bufferBytes = Convert.FromBase64String(base64);
-					}
-				}
-				else
-				{
-					string absolutePath = Path.GetFullPath(Path.Combine(assetRoot, uri));
-					if (!File.Exists(absolutePath))
-					{
-						throw new FileNotFoundException($"glTF buffer missing: {absolutePath}", absolutePath);
-					}
-					bufferFiles.Add(absolutePath);
-					bufferBytes = File.ReadAllBytes(absolutePath);
+					throw new InvalidDataException("Data URI buffer is missing a payload separator.");
 				}
 
-				bufferOffsets[i] = (int)bufferStream.Length;
-				bufferStream.Write(bufferBytes, 0, bufferBytes.Length);
+				bufferBytes = Convert.FromBase64String(uri[(commaIndex + 1)..]);
+			}
+			else
+			{
+				string absolutePath = Path.GetFullPath(Path.Combine(assetRoot, uri));
+				if (!File.Exists(absolutePath))
+				{
+					throw new FileNotFoundException($"glTF buffer missing: {absolutePath}", absolutePath);
+				}
+
+				bufferFiles.Add(absolutePath);
+				bufferBytes = File.ReadAllBytes(absolutePath);
 			}
 
-			combinedBuffer = bufferStream.ToArray();
+			bufferOffsets[i] = (int)bufferStream.Length;
+			bufferStream.Write(bufferBytes, 0, bufferBytes.Length);
+		}
 
-			if (json["bufferViews"] is JArray bufferViews && bufferArray.Count > 1)
+		combinedBuffer = bufferStream.ToArray();
+
+		if (json["bufferViews"] is JArray bufferViews && bufferArray.Count > 1)
+		{
+			foreach (JObject view in bufferViews.OfType<JObject>())
 			{
-				foreach (JObject view in bufferViews.OfType<JObject>())
-				{
-					int bufferIndex = view["buffer"]?.Value<int>() ?? 0;
-					int baseOffset = bufferOffsets.TryGetValue(bufferIndex, out int offset) ? offset : 0;
-					int viewOffset = view["byteOffset"]?.Value<int>() ?? 0;
-					view["byteOffset"] = baseOffset + viewOffset;
-					view["buffer"] = 0;
-				}
+				int bufferIndex = view["buffer"]?.Value<int>() ?? 0;
+				int baseOffset = bufferOffsets.TryGetValue(bufferIndex, out int offset) ? offset : 0;
+				int viewOffset = view["byteOffset"]?.Value<int>() ?? 0;
+				view["byteOffset"] = baseOffset + viewOffset;
+				view["buffer"] = 0;
 			}
 		}
 
-		AcBuilder builder = AcBuilder.FromGltf(combinedBuffer, json, assetRoot, gltfFilePath);
-		return (builder, bufferFiles);
+		return (combinedBuffer, bufferFiles);
 	}
 
 
