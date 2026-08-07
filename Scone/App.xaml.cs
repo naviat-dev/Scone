@@ -3,9 +3,22 @@ namespace Scone;
 public partial class App : Application
 {
 	public static readonly string TempPath = Path.Combine(Path.GetTempPath(), "scone");
-	public static readonly string StorePath = Path.Combine(ApplicationData.Current.LocalFolder.Path, "scone");
+	public static readonly string StorePath = ResolveStorePath();
 	public static readonly string ConfigPath = Path.Combine(StorePath, "config.json");
 	public static Config AppConfig = new();
+
+	private static string ResolveStorePath()
+	{
+		try
+		{
+			return Path.Combine(ApplicationData.Current.LocalFolder.Path, "scone");
+		}
+		catch (InvalidOperationException)
+		{
+			string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+			return Path.Combine(localAppData, "scone");
+		}
+	}
 	/// <summary>
 	/// Initializes the singleton application object. This is the first line of authored code
 	/// executed, and as such is the logical equivalent of main() or WinMain().
