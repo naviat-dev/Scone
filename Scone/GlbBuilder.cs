@@ -16,6 +16,8 @@ public class GlbBuilder
 		public Vector3[] Normals { get; set; } = [];
 		public List<Vector2[]> TexCoords { get; set; } = [];
 		public Vector4[] Tangents { get; set; } = [];
+		public Vector4[] Joints { get; set; } = [];
+		public Vector4[] Weights { get; set; } = [];
 		public int[] Indices { get; set; } = [];
 	}
 
@@ -68,10 +70,10 @@ public class GlbBuilder
 		return node;
 	}
 
-	public static MeshBuilder<VertexPositionNormalTangent, VertexTexture2, VertexEmpty> BuildMesh(string srcPath, string srcBgl, JObject meshJson, JArray accJson, JArray bvJson, JArray matsJson, JArray texJson, JArray imgJson, byte[] glbBinBytes)
+	public static MeshBuilder<VertexPositionNormalTangent, VertexTexture2, VertexJoints8> BuildSkinnedMesh(string srcPath, string srcBgl, JObject meshJson, JArray accJson, JArray bvJson, JArray matsJson, JArray texJson, JArray imgJson, byte[] glbBinBytes)
 	{
 
-		MeshBuilder<VertexPositionNormalTangent, VertexTexture2, VertexEmpty> mesh = new(meshJson["name"]?.Value<string>() ?? "UnnamedMesh");
+		MeshBuilder<VertexPositionNormalTangent, VertexTexture2, VertexJoints8> mesh = new(meshJson["name"]?.Value<string>() ?? "UnnamedMesh");
 		foreach (JObject primJson in ((JArray)meshJson["primitives"]!).Cast<JObject>())
 		{
 			JObject matJson = (JObject)matsJson[primJson["material"]!.Value<int>()];
@@ -79,7 +81,7 @@ public class GlbBuilder
 			{
 				continue;
 			}
-			PrimitiveBuilder<MaterialBuilder, VertexPositionNormalTangent, VertexTexture2, VertexEmpty> prim = mesh.UsePrimitive(BuildMaterial(matJson, texJson, imgJson, srcPath, srcBgl));
+			PrimitiveBuilder<MaterialBuilder, VertexPositionNormalTangent, VertexTexture2, VertexJoints8> prim = mesh.UsePrimitive(BuildMaterial(matJson, texJson, imgJson, srcPath, srcBgl));
 			JObject attributes = (JObject)primJson["attributes"]!;
 			PrimData data = new();
 
@@ -129,6 +131,18 @@ public class GlbBuilder
 				}
 			}
 
+			int jointAccIndex = attributes["JOINTS_0"]?.Value<int>() ?? -1;
+			if (accJson.Count > jointAccIndex && jointAccIndex >= 0)
+			{
+				data.Joints = LoadJointAccessorData((JObject)accJson[jointAccIndex], bvJson, glbBinBytes);
+			}
+
+			int weightAccIndex = attributes["WEIGHTS_0"]?.Value<int>() ?? -1;
+			if (accJson.Count > weightAccIndex && weightAccIndex >= 0)
+			{
+				data.Weights = LoadWeightAccessorData((JObject)accJson[weightAccIndex], bvJson, glbBinBytes);
+			}
+
 			// Load materials
 			int materialIndex = primJson["material"]!.Value<int>();
 			if (materialIndex >= 0)
@@ -152,6 +166,10 @@ public class GlbBuilder
 				VertexPositionNormalTangent geo2 = new(data.Positions[idx2], -data.Normals[idx2], data.Tangents.Length > 0 ? -data.Tangents[idx2] : Vector4.Zero);
 				VertexPositionNormalTangent geo3 = new(data.Positions[idx3], -data.Normals[idx3], data.Tangents.Length > 0 ? -data.Tangents[idx3] : Vector4.Zero);
 
+				VertexJoints8 joints1 = BuildJointBindings(data, idx1);
+				VertexJoints8 joints2 = BuildJointBindings(data, idx2);
+				VertexJoints8 joints3 = BuildJointBindings(data, idx3);
+
 				MaterialBuilder mat = MaterialBuilder.CreateDefault();
 
 				Vector2 uv0_1 = data.TexCoords.Count > 0 ? data.TexCoords[0][idx1] : Vector2.Zero;
@@ -166,14 +184,44 @@ public class GlbBuilder
 				VertexTexture2 mat2 = new(uv0_2, uv1_2);
 				VertexTexture2 mat3 = new(uv0_3, uv1_3);
 
-				VertexBuilder<VertexPositionNormalTangent, VertexTexture2, VertexEmpty> v1 = new(geo1, mat1);
-				VertexBuilder<VertexPositionNormalTangent, VertexTexture2, VertexEmpty> v2 = new(geo2, mat2);
-				VertexBuilder<VertexPositionNormalTangent, VertexTexture2, VertexEmpty> v3 = new(geo3, mat3);
+				VertexBuilder<VertexPositionNormalTangent, VertexTexture2, VertexJoints8> v1 = new(geo1, mat1, joints1);
+				VertexBuilder<VertexPositionNormalTangent, VertexTexture2, VertexJoints8> v2 = new(geo2, mat2, joints2);
+				VertexBuilder<VertexPositionNormalTangent, VertexTexture2, VertexJoints8> v3 = new(geo3, mat3, joints3);
 
 				_ = prim.AddTriangle(v1, v3, v2); // This has got to be inverted for normals
 			}
 		}
 		return mesh;
+	}
+
+	public static MeshBuilder<VertexPositionNormalTangent, VertexTexture2, VertexEmpty> BuildMesh(string srcPath, string srcBgl, JObject meshJson, JArray accJson, JArray bvJson, JArray matsJson, JArray texJson, JArray imgJson, byte[] glbBinBytes)
+	{
+		MeshBuilder<VertexPositionNormalTangent, VertexTexture2, VertexJoints8> skinnedMesh = BuildSkinnedMesh(srcPath, srcBgl, meshJson, accJson, bvJson, matsJson, texJson, imgJson, glbBinBytes);
+		MeshBuilder<VertexPositionNormalTangent, VertexTexture2, VertexEmpty> mesh = new(meshJson["name"]?.Value<string>() ?? "UnnamedMesh");
+		mesh.AddMesh(skinnedMesh, material => material, VertexBuilder<VertexPositionNormalTangent, VertexTexture2, VertexEmpty>.CreateFrom);
+		return mesh;
+	}
+
+	private static VertexJoints8 BuildJointBindings(PrimData data, int idx)
+	{
+		if (data.Joints.Length == 0 || data.Weights.Length == 0)
+		{
+			// Bind everything to joint 0 with full weight; SharpGLTF requires non-zero weights summing to 1.
+			return new VertexJoints8((0, 1f));
+		}
+		Vector4 j = data.Joints[idx];
+		Vector4 w = data.Weights[idx];
+		// Drop bindings with zero weight (SparseWeight8 will normalize what remains).
+		List<(int, float)> bindings = new(4);
+		if (w.X > 0f) bindings.Add(((int)j.X, w.X));
+		if (w.Y > 0f) bindings.Add(((int)j.Y, w.Y));
+		if (w.Z > 0f) bindings.Add(((int)j.Z, w.Z));
+		if (w.W > 0f) bindings.Add(((int)j.W, w.W));
+		if (bindings.Count == 0)
+		{
+			bindings.Add(((int)j.X, 1f));
+		}
+		return new VertexJoints8([.. bindings]);
 	}
 
 	private static MaterialBuilder BuildMaterial(JObject matJson, JArray texJson, JArray imgJson, string srcPath, string sourceBgl)
@@ -568,5 +616,158 @@ public class GlbBuilder
 		}
 
 		return texCoords;
+	}
+
+	private static Vector4[] LoadJointAccessorData(JObject accessorJson, JArray bufferViewsJson, byte[] binBytes)
+	{
+		int count = accessorJson["count"]!.Value<int>();
+
+		JObject bufferView = (JObject)bufferViewsJson[accessorJson["bufferView"]!.Value<int>()];
+
+		int accessorByteOffset = accessorJson["byteOffset"]?.Value<int>() ?? 0;
+		int bufferViewByteOffset = bufferView["byteOffset"]?.Value<int>() ?? 0;
+
+		int componentType = accessorJson["componentType"]!.Value<int>();
+		string? type = accessorJson["type"]!.Value<string>();
+
+		int componentSize = ComponentSize(componentType);
+		int numComponents = ComponentCount(type!);
+
+		Vector4[] joints = new Vector4[count];
+
+		int stride = bufferView["byteStride"]?.Value<int>() ?? (componentSize * numComponents);
+
+		// glTF spec: JOINTS_n is UNSIGNED_BYTE (5121) or UNSIGNED_SHORT (5123).
+		// Asobo MSFS GLBs may report a different componentType; treat anything that isn't a
+		// 16-bit unsigned value as 4-byte UNSIGNED_BYTE packing (which matches the layout used
+		// by Asobo for sub-256 joint counts).
+		bool unsignedShort = componentType == 5123;
+		if (componentType != 5121 && componentType != 5123)
+		{
+			// Fall back to UNSIGNED_BYTE-style read with a 4-byte stride.
+			stride = 4;
+		}
+
+		for (int i = 0; i < count; i++)
+		{
+			int offset = bufferViewByteOffset + accessorByteOffset + (i * stride);
+
+			float c0, c1, c2, c3;
+			if (unsignedShort) // UNSIGNED_SHORT
+			{
+				c0 = BitConverter.ToUInt16(binBytes, offset + 0);
+				c1 = BitConverter.ToUInt16(binBytes, offset + 2);
+				c2 = BitConverter.ToUInt16(binBytes, offset + 4);
+				c3 = BitConverter.ToUInt16(binBytes, offset + 6);
+			}
+			else // UNSIGNED_BYTE (or fallback)
+			{
+				c0 = binBytes[offset + 0];
+				c1 = binBytes[offset + 1];
+				c2 = binBytes[offset + 2];
+				c3 = binBytes[offset + 3];
+			}
+			joints[i] = new Vector4(c0, c1, c2, c3);
+		}
+
+		return joints;
+	}
+
+	private static Vector4[] LoadWeightAccessorData(JObject accessorJson, JArray bufferViewsJson, byte[] binBytes)
+	{
+		int count = accessorJson["count"]!.Value<int>();
+
+		JObject bufferView = (JObject)bufferViewsJson[accessorJson["bufferView"]!.Value<int>()];
+
+		int accessorByteOffset = accessorJson["byteOffset"]?.Value<int>() ?? 0;
+		int bufferViewByteOffset = bufferView["byteOffset"]?.Value<int>() ?? 0;
+
+		int componentType = accessorJson["componentType"]!.Value<int>();
+		string? type = accessorJson["type"]!.Value<string>();
+
+		int componentSize = ComponentSize(componentType);
+		int numComponents = ComponentCount(type!);
+
+		Vector4[] weights = new Vector4[count];
+
+		int declaredStride = bufferView["byteStride"]?.Value<int>() ?? (componentSize * numComponents);
+		int declaredElementSize = componentSize * numComponents;
+
+		// glTF spec: WEIGHTS_n is FLOAT, normalized UNSIGNED_BYTE, or normalized UNSIGNED_SHORT.
+		// Asobo MSFS GLBs sometimes lie about componentType (declare FLOAT but actually pack as
+		// 4-byte normalized UNSIGNED_BYTE per vertex). Detect that by checking whether the declared
+		// 16-byte FLOAT layout actually fits the bufferView length / BIN chunk; if not, fall back
+		// to a byte-packed interpretation with a 4-byte stride.
+		bool asoboPackedAsBytes = false;
+		if (componentType == 5126)
+		{
+			int? bufferViewByteLength = bufferView["byteLength"]?.Value<int>();
+			long lastFloatEnd = (long)bufferViewByteOffset + accessorByteOffset + ((long)(count - 1) * declaredStride) + declaredElementSize;
+			long requiredFromBvOffset = (long)accessorByteOffset + ((long)count * declaredStride);
+			if (declaredStride < declaredElementSize
+				|| lastFloatEnd > binBytes.Length
+				|| (bufferViewByteLength.HasValue && requiredFromBvOffset > bufferViewByteLength.Value))
+			{
+				asoboPackedAsBytes = true;
+			}
+		}
+
+		int stride = asoboPackedAsBytes ? 4 : declaredStride;
+
+		for (int i = 0; i < count; i++)
+		{
+			int offset = bufferViewByteOffset + accessorByteOffset + (i * stride);
+
+			float w0, w1, w2, w3;
+			if (componentType == 5126 && !asoboPackedAsBytes) // FLOAT
+			{
+				w0 = BitConverter.ToSingle(binBytes, offset + 0);
+				w1 = BitConverter.ToSingle(binBytes, offset + 4);
+				w2 = BitConverter.ToSingle(binBytes, offset + 8);
+				w3 = BitConverter.ToSingle(binBytes, offset + 12);
+			}
+			else if (componentType == 5121 || asoboPackedAsBytes) // UNSIGNED_BYTE normalized
+			{
+				w0 = binBytes[offset + 0] / 255f;
+				w1 = binBytes[offset + 1] / 255f;
+				w2 = binBytes[offset + 2] / 255f;
+				w3 = binBytes[offset + 3] / 255f;
+			}
+			else if (componentType == 5123) // UNSIGNED_SHORT normalized
+			{
+				w0 = BitConverter.ToUInt16(binBytes, offset + 0) / 65535f;
+				w1 = BitConverter.ToUInt16(binBytes, offset + 2) / 65535f;
+				w2 = BitConverter.ToUInt16(binBytes, offset + 4) / 65535f;
+				w3 = BitConverter.ToUInt16(binBytes, offset + 6) / 65535f;
+			}
+			else
+			{
+				throw new Exception($"Unsupported WEIGHTS_0 componentType: {componentType}");
+			}
+			weights[i] = new Vector4(w0, w1, w2, w3);
+		}
+
+		return weights;
+	}
+
+	internal static Matrix4x4[] LoadInverseBindMatrices(JObject accessorJson, JArray bufferViewsJson, byte[] binBytes)
+	{
+		int count = accessorJson["count"]!.Value<int>();
+		JObject bufferView = (JObject)bufferViewsJson[accessorJson["bufferView"]!.Value<int>()];
+		int accessorByteOffset = accessorJson["byteOffset"]?.Value<int>() ?? 0;
+		int bufferViewByteOffset = bufferView["byteOffset"]?.Value<int>() ?? 0;
+		int stride = bufferView["byteStride"]?.Value<int>() ?? (16 * 4);
+		Matrix4x4[] mats = new Matrix4x4[count];
+		for (int i = 0; i < count; i++)
+		{
+			int o = bufferViewByteOffset + accessorByteOffset + (i * stride);
+			mats[i] = new Matrix4x4(
+				BitConverter.ToSingle(binBytes, o + 0),  BitConverter.ToSingle(binBytes, o + 4),  BitConverter.ToSingle(binBytes, o + 8),  BitConverter.ToSingle(binBytes, o + 12),
+				BitConverter.ToSingle(binBytes, o + 16), BitConverter.ToSingle(binBytes, o + 20), BitConverter.ToSingle(binBytes, o + 24), BitConverter.ToSingle(binBytes, o + 28),
+				BitConverter.ToSingle(binBytes, o + 32), BitConverter.ToSingle(binBytes, o + 36), BitConverter.ToSingle(binBytes, o + 40), BitConverter.ToSingle(binBytes, o + 44),
+				BitConverter.ToSingle(binBytes, o + 48), BitConverter.ToSingle(binBytes, o + 52), BitConverter.ToSingle(binBytes, o + 56), BitConverter.ToSingle(binBytes, o + 60)
+			);
+		}
+		return mats;
 	}
 }

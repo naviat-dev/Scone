@@ -190,7 +190,7 @@ public sealed class AcBuilder
 
 		foreach (var kvp in other._textureCopyTargets)
 		{
-			RegisterTexture(kvp.Key, kvp.Value);
+            _ = RegisterTexture(kvp.Key, kvp.Value);
 		}
 	}
 
@@ -509,7 +509,7 @@ public sealed class AcBuilder
 			: preferredName!;
 		string finalName = EnsureUniqueTextureName(candidateName);
 		_textureCopyTargets[sourcePath] = finalName;
-		_textureOutputNames.Add(finalName);
+        _ = _textureOutputNames.Add(finalName);
 		return finalName;
 	}
 

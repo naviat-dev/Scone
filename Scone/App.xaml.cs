@@ -13,10 +13,10 @@ public partial class App : Application
 		{
 			return Path.Combine(ApplicationData.Current.LocalFolder.Path, "scone");
 		}
-		catch (InvalidOperationException)
+		catch
 		{
-			string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-			return Path.Combine(localAppData, "scone");
+			// CLI / non-packaged invocation: fall back to %LOCALAPPDATA%\scone.
+			return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "scone");
 		}
 	}
 	/// <summary>

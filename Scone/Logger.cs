@@ -22,7 +22,7 @@ public static class Logger
 		string logDir = Path.Combine(App.StorePath, "Logs");
 		if (!Directory.Exists(logDir))
 		{
-			Directory.CreateDirectory(logDir);
+            _ = Directory.CreateDirectory(logDir);
 		}
 		_logFilePath = Path.Combine(logDir, $"scone_{DateTime.Now:yyyyMMdd_HHmmss}.log");
 	}
