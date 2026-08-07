@@ -947,86 +947,6 @@ public class SceneryConverter : INotifyPropertyChanged
 			}
 		}
 
-		// Dump SimObjects to a folder for debugging
-		/* foreach (KeyValuePair<int, Dictionary<string, SimObject>> kvp in simObjectsByTile)
-		{
-			foreach (KeyValuePair<string, SimObject> kvp2 in kvp.Value)
-			{
-				SimObject simObj = kvp2.Value;
-				if (!File.Exists(simObj.containerPath))
-				{
-					continue;
-				}
-				string simObjContainer = File.ReadAllText(simObj.containerPath);
-				Match match = new Regex(@$"title={simObj.containerTitle}\r?\nmodel=(.*)\r?\ntexture=(.*)", RegexOptions.Multiline).Match(simObjContainer);
-				if (match.Success)
-				{
-					string modelCfgFile = Path.Combine(Path.GetDirectoryName(simObj.containerPath)!, match.Groups[1].Value.Trim() == "" ? "model" : $"model.{match.Groups[1].Value.Replace("\r", "").Replace("\"", "").Trim()}", "model.cfg");
-					string dirName = Path.GetDirectoryName(modelCfgFile)!;
-					string modelSource = new Regex(@"normal=(.+)", RegexOptions.Multiline).Match(File.ReadAllText(modelCfgFile)).Groups[1].Value;
-					string xmlPath = Path.Combine(dirName, modelSource);
-					XmlReader xmlReader = XmlReader.Create(xmlPath);
-					string gltfFile = "";
-					while (xmlReader.Read())
-					{
-						if (xmlReader.NodeType == XmlNodeType.Element && xmlReader.Name == "LODS")
-						{
-							XDocument xDocument = XDocument.Load(xmlReader.ReadSubtree());
-							var lodEntries = xDocument
-								.Descendants("LOD")
-								.Select(lod =>
-								{
-									_ = float.TryParse(lod.Attribute("MinSize")?.Value, NumberStyles.Float, CultureInfo.InvariantCulture, out float minSize);
-									return new { lod, minSize };
-								})
-								.ToList();
-							string? lodModelFile = lodEntries
-								.OrderByDescending(entry => entry.minSize)
-								.Select(entry => entry.lod.Attribute("ModelFile")?.Value)
-								.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
-							if (string.IsNullOrWhiteSpace(lodModelFile))
-							{
-								Logger.Warning($"No valid LOD entries found in {modelSource}; skipping {simObj.containerTitle}.");
-								break;
-							}
-							gltfFile = lodModelFile;
-							break;
-						}
-					}
-					if (string.IsNullOrWhiteSpace(gltfFile))
-					{
-						continue;
-					}
-					string simObjOutputDir = Path.Combine(App.StorePath, "SimObjects", simObj.containerTitle);
-					string sourceGltfPath = Path.Combine(Path.GetDirectoryName(xmlPath)!, gltfFile);
-					string repairedGltfPath = Path.Combine(simObjOutputDir, $"{simObj.containerTitle}.gltf");
-					MsfsGltfRepairResult repairResult = MsfsGltfRepair.ExportFixedGltf(sourceGltfPath, repairedGltfPath);
-					Logger.Info($"Repaired {Path.GetFileName(sourceGltfPath)} for scene assembly ({repairResult.RewrittenTexCoordAccessorCount} TEXCOORD accessor(s), {repairResult.NormalizedNodeScaleCount} non-uniform scale node(s)).");
-					JObject json = JObject.Parse(File.ReadAllText(repairResult.OutputPath));
-					(byte[] combinedBuffer, _) = LoadCombinedGltfBuffers(json, simObjOutputDir);
-					SceneBuilder scene = CreateGltfModelFromGltf(combinedBuffer, json, simObjOutputDir, Path.GetDirectoryName(modelCfgFile)!);
-					Directory.CreateDirectory(simObjOutputDir);
-					scene.ToGltf2().SaveGLTF(Path.Combine(simObjOutputDir, $"{simObj.containerTitle}.gltf"), new WriteSettings
-					{
-						ImageWriting = ResourceWriteMode.SatelliteFile,
-						// This name doesn't matter; we will fix up the URIs in the postprocessor
-						ImageWriteCallback = (context, assetName, image) => { return ""; },
-						JsonPostprocessor = (json) => JsonPostprocessor(json, simObjOutputDir)
-					});
-				}
-				else
-				{
-					Logger.Warning($"Could not find {simObj.containerTitle} in SimObject container file: {simObj.containerPath}");
-					continue;
-				}
-			}
-		}*/
-
-		// Models need to be written combined on a tile-by-tile basis to minimize RAM consumption
-		// We have all the placements and their GUIDs, so run through the model BGLs and create a Dictionary
-		// The key will be the tile index, and the value will be a list of access points of models (file, binary address, size)
-		// After the dictionary has been completed, we will go back through and write out each tile's models to the respective folder
-
 		// Look for models after placements have been gathered
 		foreach (string file in allBglFiles)
 		{
@@ -1161,7 +1081,7 @@ public class SceneryConverter : INotifyPropertyChanged
 					Match match = new Regex(@$"title={Regex.Escape(simObj.containerTitle)}\r?\nmodel=(.*)\r?\ntexture=(.*)", RegexOptions.Multiline | RegexOptions.IgnoreCase).Match(simObjContainer);
 					if (match.Success)
 					{
-						string modelCfgFile = Path.Combine(Path.GetDirectoryName(simObj.containerPath)!, match.Groups[1].Value.Trim() == "" ? "model" : $"model.{match.Groups[1].Value.Replace("\r", "").Replace("\"", "").Trim()}", "model.cfg");
+						string modelCfgFile = Path.Combine(Path.GetDirectoryName(simObj.containerPath)!, match.Groups[1].Value.Trim() == "" ? "model" : $"model.{match.Groups[1].Value.Replace("\r", "").Replace("\"", "").Trim()}", "model.CFG");
 						string dirName = Path.GetDirectoryName(modelCfgFile)!;
 						string modelSource = new Regex(@"normal=(.+)", RegexOptions.Multiline).Match(File.ReadAllText(modelCfgFile)).Groups[1].Value;
 						string xmlPath = Path.Combine(dirName, modelSource);
