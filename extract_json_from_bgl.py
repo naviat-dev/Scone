@@ -4,9 +4,9 @@ Extract JSON chunks from MSFS BGL files.
 This script mimics the JSON extraction logic from the Scone C# converter.
 """
 
+import json
 import os
 import struct
-import json
 from pathlib import Path
 
 
