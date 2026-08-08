@@ -191,7 +191,7 @@ def process_bgl_file(bgl_path, output_dir):
 
                             if json_obj:
                                 # Save JSON to file
-                                json_filename = f"{bgl_name}_{guid}_{glb_index}.json"
+                                json_filename = f"{bgl_name}_{guid}_{glb_index}.gltf"
                                 json_path = os.path.join(output_dir, json_filename)
 
                                 with open(json_path, "w", encoding="utf-8") as f:
