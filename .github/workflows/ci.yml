@@ -59,6 +59,17 @@ jobs:
         shell: pwsh
         run: dotnet publish ./Scone/Scone.csproj -c Release -r win-${{ matrix.arch }} /p:PublishProfile=win-${{ matrix.arch }}
 
+      - name: Check bundled glTF validator (Windows)
+        shell: pwsh
+        run: |
+          $validator = "./Scone/bin/Release/net10.0-desktop/win-${{ matrix.arch }}/publish/Tools/gltf-validator/windows/gltf_validator.exe"
+          if (Test-Path $validator) {
+            Write-Host "Found validator: $validator"
+          }
+          else {
+            Write-Host "::warning::Bundled glTF validator not found at $validator"
+          }
+
       - name: Upload Windows ${{ matrix.arch }} Artifact
         uses: actions/upload-artifact@v4
         with:
@@ -86,6 +97,18 @@ jobs:
         shell: bash
         run: dotnet publish ./Scone/Scone.csproj -c Release -r osx-${{ matrix.arch }} --self-contained
 
+      - name: Check bundled glTF validator (macOS)
+        shell: bash
+        run: |
+          set -euo pipefail
+          validator="./Scone/bin/Release/net10.0-desktop/osx-${{ matrix.arch }}/publish/Tools/gltf-validator/macos/gltf_validator"
+          if [[ -f "$validator" ]]; then
+            chmod +x "$validator"
+            echo "Found validator: $validator"
+          else
+            echo "::warning::Bundled glTF validator not found at $validator"
+          fi
+
       - name: Upload macOS ${{ matrix.arch }} Artifact
         uses: actions/upload-artifact@v4
         with:
@@ -112,6 +135,18 @@ jobs:
       - name: Publish Scone Linux ${{ matrix.arch }}
         shell: bash
         run: dotnet publish ./Scone/Scone.csproj -c Release -r linux-${{ matrix.arch }} --self-contained
+
+      - name: Check bundled glTF validator (Linux)
+        shell: bash
+        run: |
+          set -euo pipefail
+          validator="./Scone/bin/Release/net10.0-desktop/linux-${{ matrix.arch }}/publish/Tools/gltf-validator/linux/gltf_validator"
+          if [[ -f "$validator" ]]; then
+            chmod +x "$validator"
+            echo "Found validator: $validator"
+          else
+            echo "::warning::Bundled glTF validator not found at $validator"
+          fi
 
       - name: Upload Linux ${{ matrix.arch }} Artifact
         uses: actions/upload-artifact@v4

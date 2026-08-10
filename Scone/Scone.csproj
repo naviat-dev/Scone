@@ -29,10 +29,12 @@
 		</UnoFeatures>
 	</PropertyGroup>
 	<ItemGroup>
+		<PackageReference Include="BCnEncoder.Net" />
 		<PackageReference Include="geometry3Sharp" />
 		<PackageReference Include="Newtonsoft.Json" />
 		<PackageReference Include="SharpGLTF.Toolkit" />
 		<None Include="jetway-template.nas" CopyToOutputDirectory="PreserveNewest" />
+		<Content Include="Tools/gltf-validator/**/*" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
 	</ItemGroup>
 
 </Project>

@@ -56,6 +56,10 @@ internal class Program
         {
             Directory.CreateDirectory(App.StorePath);
         }
+        if (!Directory.Exists(App.TempPath))
+        {
+            Directory.CreateDirectory(App.TempPath);
+        }
         if (!Directory.Exists(output))
         {
             Directory.CreateDirectory(output);
