@@ -54,6 +54,7 @@ internal class Program
         Console.WriteLine($"[Scone CLI] gltf={isGltf} ac3d={isAc3d}");
         Console.WriteLine($"[Scone CLI] store  = {App.StorePath}");
         Console.WriteLine($"[Scone CLI] validator = {App.GltfValidatorPath}");
+        Console.WriteLine($"[Scone CLI] gltf-repair = {App.GltfRepairPath}");
 
         if (!Directory.Exists(App.StorePath))
         {

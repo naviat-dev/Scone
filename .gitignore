@@ -293,6 +293,8 @@ FakesAssemblies/
 # Node.js Tools for Visual Studio
 .ntvs_analysis.dat
 node_modules/
+Scone/Tools/gltf-repair/bin/
+Scone/Tools/gltf-repair/dist/
 
 # Visual Studio 6 build log
 *.plg

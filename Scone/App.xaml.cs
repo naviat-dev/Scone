@@ -9,6 +9,7 @@ public partial class App : Application
 	public static readonly string ConfigPath = Path.Combine(StorePath, "config.json");
 	public static Config AppConfig = new();
 	public static string GltfValidatorPath { get; private set; } = string.Empty;
+	public static string GltfRepairPath { get; private set; } = string.Empty;
 
 	private static string ResolveStorePath()
 	{
@@ -79,6 +80,37 @@ public partial class App : Application
 			.FirstOrDefault(File.Exists);
 
 		GltfValidatorPath = discoveredPath ?? Path.GetFullPath(candidates[0]);
+
+		string runtimeArch = RuntimeInformation.ProcessArchitecture switch
+		{
+			Architecture.X64 => "x64",
+			Architecture.Arm64 => "arm64",
+			Architecture.X86 => "x86",
+			_ => "x64"
+		};
+
+		string[] repairExecutables = RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
+			? runtimeArch == "x86"
+				? ["gltf-repair-win-x86.exe", "gltf-repair-win-x64.exe"]
+				: [$"gltf-repair-win-{runtimeArch}.exe"]
+			: RuntimeInformation.IsOSPlatform(OSPlatform.OSX)
+				? [$"gltf-repair-macos-{runtimeArch}"]
+				: [$"gltf-repair-linux-{runtimeArch}"];
+
+		string[] repairRoots =
+		[
+			Path.Combine(AppContext.BaseDirectory, "Tools", "gltf-repair"),
+			Path.Combine(Directory.GetCurrentDirectory(), "Tools", "gltf-repair"),
+			Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "Tools", "gltf-repair", "bin")
+		];
+
+		string[] repairCandidates = [.. repairRoots.SelectMany((root) => repairExecutables.Select((exe) => Path.Combine(root, exe)))];
+
+		string? discoveredRepairPath = repairCandidates
+			.Select(Path.GetFullPath)
+			.FirstOrDefault(File.Exists);
+
+		GltfRepairPath = discoveredRepairPath ?? Path.GetFullPath(repairCandidates[0]);
 	}
 
 	public static Window? MainWindow { get; private set; }

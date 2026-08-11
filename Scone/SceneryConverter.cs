@@ -1711,9 +1711,9 @@ public class SceneryConverter : INotifyPropertyChanged
 			JObject extras = image["extras"] as JObject ?? [];
 			image["extras"] = extras;
 			extras["absolutePath"] = ResolveAbsoluteTexturePath(inputPath, file, uri);
-			image["uri"] = $"{Path.GetFileName(uri)}.DDS";
+			image["uri"] = $"{Path.GetFileNameWithoutExtension(uri)}.DDS";
 
-			if (!File.Exists(Path.Combine(App.TempPath, $"{Path.GetFileName(uri)}.DDS")))
+			if (!File.Exists(Path.Combine(App.TempPath, $"{Path.GetFileNameWithoutExtension(uri)}.DDS")))
 			{
 				string[] dummyTextureCandidates =
 				[
@@ -1729,7 +1729,7 @@ public class SceneryConverter : INotifyPropertyChanged
 					throw new FileNotFoundException("Could not locate dummy texture file for missing source textures.", "dummy_tex.dds");
 				}
 
-				File.Copy(dummyTexturePath, Path.Combine(App.TempPath, $"{Path.GetFileName(uri)}.DDS"), true);
+				File.Copy(dummyTexturePath, Path.Combine(App.TempPath, $"{Path.GetFileNameWithoutExtension(uri)}.DDS"), true);
 			}
 		}
 		File.WriteAllBytes(tempBinPath, glbBinBytes);

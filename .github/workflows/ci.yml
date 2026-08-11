@@ -35,14 +35,14 @@ jobs:
 
       - name: Build Scone (Debug)
         shell: pwsh
-        run: msbuild ./Scone/Scone.csproj /r
+        run: msbuild ./Scone/Scone.csproj /r /p:GltfRepairPkgTargets=node18-win-x64
 
   build_windows:
     name: Build Windows (${{ matrix.arch }})
     runs-on: windows-latest
     strategy:
       matrix:
-        arch: [x64, x86, arm64]
+        arch: [x64, arm64]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -57,7 +57,7 @@ jobs:
 
       - name: Publish Scone Windows ${{ matrix.arch }}
         shell: pwsh
-        run: dotnet publish ./Scone/Scone.csproj -c Release -r win-${{ matrix.arch }} /p:PublishProfile=win-${{ matrix.arch }}
+        run: dotnet publish ./Scone/Scone.csproj -c Release -r win-${{ matrix.arch }} /p:PublishProfile=win-${{ matrix.arch }} /p:GltfRepairPkgTargets=node18-win-${{ matrix.arch }}
 
       - name: Check bundled glTF validator (Windows)
         shell: pwsh
@@ -68,6 +68,17 @@ jobs:
           }
           else {
             Write-Host "::warning::Bundled glTF validator not found at $validator"
+          }
+
+      - name: Check bundled gltf-repair binary (Windows)
+        shell: pwsh
+        run: |
+          $tool = "./Scone/bin/Release/net10.0-desktop/win-${{ matrix.arch }}/publish/Tools/gltf-repair/gltf-repair-win-${{ matrix.arch }}.exe"
+          if (Test-Path $tool) {
+            Write-Host "Found gltf-repair: $tool"
+          }
+          else {
+            Write-Error "Bundled gltf-repair binary not found at $tool"
           }
 
       - name: Upload Windows ${{ matrix.arch }} Artifact
@@ -95,7 +106,7 @@ jobs:
 
       - name: Publish Scone macOS ${{ matrix.arch }}
         shell: bash
-        run: dotnet publish ./Scone/Scone.csproj -c Release -r osx-${{ matrix.arch }} --self-contained
+        run: dotnet publish ./Scone/Scone.csproj -c Release -r osx-${{ matrix.arch }} --self-contained /p:GltfRepairPkgTargets=node18-macos-${{ matrix.arch }}
 
       - name: Check bundled glTF validator (macOS)
         shell: bash
@@ -107,6 +118,19 @@ jobs:
             echo "Found validator: $validator"
           else
             echo "::warning::Bundled glTF validator not found at $validator"
+          fi
+
+      - name: Check bundled gltf-repair binary (macOS)
+        shell: bash
+        run: |
+          set -euo pipefail
+          tool="./Scone/bin/Release/net10.0-desktop/osx-${{ matrix.arch }}/publish/Tools/gltf-repair/gltf-repair-macos-${{ matrix.arch }}"
+          if [[ -f "$tool" ]]; then
+            chmod +x "$tool"
+            echo "Found gltf-repair: $tool"
+          else
+            echo "Bundled gltf-repair binary not found at $tool" >&2
+            exit 1
           fi
 
       - name: Upload macOS ${{ matrix.arch }} Artifact
@@ -134,7 +158,7 @@ jobs:
 
       - name: Publish Scone Linux ${{ matrix.arch }}
         shell: bash
-        run: dotnet publish ./Scone/Scone.csproj -c Release -r linux-${{ matrix.arch }} --self-contained
+        run: dotnet publish ./Scone/Scone.csproj -c Release -r linux-${{ matrix.arch }} --self-contained /p:GltfRepairPkgTargets=node18-linux-${{ matrix.arch }}
 
       - name: Check bundled glTF validator (Linux)
         shell: bash
@@ -146,6 +170,19 @@ jobs:
             echo "Found validator: $validator"
           else
             echo "::warning::Bundled glTF validator not found at $validator"
+          fi
+
+      - name: Check bundled gltf-repair binary (Linux)
+        shell: bash
+        run: |
+          set -euo pipefail
+          tool="./Scone/bin/Release/net10.0-desktop/linux-${{ matrix.arch }}/publish/Tools/gltf-repair/gltf-repair-linux-${{ matrix.arch }}"
+          if [[ -f "$tool" ]]; then
+            chmod +x "$tool"
+            echo "Found gltf-repair: $tool"
+          else
+            echo "Bundled gltf-repair binary not found at $tool" >&2
+            exit 1
           fi
 
       - name: Upload Linux ${{ matrix.arch }} Artifact

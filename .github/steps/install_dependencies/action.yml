@@ -10,6 +10,10 @@ inputs:
     description: 'Installs and sets the .NET SDK Version'
     required: false
     default: '10.0.x'
+  node-version:
+    description: 'Installs and sets the Node.js Version for tooling builds'
+    required: false
+    default: '20'
   sdkVersion:
     description: 'The version of the Windows Sdk'
     required: false
@@ -23,6 +27,11 @@ runs:
       uses: actions/setup-dotnet@v3
       with:
         dotnet-version: '${{ inputs.dotnet-version }}'
+
+    - name: Setup Node.js ${{ inputs.node-version }}
+      uses: actions/setup-node@v4
+      with:
+        node-version: '${{ inputs.node-version }}'
 
     # Install Windows SDK
     - name: Install Windows SDK ${{ inputs.sdkVersion }}
