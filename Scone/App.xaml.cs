@@ -1,11 +1,14 @@
 namespace Scone;
 
+using System.Runtime.InteropServices;
+
 public partial class App : Application
 {
 	public static readonly string TempPath = Path.Combine(Path.GetTempPath(), "scone");
 	public static readonly string StorePath = ResolveStorePath();
 	public static readonly string ConfigPath = Path.Combine(StorePath, "config.json");
 	public static Config AppConfig = new();
+	public static string GltfValidatorPath { get; private set; } = string.Empty;
 
 	private static string ResolveStorePath()
 	{
@@ -25,6 +28,8 @@ public partial class App : Application
 	/// </summary>
 	public App()
 	{
+		InitializeRuntimePaths();
+
 		if (!Directory.Exists(TempPath))
 		{
 			_ = Directory.CreateDirectory(TempPath);
@@ -52,6 +57,28 @@ public partial class App : Application
 			File.WriteAllText(ConfigPath, System.Text.Json.JsonSerializer.Serialize(AppConfig));
 		};
 		InitializeComponent();
+	}
+
+	public static void InitializeRuntimePaths()
+	{
+		(string folder, string executable) platformValidator = RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
+			? ("windows", "gltf_validator.exe")
+			: RuntimeInformation.IsOSPlatform(OSPlatform.OSX)
+				? ("macos", "gltf_validator")
+				: ("linux", "gltf_validator");
+
+		string[] candidates =
+		[
+			Path.Combine(AppContext.BaseDirectory, "Tools", "gltf-validator", platformValidator.folder, platformValidator.executable),
+			Path.Combine(Directory.GetCurrentDirectory(), "Tools", "gltf-validator", platformValidator.folder, platformValidator.executable),
+			Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "Tools", "gltf-validator", platformValidator.folder, platformValidator.executable)
+		];
+
+		string? discoveredPath = candidates
+			.Select(Path.GetFullPath)
+			.FirstOrDefault(File.Exists);
+
+		GltfValidatorPath = discoveredPath ?? Path.GetFullPath(candidates[0]);
 	}
 
 	public static Window? MainWindow { get; private set; }

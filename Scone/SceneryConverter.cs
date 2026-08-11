@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Globalization;
 using System.Numerics;
 using System.Text;
@@ -5,11 +6,9 @@ using System.Text.RegularExpressions;
 using System.Xml;
 using System.Xml.Linq;
 using Newtonsoft.Json.Linq;
-using SharpGLTF.Geometry;
-using SharpGLTF.Geometry.VertexTypes;
-using SharpGLTF.Materials;
 using SharpGLTF.Scenes;
 using SharpGLTF.Schema2;
+using SharpGLTF.Validation;
 using Uno.Extensions.Specialized;
 
 namespace Scone;
@@ -1082,6 +1081,7 @@ public class SceneryConverter : INotifyPropertyChanged
 					if (match.Success)
 					{
 						string modelCfgFile = Path.Combine(Path.GetDirectoryName(simObj.containerPath)!, match.Groups[1].Value.Trim() == "" ? "model" : $"model.{match.Groups[1].Value.Replace("\r", "").Replace("\"", "").Trim()}", "model.CFG");
+						string texturePath = Path.Combine(Path.GetDirectoryName(simObj.containerPath)!, match.Groups[2].Value.Trim() == "" ? "texture" : $"texture.{match.Groups[2].Value.Replace("\r", "").Replace("\"", "").Trim()}");
 						string dirName = Path.GetDirectoryName(modelCfgFile)!;
 						string modelSource = new Regex(@"normal=(.+)", RegexOptions.Multiline).Match(File.ReadAllText(modelCfgFile)).Groups[1].Value;
 						string xmlPath = Path.Combine(dirName, modelSource);
@@ -1117,14 +1117,10 @@ public class SceneryConverter : INotifyPropertyChanged
 						{
 							continue;
 						}
-						string simObjOutputDir = Path.Combine(App.StorePath, "SimObjects", simObj.containerTitle);
 						string sourceGltfPath = Path.Combine(Path.GetDirectoryName(xmlPath)!, gltfFile);
-						string repairedGltfPath = Path.Combine(simObjOutputDir, $"{simObj.containerTitle}.gltf");
-						MsfsGltfRepairResult repairResult = MsfsGltfRepair.ExportFixedGltf(sourceGltfPath, repairedGltfPath);
-						Logger.Info($"Repaired {Path.GetFileName(sourceGltfPath)} for scene assembly ({repairResult.RewrittenTexCoordAccessorCount} TEXCOORD accessor(s), {repairResult.NormalizedNodeScaleCount} non-uniform scale node(s)).");
-						JObject json = JObject.Parse(File.ReadAllText(repairResult.OutputPath));
-						(byte[] combinedBuffer, _) = LoadCombinedGltfBuffers(json, simObjOutputDir);
-						SceneBuilder scene = CreateGltfModelFromGltf(combinedBuffer, json, simObjOutputDir, Path.GetDirectoryName(modelCfgFile)!);
+						JObject sourceJson = JObject.Parse(File.ReadAllText(sourceGltfPath));
+						(byte[] combinedBuffer, _) = LoadCombinedGltfBuffers(sourceJson, Path.GetDirectoryName(sourceGltfPath)!);
+						SceneBuilder scene = CreateGltfModelFromGltf(combinedBuffer, sourceJson, texturePath, Path.GetDirectoryName(modelCfgFile)!);
 
 						// Find out if this is a jetway by looking for the 3 IKChain names
 						xmlReader = XmlReader.Create(xmlPath, new XmlReaderSettings { ConformanceLevel = ConformanceLevel.Fragment });
@@ -1166,7 +1162,7 @@ public class SceneryConverter : INotifyPropertyChanged
 						if (isJetway)
 						{
 							// Parse the glTF once more to get the IK handle nodes
-							JArray nodes = (JArray)json["nodes"]!;
+							JArray nodes = (JArray)sourceJson["nodes"]!;
 							JObject mainHandleStartNode = (JObject)nodes.First(n => n["name"]?.ToString()?.Equals(IKMainHandleStart, StringComparison.OrdinalIgnoreCase) == true);
 							JObject mainHandleEndNode = (JObject)nodes.First(n => n["name"]?.ToString()?.Equals(IKMainHandleEnd, StringComparison.OrdinalIgnoreCase) == true);
 							JObject secondaryHandleStartNode = (JObject)nodes.First(n => n["name"]?.ToString()?.Equals(IKSecondaryHandleStart, StringComparison.OrdinalIgnoreCase) == true);
@@ -1446,173 +1442,22 @@ public class SceneryConverter : INotifyPropertyChanged
 	private static string JsonPostprocessor(string json, string outputDir)
 	{
 		JObject gltfText = JObject.Parse(json);
-		Dictionary<string, int> imageUriToIndex = [];
-		JArray images = [];
-		// Assign proper sources for textures using extensions
-		foreach (JObject mat in gltfText["materials"]?.Cast<JObject>() ?? [])
+		if (gltfText["images"] is not JArray images)
 		{
-			if (mat["pbrMetallicRoughness"]?["baseColorTexture"] != null)
-			{
-				string baseColorTex = mat["extras"]!["baseColorTexture"]!.Value<string>() ?? "";
-				int texIndex = mat["pbrMetallicRoughness"]!["baseColorTexture"]!["index"]!.Value<int>();
-				JObject currentTexture = new()
-				{
-					["extensions"] = new JObject
-					{
-						["MSFT_texture_dds"] = new JObject
-						{
-							["source"] = images.Count
-						}
-					},
-					["source"] = images.Count
-				};
-				if (imageUriToIndex.TryGetValue(baseColorTex, out int existingIndex))
-				{
-					currentTexture["source"] = existingIndex;
-					currentTexture["extensions"]!["MSFT_texture_dds"]!["source"] = existingIndex;
-				}
-				else
-				{
-					imageUriToIndex[baseColorTex] = images.Count;
-					images.Add(new JObject
-					{
-						["uri"] = Path.GetFileName(baseColorTex)
-					});
-				}
-				_ = (gltfText["textures"]?[texIndex] = currentTexture);
-				if (!File.Exists(Path.Combine(outputDir, Path.GetFileName(baseColorTex))))
-					File.Copy(baseColorTex, Path.Combine(outputDir, Path.GetFileName(baseColorTex)));
-			}
-			if (mat["pbrMetallicRoughness"]?["metallicRoughnessTexture"] != null)
-			{
-				string metallicRoughnessTex = mat["extras"]!["metallicRoughnessTexture"]!.Value<string>() ?? "";
-				int texIndex = mat["pbrMetallicRoughness"]!["metallicRoughnessTexture"]!["index"]!.Value<int>();
-				JObject currentTexture = new()
-				{
-					["extensions"] = new JObject
-					{
-						["MSFT_texture_dds"] = new JObject
-						{
-							["source"] = images.Count
-						}
-					},
-					["source"] = images.Count
-				};
-				if (imageUriToIndex.TryGetValue(metallicRoughnessTex, out int existingIndex))
-				{
-					currentTexture["source"] = existingIndex;
-					currentTexture["extensions"]!["MSFT_texture_dds"]!["source"] = existingIndex;
-				}
-				else
-				{
-					imageUriToIndex[metallicRoughnessTex] = images.Count;
-					images.Add(new JObject
-					{
-						["uri"] = Path.GetFileName(metallicRoughnessTex)
-					});
-				}
-				_ = (gltfText["textures"]?[texIndex] = currentTexture);
-				if (!File.Exists(Path.Combine(outputDir, Path.GetFileName(metallicRoughnessTex))))
-					File.Copy(metallicRoughnessTex, Path.Combine(outputDir, Path.GetFileName(metallicRoughnessTex)), true);
-			}
-			if (mat["normalTexture"] != null)
-			{
-				string normaTex = mat["extras"]!["normalTexture"]!.Value<string>() ?? "";
-				int texIndex = mat["normalTexture"]!["index"]!.Value<int>();
-				JObject currentTexture = new()
-				{
-					["extensions"] = new JObject
-					{
-						["MSFT_texture_dds"] = new JObject
-						{
-							["source"] = images.Count
-						}
-					},
-					["source"] = images.Count
-				};
-				if (imageUriToIndex.TryGetValue(normaTex, out int existingIndex))
-				{
-					currentTexture["source"] = existingIndex;
-					currentTexture["extensions"]!["MSFT_texture_dds"]!["source"] = existingIndex;
-				}
-				else
-				{
-					imageUriToIndex[normaTex] = images.Count;
-					images.Add(new JObject
-					{
-						["uri"] = Path.GetFileName(normaTex)
-					});
-				}
-				_ = (gltfText["textures"]?[texIndex] = currentTexture);
-				if (!File.Exists(Path.Combine(outputDir, Path.GetFileName(normaTex))))
-					File.Copy(normaTex, Path.Combine(outputDir, Path.GetFileName(normaTex)), true);
-			}
-			if (mat["occlusionTexture"] != null)
-			{
-				string occlusionTex = mat["extras"]!["occlusionTexture"]!.Value<string>() ?? "";
-				int texIndex = mat["occlusionTexture"]!["index"]!.Value<int>();
-				JObject currentTexture = new()
-				{
-					["extensions"] = new JObject
-					{
-						["MSFT_texture_dds"] = new JObject
-						{
-							["source"] = images.Count
-						}
-					},
-					["source"] = images.Count
-				};
-				if (imageUriToIndex.TryGetValue(occlusionTex, out int existingIndex))
-				{
-					currentTexture["source"] = existingIndex;
-					currentTexture["extensions"]!["MSFT_texture_dds"]!["source"] = existingIndex;
-				}
-				else
-				{
-					imageUriToIndex[occlusionTex] = images.Count;
-					images.Add(new JObject
-					{
-						["uri"] = Path.GetFileName(occlusionTex)
-					});
-				}
-				_ = (gltfText["textures"]?[texIndex] = currentTexture);
-				if (!File.Exists(Path.Combine(outputDir, Path.GetFileName(occlusionTex))))
-					File.Copy(occlusionTex, Path.Combine(outputDir, Path.GetFileName(occlusionTex)), true);
-			}
-			if (mat["emissiveTexture"] != null)
-			{
-				string emissiveTex = mat["extras"]!["emissiveTexture"]!.Value<string>() ?? "";
-				int texIndex = mat["emissiveTexture"]!["index"]!.Value<int>();
-				JObject currentTexture = new()
-				{
-					["extensions"] = new JObject
-					{
-						["MSFT_texture_dds"] = new JObject
-						{
-							["source"] = images.Count
-						}
-					},
-					["source"] = images.Count
-				};
-				if (imageUriToIndex.TryGetValue(emissiveTex, out int existingIndex))
-				{
-					currentTexture["source"] = existingIndex;
-					currentTexture["extensions"]!["MSFT_texture_dds"]!["source"] = existingIndex;
-				}
-				else
-				{
-					imageUriToIndex[emissiveTex] = images.Count;
-					images.Add(new JObject
-					{
-						["uri"] = Path.GetFileName(emissiveTex)
-					});
-				}
-				_ = (gltfText["textures"]?[texIndex] = currentTexture);
-				if (!File.Exists(Path.Combine(outputDir, Path.GetFileName(emissiveTex))))
-					File.Copy(emissiveTex, Path.Combine(outputDir, Path.GetFileName(emissiveTex)), true);
-			}
+			return gltfText.ToString();
 		}
-		gltfText["images"] = images;
+
+		foreach (JObject image in images.OfType<JObject>())
+		{
+			string extrasUri = image["extras"]?["absolutePath"]?.Value<string>() ?? "";
+			if (File.Exists(extrasUri))
+			{
+				File.Copy(extrasUri, Path.Combine(outputDir, Path.GetFileName(extrasUri)), true);
+				image["uri"] = Path.GetFileName(extrasUri);
+			}
+
+			image.Property("extras")?.Remove();
+		}
 		return gltfText.ToString();
 	}
 
@@ -1724,7 +1569,6 @@ public class SceneryConverter : INotifyPropertyChanged
 						if (sig == "GLB\0")
 						{
 							int glbSize = BitConverter.ToInt32(mdlBytes, j + 4);
-							// byte[] glbBytesPre = br.ReadBytes(glbSize);
 							byte[] glbBytes = mdlBytes[(j + 8)..(j + 8 + glbSize)];
 
 							// Fill the end of the JSON chunk with spaces, and replace non-printable characters with spaces.
@@ -1852,150 +1696,184 @@ public class SceneryConverter : INotifyPropertyChanged
 		}
 	}
 
-
 	private static SceneBuilder CreateGltfModelFromGltf(byte[] glbBinBytes, JObject json, string inputPath, string file)
 	{
-		SceneBuilder scene = new();
-		JArray meshes = (JArray)json["meshes"]!;
-		JArray accessors = (JArray)json["accessors"]!;
-		JArray bufferViews = (JArray)json["bufferViews"]!;
-		JArray images = (JArray)json["images"]!;
-		JArray materials = (JArray)json["materials"]!;
-		JArray textures = (JArray)json["textures"]!;
-		JArray nodes = (JArray)json["nodes"]!;
-		JArray? skins = (JArray?)json["skins"];
-		JArray topLevelNodes = (JArray)json["scenes"]![json["scene"]?.Value<int>() ?? 0]!["nodes"]!;
-
-		List<IMeshBuilder<MaterialBuilder>> meshBuilders = [];
-		foreach (JObject mesh in meshes.Cast<JObject>())
+		string tempBinPath = Path.Combine(App.TempPath, "temp.bin");
+		string tempGltfPath = Path.Combine(App.TempPath, "temp.gltf");
+		if (!Directory.Exists(App.TempPath))
 		{
-			if (mesh["primitives"]?[0]?["attributes"]?["JOINTS_0"] != null)
-			{
-				meshBuilders.Add(GlbBuilder.BuildSkinnedMesh(inputPath, file, mesh, accessors, bufferViews, materials, textures, images, glbBinBytes));
-			}
-			else
-			{
-				meshBuilders.Add(GlbBuilder.BuildMesh(inputPath, file, mesh, accessors, bufferViews, materials, textures, images, glbBinBytes));
-			}
+			_ = Directory.CreateDirectory(App.TempPath);
 		}
-
-		// PASS 1: Create a NodeBuilder for every node in the document and apply its local transform.
-		// This guarantees every joint referenced by any skin already has a NodeBuilder before we
-		// add skinned meshes to the scene.
-		NodeBuilder[] nodeBuilders = new NodeBuilder[nodes.Count];
-		for (int i = 0; i < nodes.Count; i++)
+		json["buffers"]![0]!["uri"] = "temp.bin";
+		foreach (JObject image in json["images"]?.Cast<JObject>() ?? [])
 		{
-			JObject nodeJson = (JObject)nodes[i]!;
-			NodeBuilder nb = new(nodeJson["name"]?.Value<string>() ?? $"Node_{i}");
-			ApplyNodeLocalTransform(nb, nodeJson);
-			nodeBuilders[i] = nb;
-		}
+			string uri = image["uri"]?.Value<string>() ?? "";
+			JObject extras = image["extras"] as JObject ?? [];
+			image["extras"] = extras;
+			extras["absolutePath"] = ResolveAbsoluteTexturePath(inputPath, file, uri);
+			image["uri"] = $"{Path.GetFileName(uri)}.DDS";
 
-		// PASS 2: Establish parent/child relationships between NodeBuilders.
-		bool[] isChild = new bool[nodes.Count];
-		for (int i = 0; i < nodes.Count; i++)
-		{
-			JObject nodeJson = (JObject)nodes[i]!;
-			JToken? children = nodeJson["children"];
-			if (children is null) continue;
-			foreach (int childIndex in children.Values<int>())
+			if (!File.Exists(Path.Combine(App.TempPath, $"{Path.GetFileName(uri)}.DDS")))
 			{
-				NodeBuilder child = nodeBuilders[childIndex];
-				NodeBuilder parent = nodeBuilders[i];
-				// AddNode appends the existing node as a child, preserving its local transform.
-				parent.AddNode(child);
-				isChild[childIndex] = true;
-			}
-		}
+				string[] dummyTextureCandidates =
+				[
+					Path.Combine(AppContext.BaseDirectory, "Assets", "dummy_tex.dds"),
+					Path.Combine(Directory.GetCurrentDirectory(), "Assets", "dummy_tex.dds")
+				];
+				string? dummyTexturePath = dummyTextureCandidates
+					.Select(Path.GetFullPath)
+					.FirstOrDefault(File.Exists);
 
-		// PASS 3: Walk the scene from the top-level scene nodes (which are roots) and emit meshes.
-		// Skinned meshes use the IBM-aware overload, with joints in the order specified by skin.joints.
-		void EmitMeshesFromNode(int nodeIndex)
-		{
-			JObject nodeJson = (JObject)nodes[nodeIndex]!;
-			NodeBuilder nb = nodeBuilders[nodeIndex];
-
-			if (nodeJson["mesh"] != null)
-			{
-				int meshIndex = nodeJson["mesh"]!.Value<int>();
-				IMeshBuilder<MaterialBuilder> meshBuilder = meshBuilders[meshIndex];
-
-				if (nodeJson["skin"] != null && skins != null)
+				if (string.IsNullOrEmpty(dummyTexturePath))
 				{
-					int skinIndex = nodeJson["skin"]!.Value<int>();
-					JObject skinJson = (JObject)skins[skinIndex]!;
-					int[] jointNodeIndices = [.. skinJson["joints"]!.Values<int>()];
-
-					// Inverse bind matrices: same order as skinJson["joints"]; default to identity if missing.
-					Matrix4x4[] ibms;
-					if (skinJson["inverseBindMatrices"] != null)
-					{
-						int ibmAcc = skinJson["inverseBindMatrices"]!.Value<int>();
-						ibms = GlbBuilder.LoadInverseBindMatrices((JObject)accessors[ibmAcc]!, bufferViews, glbBinBytes);
-					}
-					else
-					{
-						ibms = new Matrix4x4[jointNodeIndices.Length];
-						for (int k = 0; k < ibms.Length; k++) ibms[k] = Matrix4x4.Identity;
-					}
-
-					(NodeBuilder Joint, Matrix4x4 InverseBindMatrix)[] joints = new (NodeBuilder, Matrix4x4)[jointNodeIndices.Length];
-					for (int k = 0; k < jointNodeIndices.Length; k++)
-					{
-						joints[k] = (nodeBuilders[jointNodeIndices[k]], ibms[k]);
-					}
-
-					_ = scene.AddSkinnedMesh((MeshBuilder<VertexPositionNormalTangent, VertexTexture2, VertexJoints8>)meshBuilder, joints);
+					throw new FileNotFoundException("Could not locate dummy texture file for missing source textures.", "dummy_tex.dds");
 				}
-				else
-				{
-					_ = scene.AddRigidMesh(meshBuilder, nb);
-				}
-			}
 
-			JToken? children = nodeJson["children"];
-			if (children is null) return;
-			foreach (int childIndex in children.Values<int>())
-			{
-				EmitMeshesFromNode(childIndex);
+				File.Copy(dummyTexturePath, Path.Combine(App.TempPath, $"{Path.GetFileName(uri)}.DDS"), true);
 			}
 		}
-
-		foreach (int rootIndex in topLevelNodes.Values<int>())
+		File.WriteAllBytes(tempBinPath, glbBinBytes);
+		File.WriteAllBytes(tempGltfPath, Encoding.UTF8.GetBytes(json.ToString()));
+		ProcessStartInfo validatorStartInfo = new()
 		{
-			EmitMeshesFromNode(rootIndex);
+			FileName = App.GltfValidatorPath,
+			Arguments = $"--no-validate-resources -a \"{tempGltfPath}\"",
+			UseShellExecute = false,
+			CreateNoWindow = true,
+			RedirectStandardOutput = true,
+			RedirectStandardError = true
+		};
+
+		Process validatorProcess = new() { StartInfo = validatorStartInfo };
+		validatorProcess.Start();
+		validatorProcess.WaitForExit();
+		JObject validationResult = JObject.Parse(File.ReadAllText(Path.Combine(App.TempPath, "temp.gltf.report.json")));
+		List<GltfValidatorIssue> issues = [];
+		foreach (JObject issue in validationResult["issues"]!["messages"]?.Cast<JObject>() ?? [])
+		{
+			string issueSeverity = NormalizeValidatorSeverity(issue["severity"]);
+			issues.Add(new GltfValidatorIssue(
+				issue["code"]?.Value<string>() ?? "",
+				issue["message"]?.Value<string>() ?? "",
+				issueSeverity,
+				issue["pointer"]?.Value<string>() ?? ""));
+		}
+		int tries = 0;
+		int errorCount = issues.Count(i => string.Equals(i.Severity, "error", StringComparison.OrdinalIgnoreCase));
+		while (tries < 3 && errorCount > 0)
+		{
+			tries++;
+			Logger.Warning($"GLTF validation failed with {errorCount} errors. Attempting to fix...");
+			GltfIssueFixResult issueFixResult = new GltfIssueFixer().AttemptFixes(json, glbBinBytes, issues);
+			json = issueFixResult.GltfJson;
+			glbBinBytes = issueFixResult.BinaryBuffer;
+			File.WriteAllBytes(tempBinPath, glbBinBytes);
+			File.WriteAllBytes(tempGltfPath, Encoding.UTF8.GetBytes(json.ToString()));
+			validatorProcess.Start();
+			validatorProcess.WaitForExit();
+			validationResult = JObject.Parse(File.ReadAllText(Path.Combine(App.TempPath, "temp.gltf.report.json")));
+			issues.Clear();
+			foreach (JObject issue in validationResult["issues"]!["messages"]?.Cast<JObject>() ?? [])
+			{
+				string issueSeverity = NormalizeValidatorSeverity(issue["severity"]);
+				issues.Add(new GltfValidatorIssue(
+					issue["code"]?.Value<string>() ?? "",
+					issue["message"]?.Value<string>() ?? "",
+					issueSeverity,
+					issue["pointer"]?.Value<string>() ?? ""));
+			}
+			errorCount = issues.Count(i => string.Equals(i.Severity, "error", StringComparison.OrdinalIgnoreCase));
+		}
+		
+		if (errorCount > 0)
+		{
+			Logger.Error($"GLTF validation failed after {tries} attempts with {errorCount} errors. Aborting conversion for this model.");
+			foreach (GltfValidatorIssue issue in issues.Where(i => string.Equals(i.Severity, "error", StringComparison.OrdinalIgnoreCase)))
+			{
+				Logger.Error($"GLTF Validation Error: Code: {issue.Code}, Message: {issue.Message}, Pointer: {issue.Pointer}");
+			}
+			throw new InvalidDataException($"GLTF validation failed after {tries} attempts with {errorCount} errors.");
 		}
 
-		return scene;
+		// Strict validation throws if the amended model is not glTF-spec compliant.
+		_ = ModelRoot.Load(tempGltfPath, new ReadSettings
+		{
+			Validation = ValidationMode.Skip
+		});
+
+		SceneBuilder[] scenes;
+		try
+		{
+			scenes = SceneBuilder.LoadAllScenes(tempGltfPath);
+		}
+		catch (Exception ex)
+		{
+			Logger.Error($"Failed to load scenes from GLTF file {tempGltfPath}: {ex.Message}");
+			return new SceneBuilder();
+		}
+
+		return scenes[0];
 	}
 
-	private static void ApplyNodeLocalTransform(NodeBuilder nb, JObject nodeJson)
+	private static string NormalizeValidatorSeverity(JToken? severityToken)
 	{
-		if (nodeJson["matrix"] != null)
+		if (severityToken is null)
 		{
-			JArray m = (JArray)nodeJson["matrix"]!;
-			nb.LocalMatrix = new Matrix4x4(
-				m[0].Value<float>(), m[1].Value<float>(), m[2].Value<float>(), m[3].Value<float>(),
-				m[4].Value<float>(), m[5].Value<float>(), m[6].Value<float>(), m[7].Value<float>(),
-				m[8].Value<float>(), m[9].Value<float>(), m[10].Value<float>(), m[11].Value<float>(),
-				m[12].Value<float>(), m[13].Value<float>(), m[14].Value<float>(), m[15].Value<float>());
-			return;
+			return "";
 		}
-		if (nodeJson["translation"] != null)
+
+		if (severityToken.Type == JTokenType.Integer)
 		{
-			JArray t = (JArray)nodeJson["translation"]!;
-			_ = nb.WithLocalTranslation(new Vector3(t[0].Value<float>(), t[1].Value<float>(), t[2].Value<float>()));
+			return severityToken.Value<int>() switch
+			{
+				0 => "error",
+				1 => "warning",
+				2 => "info",
+				3 => "hint",
+				_ => severityToken.Value<int>().ToString(CultureInfo.InvariantCulture)
+			};
 		}
-		if (nodeJson["rotation"] != null)
+
+		string rawSeverity = severityToken.Value<string>() ?? "";
+		if (int.TryParse(rawSeverity, NumberStyles.Integer, CultureInfo.InvariantCulture, out int numericSeverity))
 		{
-			JArray r = (JArray)nodeJson["rotation"]!;
-			_ = nb.WithLocalRotation(new Quaternion(r[0].Value<float>(), r[1].Value<float>(), r[2].Value<float>(), r[3].Value<float>()));
+			return numericSeverity switch
+			{
+				0 => "error",
+				1 => "warning",
+				2 => "info",
+				3 => "hint",
+				_ => rawSeverity
+			};
 		}
-		if (nodeJson["scale"] != null)
+
+		return rawSeverity.Trim().ToLowerInvariant();
+	}
+
+	private static string ResolveAbsoluteTexturePath(string inputPath, string sourcePath, string? textureUri)
+	{
+		string mostLikelyMatch = "";
+		string[] imageMatches = [.. Directory.GetFiles(inputPath, "*", SearchOption.AllDirectories).Where(f => string.Equals(Path.GetFileName(f), textureUri, StringComparison.OrdinalIgnoreCase))];
+		int mostLikelyMatchScore = -1;
+		foreach (string match in imageMatches)
 		{
-			JArray s = (JArray)nodeJson["scale"]!;
-			_ = nb.WithLocalScale(new Vector3(s[0].Value<float>(), s[1].Value<float>(), s[2].Value<float>()));
+			int i = 0;
+
+			while (i < Math.Min(match.Length, sourcePath.Length) && match[i] == sourcePath[i])
+				i++;
+
+			if (i > mostLikelyMatchScore)
+			{
+				mostLikelyMatchScore = i;
+				mostLikelyMatch = match;
+			}
 		}
+
+		if (!string.IsNullOrEmpty(mostLikelyMatch))
+		{
+			return mostLikelyMatch;
+		}
+		return mostLikelyMatch.Length > 0 ? mostLikelyMatch : "";
 	}
 
 	private static SceneBuilder CreateGltfModelFromGlb(byte[] glbBytes, string inputPath, string file)
@@ -2012,9 +1890,10 @@ public class SceneryConverter : INotifyPropertyChanged
 
 		uint binLength = BitConverter.ToUInt32(glbBytes, 0x14 + (int)JSONLength);
 		byte[] glbBinBytes = glbBytes[(0x14 + (int)JSONLength + 8)..(0x14 + (int)JSONLength + 8 + (int)binLength)];
-
 		JObject json = JObject.Parse(Encoding.UTF8.GetString(glbBytes, 0x14, (int)JSONLength).Trim());
-		return CreateGltfModelFromGltf(glbBinBytes, json, inputPath, file);
+		SceneBuilder scene = CreateGltfModelFromGltf(glbBinBytes, json, inputPath, file);
+
+		return scene;
 	}
 
 	private static (AcBuilder builder, List<string> bufferFiles) BuildAcSceneFromGltf(string gltfFilePath)
@@ -2096,7 +1975,6 @@ public class SceneryConverter : INotifyPropertyChanged
 		return (combinedBuffer, bufferFiles);
 	}
 
-
 	private static XmlNode CreateLightElement(XmlDocument doc, LightObject light)
 	{
 		XmlElement lightElem = doc.CreateElement("light");
@@ -2134,96 +2012,6 @@ public class SceneryConverter : INotifyPropertyChanged
 			// XmlElement dimFactor = lightElem.AppendChild(doc.CreateElement("dim-factor")) as XmlElement;
 		}
 		return lightElem;
-	}
-
-	private static XmlNode CreateLodElement(XmlDocument doc, float radius, int minSize, int? maxSize)
-	{
-		XmlElement lodElem = doc.CreateElement("animation");
-		lodElem.AppendChild(doc.CreateElement("type"))!.InnerText = "range";
-
-		// Build <min-property> structure per requested XML
-		XmlElement minProp = doc.CreateElement("min-property");
-		XmlElement exprMin = doc.CreateElement("expression");
-		XmlElement divMin = doc.CreateElement("div");
-
-		// First <prod>
-		XmlElement prodMin1 = doc.CreateElement("prod");
-		XmlElement valueRadiusMin = doc.CreateElement("value");
-		valueRadiusMin.InnerText = radius.ToString("F2");
-		XmlElement propertyScreenHeightMin = doc.CreateElement("property");
-		propertyScreenHeightMin.InnerText = "720";
-		_ = prodMin1.AppendChild(valueRadiusMin);
-		_ = prodMin1.AppendChild(propertyScreenHeightMin);
-
-		// Second <prod>
-		XmlElement prodMin2 = doc.CreateElement("prod");
-		XmlElement valueMinSize = doc.CreateElement("value");
-		valueMinSize.InnerText = minSize.ToString();
-		XmlElement tanMin = doc.CreateElement("tan");
-		XmlElement tanMinProd = doc.CreateElement("prod");
-		XmlElement valueHalfMin = doc.CreateElement("value");
-		valueHalfMin.InnerText = "0.5";
-		XmlElement deg2radMin = doc.CreateElement("deg2rad");
-		XmlElement fovPropertyMin = doc.CreateElement("property");
-		fovPropertyMin.InnerText = "/sim/current-view/field-of-view";
-		_ = deg2radMin.AppendChild(fovPropertyMin);
-		_ = tanMinProd.AppendChild(valueHalfMin);
-		_ = tanMinProd.AppendChild(deg2radMin);
-		_ = tanMin.AppendChild(tanMinProd);
-		_ = prodMin2.AppendChild(valueMinSize);
-		_ = prodMin2.AppendChild(tanMin);
-
-		// Append to min property div
-		_ = divMin.AppendChild(prodMin1);
-		_ = divMin.AppendChild(prodMin2);
-		_ = exprMin.AppendChild(divMin);
-		_ = minProp.AppendChild(exprMin);
-
-		_ = lodElem.AppendChild(minProp);
-
-		if (maxSize != null)
-		{
-			// Build <max-property> structure per requested XML
-			XmlElement maxProp = doc.CreateElement("max-property");
-			XmlElement exprMax = doc.CreateElement("expression");
-			XmlElement divMax = doc.CreateElement("div");
-
-			// First <prod> for max
-			XmlElement prodMax1 = doc.CreateElement("prod");
-			XmlElement valueRadiusMax = doc.CreateElement("value");
-			valueRadiusMax.InnerText = radius.ToString("F2");
-			XmlElement propertyScreenHeightMax = doc.CreateElement("property");
-			propertyScreenHeightMax.InnerText = "720";
-			_ = prodMax1.AppendChild(valueRadiusMax);
-			_ = prodMax1.AppendChild(propertyScreenHeightMax);
-
-			// Second <prod> for max
-			XmlElement prodMax2 = doc.CreateElement("prod");
-			XmlElement valueMaxSize = doc.CreateElement("value");
-			valueMaxSize.InnerText = maxSize.ToString()!;
-			XmlElement tanMax = doc.CreateElement("tan");
-			XmlElement tanProdMax = doc.CreateElement("prod");
-			XmlElement valueHalfMax = doc.CreateElement("value");
-			valueHalfMax.InnerText = "0.5";
-			XmlElement deg2radMax = doc.CreateElement("deg2rad");
-			XmlElement fovPropertyMax = doc.CreateElement("property");
-			fovPropertyMax.InnerText = "/sim/current-view/field-of-view";
-			_ = deg2radMax.AppendChild(fovPropertyMax);
-			_ = tanProdMax.AppendChild(valueHalfMax);
-			_ = tanProdMax.AppendChild(deg2radMax);
-			_ = tanMax.AppendChild(tanProdMax);
-			_ = prodMax2.AppendChild(valueMaxSize);
-			_ = prodMax2.AppendChild(tanMax);
-
-			// Append to max property div
-			_ = divMax.AppendChild(prodMax1);
-			_ = divMax.AppendChild(prodMax2);
-			_ = exprMax.AppendChild(divMax);
-			_ = maxProp.AppendChild(exprMax);
-
-			_ = lodElem.AppendChild(maxProp);
-		}
-		return lodElem;
 	}
 
 	private static Matrix4x4 CreatePlacementTransform(object sceneryObject, double latOrigin, double lonOrigin, double altOrigin, int index = 0)
@@ -2275,7 +2063,7 @@ public class SceneryConverter : INotifyPropertyChanged
 		{
 			longitude = longitude,
 			latitude = latitude,
-			altitude = flags.Contains(Flags.IsAboveAGL) ? altitude + Terrain.GetElevation((float)latitude, (float)longitude) : altitude,
+			altitude = flags.Contains(Flags.IsAboveAGL) ? altitude /* + Terrain.GetElevation((float)latitude, (float)longitude) */ : altitude,
 			flags = flags,
 			pitch = Math.Round(BitConverter.ToInt16(bytes, 18) * (360.0 / 65536.0), 3),
 			bank = Math.Round(BitConverter.ToInt16(bytes, 20) * (360.0 / 65536.0), 3),
@@ -2303,7 +2091,7 @@ public class SceneryConverter : INotifyPropertyChanged
 		Flags[] flags = [.. Enum.GetValues<Flags>().Where(f => (BitConverter.ToInt16(bytes, 16) & (1 << (int)f)) != 0)];
 		if (flags.Contains(Flags.IsAboveAGL))
 		{
-			position.Z += (float)Terrain.GetElevation(position.Y, position.X);
+			position.Z += 0 /* (float)Terrain.GetElevation(position.Y, position.X) */;
 		}
 		float scale = BitConverter.ToSingle(bytes, 44);
 		int containerTitleLength = BitConverter.ToUInt16(bytes, 48);

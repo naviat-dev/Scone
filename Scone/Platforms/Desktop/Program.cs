@@ -37,6 +37,8 @@ internal class Program
             return;
         }
 
+        App.InitializeRuntimePaths();
+
         string input = args[1];
         string output = args[2];
         bool isGltf = args.Skip(3).Any(a => string.Equals(a, "--gltf", StringComparison.OrdinalIgnoreCase));
@@ -51,6 +53,7 @@ internal class Program
         Console.WriteLine($"[Scone CLI] output = {output}");
         Console.WriteLine($"[Scone CLI] gltf={isGltf} ac3d={isAc3d}");
         Console.WriteLine($"[Scone CLI] store  = {App.StorePath}");
+        Console.WriteLine($"[Scone CLI] validator = {App.GltfValidatorPath}");
 
         if (!Directory.Exists(App.StorePath))
         {
