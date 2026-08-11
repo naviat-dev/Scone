@@ -1,11 +1,14 @@
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const toolRoot = path.resolve(__dirname, '..');
+const resolveFromToolRoot = createRequire(path.join(toolRoot, 'package.json'));
+const pkgCliEntry = resolveFromToolRoot.resolve('pkg/lib-es5/bin.js');
 const distEntry = path.join(toolRoot, 'dist', 'pkg-entry.cjs');
 const outDir = path.join(toolRoot, 'bin');
 
@@ -63,12 +66,11 @@ if (unknownTargets.length > 0) {
   throw new Error(`Unsupported targets: ${unknownTargets.join(', ')}`);
 }
 
-const isWindows = process.platform === 'win32';
-const pkgBin = isWindows ? 'pkg.cmd' : 'pkg';
-
 for (const targetInfo of selectedTargets) {
   const outputPath = path.join(outDir, targetInfo.output);
-  execFileSync(pkgBin, [
+  // Execute the pkg CLI via Node to avoid .cmd spawn issues on Windows runners.
+  execFileSync(process.execPath, [
+    pkgCliEntry,
     distEntry,
     '--targets',
     targetInfo.target,
