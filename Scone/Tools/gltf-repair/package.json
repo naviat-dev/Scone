@@ -11,7 +11,7 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "start": "tsx src/index.ts",
     "build": "tsc",
-    "build:pkg-entry": "esbuild src/index.ts --bundle --platform=node --target=node18 --format=cjs --outfile=dist/pkg-entry.cjs",
+    "build:pkg-entry": "esbuild src/index.ts --bundle --platform=node --target=node18 --format=cjs --alias:ndarray-pixels=./scripts/stubs/ndarray-pixels.cjs --outfile=dist/pkg-entry.cjs",
     "package-binary": "node ./scripts/package-binary.mjs"
   },
   "keywords": [],

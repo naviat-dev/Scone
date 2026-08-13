@@ -19,7 +19,9 @@ if (!fs.existsSync(distEntry)) {
 const distSource = fs.readFileSync(distEntry, 'utf8');
 const patchedSource = distSource
   .replaceAll('import("node:fs")', 'Promise.resolve(require("node:fs"))')
-  .replaceAll('import("node:path")', 'Promise.resolve(require("node:path"))');
+  .replaceAll('import("node:path")', 'Promise.resolve(require("node:path"))')
+  // pkg runtime does not provide import.meta.url in this bundled CJS context.
+  .replace(/\(0,\s*import_node_module\d*\.createRequire\)\(import_meta\d*\.url\)/g, 'require');
 
 if (patchedSource !== distSource) {
   fs.writeFileSync(distEntry, patchedSource, 'utf8');
