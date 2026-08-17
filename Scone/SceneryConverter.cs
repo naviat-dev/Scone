@@ -1705,6 +1705,7 @@ public class SceneryConverter : INotifyPropertyChanged
 			_ = Directory.CreateDirectory(App.TempPath);
 		}
 		json["buffers"]![0]!["uri"] = "temp.bin";
+		json.Remove("extensionsRequired");
 		foreach (JObject image in json["images"]?.Cast<JObject>() ?? [])
 		{
 			string uri = image["uri"]?.Value<string>() ?? "";
@@ -1712,28 +1713,23 @@ public class SceneryConverter : INotifyPropertyChanged
 			image["extras"] = extras;
 			extras["absolutePath"] = ResolveAbsoluteTexturePath(inputPath, file, uri);
 			image["uri"] = $"{Path.GetFileNameWithoutExtension(uri)}.DDS";
-
 			if (!File.Exists(Path.Combine(App.TempPath, $"{Path.GetFileNameWithoutExtension(uri)}.DDS")))
 			{
-				string[] dummyTextureCandidates =
-				[
-					Path.Combine(AppContext.BaseDirectory, "Assets", "dummy_tex.dds"),
-					Path.Combine(Directory.GetCurrentDirectory(), "Assets", "dummy_tex.dds")
-				];
-				string? dummyTexturePath = dummyTextureCandidates
-					.Select(Path.GetFullPath)
-					.FirstOrDefault(File.Exists);
-
-				if (string.IsNullOrEmpty(dummyTexturePath))
-				{
-					throw new FileNotFoundException("Could not locate dummy texture file for missing source textures.", "dummy_tex.dds");
-				}
-
-				File.Copy(dummyTexturePath, Path.Combine(App.TempPath, $"{Path.GetFileNameWithoutExtension(uri)}.DDS"), true);
+				File.Copy(ResolveAbsoluteTexturePath(inputPath, file, uri), Path.Combine(App.TempPath, $"{Path.GetFileNameWithoutExtension(uri)}.DDS"));
 			}
 		}
 		File.WriteAllBytes(tempBinPath, glbBinBytes);
 		File.WriteAllBytes(tempGltfPath, Encoding.UTF8.GetBytes(json.ToString()));
+		ProcessStartInfo repairStartInfo = new()
+		{
+			FileName = App.GltfRepairPath,
+			Arguments = $"repair \"{tempGltfPath}\" \"{Path.Combine(App.TempPath, "temp.gltf.report.json")}\" \"{tempGltfPath}\"",
+			UseShellExecute = false,
+			CreateNoWindow = true,
+			RedirectStandardOutput = false,
+			RedirectStandardError = false
+		};
+
 		ProcessStartInfo validatorStartInfo = new()
 		{
 			FileName = App.GltfValidatorPath,
@@ -1744,53 +1740,29 @@ public class SceneryConverter : INotifyPropertyChanged
 			RedirectStandardError = true
 		};
 
+		Process repairProcess = new() { StartInfo = repairStartInfo };
 		Process validatorProcess = new() { StartInfo = validatorStartInfo };
 		validatorProcess.Start();
 		validatorProcess.WaitForExit();
-		JObject validationResult = JObject.Parse(File.ReadAllText(Path.Combine(App.TempPath, "temp.gltf.report.json")));
-		List<GltfValidatorIssue> issues = [];
-		foreach (JObject issue in validationResult["issues"]!["messages"]?.Cast<JObject>() ?? [])
-		{
-			string issueSeverity = NormalizeValidatorSeverity(issue["severity"]);
-			issues.Add(new GltfValidatorIssue(
-				issue["code"]?.Value<string>() ?? "",
-				issue["message"]?.Value<string>() ?? "",
-				issueSeverity,
-				issue["pointer"]?.Value<string>() ?? ""));
-		}
 		int tries = 0;
-		int errorCount = issues.Count(i => string.Equals(i.Severity, "error", StringComparison.OrdinalIgnoreCase));
+		int errorCount = JObject.Parse(File.ReadAllText(Path.Combine(App.TempPath, "temp.gltf.report.json")))["issues"]?["messages"]?.Count(i => i["severity"]?.Value<int>() == 0) ?? 0;
 		while (tries < 3 && errorCount > 0)
 		{
 			tries++;
 			Logger.Warning($"GLTF validation failed with {errorCount} errors. Attempting to fix...");
-			GltfIssueFixResult issueFixResult = new GltfIssueFixer().AttemptFixes(json, glbBinBytes, issues);
-			json = issueFixResult.GltfJson;
-			glbBinBytes = issueFixResult.BinaryBuffer;
-			File.WriteAllBytes(tempBinPath, glbBinBytes);
-			File.WriteAllBytes(tempGltfPath, Encoding.UTF8.GetBytes(json.ToString()));
+			repairProcess.Start();
+			repairProcess.WaitForExit();
 			validatorProcess.Start();
 			validatorProcess.WaitForExit();
-			validationResult = JObject.Parse(File.ReadAllText(Path.Combine(App.TempPath, "temp.gltf.report.json")));
-			issues.Clear();
-			foreach (JObject issue in validationResult["issues"]!["messages"]?.Cast<JObject>() ?? [])
-			{
-				string issueSeverity = NormalizeValidatorSeverity(issue["severity"]);
-				issues.Add(new GltfValidatorIssue(
-					issue["code"]?.Value<string>() ?? "",
-					issue["message"]?.Value<string>() ?? "",
-					issueSeverity,
-					issue["pointer"]?.Value<string>() ?? ""));
-			}
-			errorCount = issues.Count(i => string.Equals(i.Severity, "error", StringComparison.OrdinalIgnoreCase));
+			errorCount = JObject.Parse(File.ReadAllText(Path.Combine(App.TempPath, "temp.gltf.report.json")))["issues"]?["messages"]?.Count(i => i["severity"]?.Value<int>() == 0) ?? 0;
 		}
 		
 		if (errorCount > 0)
 		{
 			Logger.Error($"GLTF validation failed after {tries} attempts with {errorCount} errors. Aborting conversion for this model.");
-			foreach (GltfValidatorIssue issue in issues.Where(i => string.Equals(i.Severity, "error", StringComparison.OrdinalIgnoreCase)))
+			foreach (JObject issue in JObject.Parse(File.ReadAllText(Path.Combine(App.TempPath, "temp.gltf.report.json")))["issues"]?["messages"]?.Where(i => i["severity"]?.Value<int>() == 0).Cast<JObject>() ?? [])
 			{
-				Logger.Error($"GLTF Validation Error: Code: {issue.Code}, Message: {issue.Message}, Pointer: {issue.Pointer}");
+				Logger.Error($"GLTF Validation Error: Code: {issue["code"]?.Value<string>() ?? ""}, Message: {issue["message"]?.Value<string>() ?? ""}, Pointer: {issue["pointer"]?.Value<string>() ?? ""}");
 			}
 			throw new InvalidDataException($"GLTF validation failed after {tries} attempts with {errorCount} errors.");
 		}
