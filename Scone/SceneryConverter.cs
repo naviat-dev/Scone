@@ -1120,7 +1120,7 @@ public class SceneryConverter : INotifyPropertyChanged
 						string sourceGltfPath = Path.Combine(Path.GetDirectoryName(xmlPath)!, gltfFile);
 						JObject sourceJson = JObject.Parse(File.ReadAllText(sourceGltfPath));
 						(byte[] combinedBuffer, _) = LoadCombinedGltfBuffers(sourceJson, Path.GetDirectoryName(sourceGltfPath)!);
-						SceneBuilder scene = CreateGltfModelFromGltf(combinedBuffer, sourceJson, texturePath, Path.GetDirectoryName(modelCfgFile)!);
+						SceneBuilder scene = CreateGltfModel(combinedBuffer, sourceJson, texturePath, Path.GetDirectoryName(modelCfgFile)!);
 
 						// Find out if this is a jetway by looking for the 3 IKChain names
 						xmlReader = XmlReader.Create(xmlPath, new XmlReaderSettings { ConformanceLevel = ConformanceLevel.Fragment });
@@ -1514,6 +1514,7 @@ public class SceneryConverter : INotifyPropertyChanged
 			for (int i = 8; i < mdlBytes.Length; i += 4)
 			{
 				string chunk = Encoding.ASCII.GetString(mdlBytes, i, Math.Min(4, mdlBytes.Length - i));
+				int glbIndex = 0; // for unique filenames per GLB in this chunk
 				if (chunk == "GXML")
 				{
 					int size = BitConverter.ToInt32(mdlBytes, i + 4);
@@ -1554,10 +1555,16 @@ public class SceneryConverter : INotifyPropertyChanged
 				}
 				else if (chunk == "GLBD")
 				{
+					if (glbIndex >= 1)
+					{
+						Logger.Info($"More than one LOD present for {name}; skipping remaining GLB in chunk.");
+						glbIndex = 0;
+						// The highest LOD is the first GLB; break after processing it
+						break;
+					}
 					Logger.Info($"Processing GLBD chunk for model {name} ({modelRef.guid:X}) in {modelRef.file}");
 					Status = $"Processing model {name} ({modelsProcessed} of {totalModelCount})...";
 					int size = BitConverter.ToInt32(mdlBytes, i + 4);
-					int glbIndex = 0; // for unique filenames per GLB in this chunk
 
 					// Scan GLBD payload and skip past each GLB block once processed
 					for (int j = i + 8; j < i + 8 + size;)
@@ -1597,10 +1604,9 @@ public class SceneryConverter : INotifyPropertyChanged
 								continue;
 							}
 
-							uint binLength = BitConverter.ToUInt32(glbBytes, 0x14 + (int)JSONLength);
-							byte[] glbBinBytes = glbBytes[(0x14 + (int)JSONLength + 8)..(0x14 + (int)JSONLength + 8 + (int)binLength)];
+							byte[] glbBinBytes = glbBytes[(0x14 + (int)JSONLength + 8)..(0x14 + (int)JSONLength + 8 + (int)BitConverter.ToUInt32(glbBytes, 0x14 + (int)JSONLength))];
 
-							SceneBuilder sceneLocal = CreateGltfModelFromGlb(glbBytes, inputPath, modelRef.file);
+							SceneBuilder sceneLocal = CreateGltfModel(glbBytes, json, inputPath, modelRef.file);
 
 							foreach (LibraryObject libObj in libraryObjectsForModel)
 							{
@@ -1615,12 +1621,6 @@ public class SceneryConverter : INotifyPropertyChanged
 
 							// Advance j past this GLB record (type[4] + size[4] + payload[glbSize])
 							j += 8 + glbSize;
-							if (glbIndex >= 1)
-							{
-								Logger.Info($"More than one LOD present for {name}; skipping remaining GLB in chunk.");
-								// The highest LOD is the first GLB; break after processing it
-								break;
-							}
 						}
 						else
 						{
@@ -1696,7 +1696,7 @@ public class SceneryConverter : INotifyPropertyChanged
 		}
 	}
 
-	private static SceneBuilder CreateGltfModelFromGltf(byte[] glbBinBytes, JObject json, string inputPath, string file)
+	private static SceneBuilder CreateGltfModel(byte[] glbBinBytes, JObject json, string inputPath, string file)
 	{
 		string tempBinPath = Path.Combine(App.TempPath, "temp.bin");
 		string tempGltfPath = Path.Combine(App.TempPath, "temp.gltf");
@@ -1709,10 +1709,10 @@ public class SceneryConverter : INotifyPropertyChanged
 		foreach (JObject image in json["images"]?.Cast<JObject>() ?? [])
 		{
 			string uri = image["uri"]?.Value<string>() ?? "";
-			JObject extras = image["extras"] as JObject ?? [];
-			image["extras"] = extras;
-			extras["absolutePath"] = ResolveAbsoluteTexturePath(inputPath, file, uri);
 			image["uri"] = $"{Path.GetFileNameWithoutExtension(uri)}.DDS";
+			JObject extras = image["extras"] as JObject ?? [];
+			extras["absolutePath"] = ResolveAbsoluteTexturePath(inputPath, file, uri);
+			image["extras"] = extras;
 			if (!File.Exists(Path.Combine(App.TempPath, $"{Path.GetFileNameWithoutExtension(uri)}.DDS")))
 			{
 				File.Copy(ResolveAbsoluteTexturePath(inputPath, file, uri), Path.Combine(App.TempPath, $"{Path.GetFileNameWithoutExtension(uri)}.DDS"));
@@ -1787,41 +1787,6 @@ public class SceneryConverter : INotifyPropertyChanged
 		return scenes[0];
 	}
 
-	private static string NormalizeValidatorSeverity(JToken? severityToken)
-	{
-		if (severityToken is null)
-		{
-			return "";
-		}
-
-		if (severityToken.Type == JTokenType.Integer)
-		{
-			return severityToken.Value<int>() switch
-			{
-				0 => "error",
-				1 => "warning",
-				2 => "info",
-				3 => "hint",
-				_ => severityToken.Value<int>().ToString(CultureInfo.InvariantCulture)
-			};
-		}
-
-		string rawSeverity = severityToken.Value<string>() ?? "";
-		if (int.TryParse(rawSeverity, NumberStyles.Integer, CultureInfo.InvariantCulture, out int numericSeverity))
-		{
-			return numericSeverity switch
-			{
-				0 => "error",
-				1 => "warning",
-				2 => "info",
-				3 => "hint",
-				_ => rawSeverity
-			};
-		}
-
-		return rawSeverity.Trim().ToLowerInvariant();
-	}
-
 	private static string ResolveAbsoluteTexturePath(string inputPath, string sourcePath, string? textureUri)
 	{
 		string mostLikelyMatch = "";
@@ -1846,26 +1811,6 @@ public class SceneryConverter : INotifyPropertyChanged
 			return mostLikelyMatch;
 		}
 		return mostLikelyMatch.Length > 0 ? mostLikelyMatch : "";
-	}
-
-	private static SceneBuilder CreateGltfModelFromGlb(byte[] glbBytes, string inputPath, string file)
-	{
-		// Fill the end of the JSON chunk with spaces, and replace non-printable characters with spaces.
-		uint JSONLength = BitConverter.ToUInt32(glbBytes, 0x0C);
-		for (int k = 0x14; k < 0x14 + JSONLength; k++)
-		{
-			if (glbBytes[k] < 0x20 || glbBytes[k] > 0x7E)
-			{
-				glbBytes[k] = 0x20;
-			}
-		}
-
-		uint binLength = BitConverter.ToUInt32(glbBytes, 0x14 + (int)JSONLength);
-		byte[] glbBinBytes = glbBytes[(0x14 + (int)JSONLength + 8)..(0x14 + (int)JSONLength + 8 + (int)binLength)];
-		JObject json = JObject.Parse(Encoding.UTF8.GetString(glbBytes, 0x14, (int)JSONLength).Trim());
-		SceneBuilder scene = CreateGltfModelFromGltf(glbBinBytes, json, inputPath, file);
-
-		return scene;
 	}
 
 	private static (AcBuilder builder, List<string> bufferFiles) BuildAcSceneFromGltf(string gltfFilePath)
