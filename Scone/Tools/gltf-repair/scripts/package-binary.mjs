@@ -97,7 +97,9 @@ for (const targetInfo of selectedTargets) {
   if (isCrossTarget) {
     // pkg cannot always execute non-host architecture Node binaries while fabricating bytecode.
     // Disable bytecode for cross-target packaging to avoid spawn UNKNOWN/EINVAL failures.
+    // Pair with --public so pkg keeps source for the entry file instead of rejecting --no-bytecode.
     pkgArgs.push('--no-bytecode');
+    pkgArgs.push('--public');
   }
 
   // Execute the pkg CLI via Node to avoid .cmd spawn issues on Windows runners.
