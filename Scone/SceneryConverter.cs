@@ -1606,7 +1606,7 @@ public class SceneryConverter : INotifyPropertyChanged
 
 							byte[] glbBinBytes = glbBytes[(0x14 + (int)JSONLength + 8)..(0x14 + (int)JSONLength + 8 + (int)BitConverter.ToUInt32(glbBytes, 0x14 + (int)JSONLength))];
 
-							SceneBuilder sceneLocal = CreateGltfModel(glbBytes, json, inputPath, modelRef.file);
+							SceneBuilder sceneLocal = CreateGltfModel(glbBinBytes, json, inputPath, modelRef.file);
 
 							foreach (LibraryObject libObj in libraryObjectsForModel)
 							{
