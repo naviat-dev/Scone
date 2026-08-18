@@ -68,10 +68,22 @@ if (unknownTargets.length > 0) {
   throw new Error(`Unsupported targets: ${unknownTargets.join(', ')}`);
 }
 
+const hostPlatformTag = process.platform === 'win32'
+  ? 'win'
+  : process.platform === 'darwin'
+    ? 'macos'
+    : process.platform;
+
+const hostArchTag = process.arch;
+
 for (const targetInfo of selectedTargets) {
   const outputPath = path.join(outDir, targetInfo.output);
-  // Execute the pkg CLI via Node to avoid .cmd spawn issues on Windows runners.
-  execFileSync(process.execPath, [
+  const targetParts = targetInfo.target.split('-');
+  const targetPlatformTag = targetParts[1] ?? '';
+  const targetArchTag = targetParts[2] ?? '';
+  const isCrossTarget = targetPlatformTag !== hostPlatformTag || targetArchTag !== hostArchTag;
+
+  const pkgArgs = [
     pkgCliEntry,
     distEntry,
     '--targets',
@@ -80,7 +92,16 @@ for (const targetInfo of selectedTargets) {
     outputPath,
     '--compress',
     'Brotli',
-  ], {
+  ];
+
+  if (isCrossTarget) {
+    // pkg cannot always execute non-host architecture Node binaries while fabricating bytecode.
+    // Disable bytecode for cross-target packaging to avoid spawn UNKNOWN/EINVAL failures.
+    pkgArgs.push('--no-bytecode');
+  }
+
+  // Execute the pkg CLI via Node to avoid .cmd spawn issues on Windows runners.
+  execFileSync(process.execPath, pkgArgs, {
     cwd: toolRoot,
     stdio: 'inherit',
   });
