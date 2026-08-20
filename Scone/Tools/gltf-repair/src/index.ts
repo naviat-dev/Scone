@@ -3,10 +3,11 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { Document, NodeIO, Scene } from '@gltf-transform/core';
-import { dedup, instance, palette, flatten, join, weld, resample, prune, sparse, mergeDocuments, unpartition } from '@gltf-transform/functions';
+import { dedup, instance, flatten, join, weld, resample, prune, sparse, mergeDocuments, unpartition, transformMesh } from '@gltf-transform/functions';
 
 type Vec3 = [number, number, number];
 type Quat = [number, number, number, number];
+type Mat4x4 = [number, number, number, number, number, number, number, number, number, number, number, number, number, number, number, number];
 
 type CliOptions = RepairOptions | AssembleOptions | OptimizeOptions;
 
@@ -22,9 +23,7 @@ interface AssembleOptions {
     sourceModelPath: string;
     destinationModelPath: string;
     outputPath: string;
-    position: Vec3;
-    rotation: Quat;
-    rotationEulerDeg: Vec3;
+    matrix: Mat4x4;
 }
 
 interface OptimizeOptions {
@@ -40,7 +39,60 @@ interface RepairIssue {
     severity: number;
 }
 
+interface SourceGltfAccessor {
+    bufferView?: number;
+    byteOffset?: number;
+    componentType: number;
+    count: number;
+    type: string;
+    normalized?: boolean;
+}
+
+interface SourceGltfBufferView {
+    buffer: number;
+    byteOffset?: number;
+    byteStride?: number;
+}
+
+interface SourceGltfBuffer {
+    uri?: string;
+}
+
+interface SourceGltfPrimitive {
+    attributes?: Record<string, number>;
+}
+
+interface SourceGltfMesh {
+    primitives?: SourceGltfPrimitive[];
+}
+
+interface SourceUvContext {
+    accessors: SourceGltfAccessor[];
+    bufferViews: SourceGltfBufferView[];
+    buffers: Uint8Array[];
+    meshes: SourceGltfMesh[];
+}
+
 type NumericArray = Float32Array<ArrayBuffer> | Uint16Array<ArrayBuffer>;
+
+const COMPONENT_SIZE_BY_TYPE: Record<number, number> = {
+    5120: 1,
+    5121: 1,
+    5122: 2,
+    5123: 2,
+    5125: 4,
+    5126: 4,
+};
+
+const COMPONENT_COUNT_BY_ACCESSOR_TYPE: Record<string, number> = {
+    SCALAR: 1,
+    VEC2: 2,
+    VEC3: 3,
+    VEC4: 4,
+    MAT2: 4,
+    MAT3: 9,
+    MAT4: 16,
+};
 
 function remapAccessorComponents<TArray extends NumericArray>(
     sourceArray: ArrayLike<number>,
@@ -83,6 +135,231 @@ function remapAccessorComponents<TArray extends NumericArray>(
     }
 
     return output;
+}
+
+function decodeFloat16Bits(bits: number): number {
+    const sign = (bits & 0x8000) !== 0 ? -1 : 1;
+    const exponent = (bits >> 10) & 0x1f;
+    const fraction = bits & 0x03ff;
+
+    if (exponent === 0) {
+        if (fraction === 0) {
+            return sign * 0;
+        }
+        return sign * 2 ** -14 * (fraction / 1024);
+    }
+
+    if (exponent === 0x1f) {
+        return fraction === 0 ? sign * Number.POSITIVE_INFINITY : Number.NaN;
+    }
+
+    return sign * 2 ** (exponent - 15) * (1 + (fraction / 1024));
+}
+
+function decodeDataUri(uri: string): Uint8Array | null {
+    const match = uri.match(/^data:.*?;base64,(.*)$/i);
+    if (!match) {
+        return null;
+    }
+
+    try {
+        return Buffer.from(match[1], 'base64');
+    } catch {
+        return null;
+    }
+}
+
+function loadSourceUvContext(modelPath: string): SourceUvContext | null {
+    if (path.extname(modelPath).toLowerCase() !== '.gltf') {
+        return null;
+    }
+
+    let sourceJson: {
+        accessors?: SourceGltfAccessor[];
+        bufferViews?: SourceGltfBufferView[];
+        buffers?: SourceGltfBuffer[];
+        meshes?: SourceGltfMesh[];
+    };
+
+    try {
+        sourceJson = JSON.parse(fs.readFileSync(modelPath, 'utf8')) as {
+            accessors?: SourceGltfAccessor[];
+            bufferViews?: SourceGltfBufferView[];
+            buffers?: SourceGltfBuffer[];
+            meshes?: SourceGltfMesh[];
+        };
+    } catch {
+        return null;
+    }
+
+    const accessors = sourceJson.accessors;
+    const bufferViews = sourceJson.bufferViews;
+    const gltfBuffers = sourceJson.buffers;
+    const meshes = sourceJson.meshes;
+
+    if (!Array.isArray(accessors) || !Array.isArray(bufferViews) || !Array.isArray(gltfBuffers) || !Array.isArray(meshes)) {
+        return null;
+    }
+
+    const modelDir = path.dirname(modelPath);
+    const buffers: Uint8Array[] = [];
+
+    for (const gltfBuffer of gltfBuffers) {
+        const uri = gltfBuffer.uri;
+        if (typeof uri !== 'string' || uri.length === 0) {
+            return null;
+        }
+
+        const dataUriBuffer = decodeDataUri(uri);
+        if (dataUriBuffer) {
+            buffers.push(dataUriBuffer);
+            continue;
+        }
+
+        const bufferPath = path.resolve(modelDir, decodeURIComponent(uri));
+        if (!fs.existsSync(bufferPath)) {
+            return null;
+        }
+
+        buffers.push(fs.readFileSync(bufferPath));
+    }
+
+    return {
+        accessors,
+        bufferViews,
+        buffers,
+        meshes,
+    };
+}
+
+function readTexCoordComponent(view: DataView, byteOffset: number, componentType: number, normalized: boolean): number | null {
+    switch (componentType) {
+        case 5126:
+            return view.getFloat32(byteOffset, true);
+        case 5120: {
+            const value = view.getInt8(byteOffset);
+            return normalized ? Math.max(value / 127, -1) : value;
+        }
+        case 5121: {
+            const value = view.getUint8(byteOffset);
+            return normalized ? value / 255 : value;
+        }
+        case 5122:
+            if (normalized) {
+                const value = view.getInt16(byteOffset, true);
+                return Math.max(value / 32767, -1);
+            }
+            return decodeFloat16Bits(view.getUint16(byteOffset, true));
+        case 5123: {
+            const value = view.getUint16(byteOffset, true);
+            return normalized ? value / 65535 : value;
+        }
+        case 5125: {
+            const value = view.getUint32(byteOffset, true);
+            return normalized ? value / 4294967295 : value;
+        }
+        default:
+            return null;
+    }
+}
+
+function readTexCoordArrayFromSource(
+    sourceUvContext: SourceUvContext,
+    meshIndex: number,
+    primitiveIndex: number,
+    semantic: 'TEXCOORD_0' | 'TEXCOORD_1',
+): Float32Array | null {
+    const mesh = sourceUvContext.meshes[meshIndex];
+    const sourcePrimitive = mesh?.primitives?.[primitiveIndex];
+    const accessorIndex = sourcePrimitive?.attributes?.[semantic];
+
+    if (typeof accessorIndex !== 'number' || !Number.isInteger(accessorIndex) || accessorIndex < 0 || accessorIndex >= sourceUvContext.accessors.length) {
+        return null;
+    }
+
+    const accessor = sourceUvContext.accessors[accessorIndex];
+    const bufferViewIndex = accessor.bufferView;
+    if (typeof bufferViewIndex !== 'number' || !Number.isInteger(bufferViewIndex) || bufferViewIndex < 0 || bufferViewIndex >= sourceUvContext.bufferViews.length) {
+        return null;
+    }
+
+    const bufferView = sourceUvContext.bufferViews[bufferViewIndex];
+    if (!Number.isInteger(bufferView.buffer) || bufferView.buffer < 0 || bufferView.buffer >= sourceUvContext.buffers.length) {
+        return null;
+    }
+
+    const bufferData = sourceUvContext.buffers[bufferView.buffer];
+    const componentSize = COMPONENT_SIZE_BY_TYPE[accessor.componentType];
+    const componentCount = COMPONENT_COUNT_BY_ACCESSOR_TYPE[accessor.type] ?? 0;
+    if (!componentSize || componentCount < 2 || accessor.count <= 0) {
+        return null;
+    }
+
+    const byteStride = bufferView.byteStride ?? (componentSize * componentCount);
+    const baseOffset = (bufferView.byteOffset ?? 0) + (accessor.byteOffset ?? 0);
+    const normalized = accessor.normalized ?? false;
+    const view = new DataView(bufferData.buffer, bufferData.byteOffset, bufferData.byteLength);
+    const texCoords = new Float32Array(accessor.count * 2);
+
+    for (let i = 0; i < accessor.count; i++) {
+        const elementOffset = baseOffset + (i * byteStride);
+        const u = readTexCoordComponent(view, elementOffset, accessor.componentType, normalized);
+        const v = readTexCoordComponent(view, elementOffset + componentSize, accessor.componentType, normalized);
+        if (u === null || v === null) {
+            return null;
+        }
+
+        texCoords[i * 2] = Number.isFinite(u) ? u : 0;
+        texCoords[(i * 2) + 1] = Number.isFinite(v) ? 1 - v : 0;
+    }
+
+    return texCoords;
+}
+
+function fitTexCoordArrayToCount(sourceTexCoords: Float32Array, targetCount: number): Float32Array {
+    const sourceCount = Math.floor(sourceTexCoords.length / 2);
+    if (targetCount <= 0 || targetCount === sourceCount) {
+        return sourceTexCoords;
+    }
+
+    const output = new Float32Array(targetCount * 2);
+    const copyCount = Math.min(targetCount, sourceCount);
+    output.set(sourceTexCoords.subarray(0, copyCount * 2));
+    return output;
+}
+
+function restoreTexCoordsFromOriginalModel(document: Document, sourceUvContext: SourceUvContext): number {
+    let restoredAttributes = 0;
+    const semantics: Array<'TEXCOORD_0' | 'TEXCOORD_1'> = ['TEXCOORD_0', 'TEXCOORD_1'];
+    const meshes = document.getRoot().listMeshes();
+
+    for (let meshIndex = 0; meshIndex < meshes.length; meshIndex++) {
+        const primitiveList = meshes[meshIndex].listPrimitives();
+
+        for (let primitiveIndex = 0; primitiveIndex < primitiveList.length; primitiveIndex++) {
+            const primitive = primitiveList[primitiveIndex];
+            const positionCount = primitive.getAttribute('POSITION')?.getCount() ?? 0;
+
+            for (const semantic of semantics) {
+                const sourceTexCoords = readTexCoordArrayFromSource(sourceUvContext, meshIndex, primitiveIndex, semantic);
+                if (!sourceTexCoords) {
+                    continue;
+                }
+
+                const resolvedTexCoords = fitTexCoordArrayToCount(
+                    sourceTexCoords,
+                    positionCount > 0 ? positionCount : Math.floor(sourceTexCoords.length / 2),
+                );
+                const texCoordArray = new Float32Array(resolvedTexCoords);
+
+                const texCoordAccessor = document.createAccessor().setType('VEC2').setArray(texCoordArray);
+                primitive.setAttribute(semantic, texCoordAccessor);
+                restoredAttributes++;
+            }
+        }
+    }
+
+    return restoredAttributes;
 }
 
 interface AsoboGeometryRepairStats {
@@ -249,46 +526,29 @@ function parseNumber(rawValue: string, label: string): number {
     return value;
 }
 
-function parseVec3(values: string[], label: string): Vec3 {
-    if (values.length !== 3) {
-        throw new Error(`Invalid ${label}: expected 3 numbers, received ${values.length}.`);
+function parseMat4x4(values: string[], label: string): Mat4x4 {
+    if (values.length !== 16) {
+        throw new Error(`Invalid ${label}: expected 16 numbers, received ${values.length}.`);
     }
 
     return [
-        parseNumber(values[0], `${label}.x`),
-        parseNumber(values[1], `${label}.y`),
-        parseNumber(values[2], `${label}.z`),
+        parseNumber(values[0], `${label}[0]`),
+        parseNumber(values[1], `${label}[1]`),
+        parseNumber(values[2], `${label}[2]`),
+        parseNumber(values[3], `${label}[3]`),
+        parseNumber(values[4], `${label}[4]`),
+        parseNumber(values[5], `${label}[5]`),
+        parseNumber(values[6], `${label}[6]`),
+        parseNumber(values[7], `${label}[7]`),
+        parseNumber(values[8], `${label}[8]`),
+        parseNumber(values[9], `${label}[9]`),
+        parseNumber(values[10], `${label}[10]`),
+        parseNumber(values[11], `${label}[11]`),
+        parseNumber(values[12], `${label}[12]`),
+        parseNumber(values[13], `${label}[13]`),
+        parseNumber(values[14], `${label}[14]`),
+        parseNumber(values[15], `${label}[15]`),
     ];
-}
-
-function normalizeQuat([x, y, z, w]: Quat): Quat {
-    const magnitude = Math.hypot(x, y, z, w);
-    if (magnitude === 0) {
-        return [0, 0, 0, 1];
-    }
-
-    return [x / magnitude, y / magnitude, z / magnitude, w / magnitude];
-}
-
-function eulerDegreesToQuaternionXYZ(rotationDeg: Vec3): Quat {
-    const [xDeg, yDeg, zDeg] = rotationDeg;
-    const x = (xDeg * Math.PI) / 180;
-    const y = (yDeg * Math.PI) / 180;
-    const z = (zDeg * Math.PI) / 180;
-
-    const cx = Math.cos(x / 2);
-    const sx = Math.sin(x / 2);
-    const cy = Math.cos(y / 2);
-    const sy = Math.sin(y / 2);
-    const cz = Math.cos(z / 2);
-    const sz = Math.sin(z / 2);
-
-    return normalizeQuat([
-        sx * cy * cz + cx * sy * sz,
-        cx * sy * cz - sx * cy * sz,
-        cx * cy * sz + sx * sy * cz,
-        cx * cy * cz - sx * sy * sz,
-    ]);
 }
 
 function withSuffix(filePath: string, suffix: string): string {
@@ -324,24 +584,20 @@ function parseCliArgs(args: string[]): CliOptions {
 
     if (mode === 'assemble') {
         if (args.length < 9) {
-            throw new Error('assemble mode requires: <modelToAddPath> <destinationModelPath> <x> <y> <z> <rotXDeg> <rotYDeg> <rotZDeg> [outputPath].');
+            throw new Error('assemble mode requires: <modelToAddPath> <destinationModelPath> <matrix 16 numbers> [outputPath].');
         }
 
         const sourceModelPath = path.resolve(args[1]);
         const destinationModelPath = path.resolve(args[2]);
-        const position = parseVec3(args.slice(3, 6), 'position');
-        const rotationEulerDeg = parseVec3(args.slice(6, 9), 'rotation');
-        const rotation = eulerDegreesToQuaternionXYZ(rotationEulerDeg);
-        const outputPath = path.resolve(args[9] ?? withSuffix(destinationModelPath, 'assembled'));
+        const matrix = parseMat4x4(args.slice(3, 19), 'matrix');
+        const outputPath = path.resolve(args[19] ?? withSuffix(destinationModelPath, 'assembled'));
 
         return {
             mode,
             sourceModelPath,
             destinationModelPath,
-            outputPath,
-            position,
-            rotation,
-            rotationEulerDeg,
+            matrix,
+            outputPath
         };
     }
 
@@ -374,6 +630,7 @@ async function runRepairMode(options: RepairOptions): Promise<void> {
     const issues = JSON.parse(fs.readFileSync(options.issuesJsonPath, 'utf8'))["issues"]["messages"] as RepairIssue[];
     const io = new NodeIO();
     const document = await io.read(options.modelPath);
+    const sourceUvContext = loadSourceUvContext(options.modelPath);
 
     // This may need to be rearranged in the future to be more modular as the list of supported issues grows.
     // For now, handle detected issues on a case-by-case basis.
@@ -461,10 +718,14 @@ async function runRepairMode(options: RepairOptions): Promise<void> {
         }
     }
 
+    const restoredTexCoordAttributes = sourceUvContext
+        ? restoreTexCoordsFromOriginalModel(document, sourceUvContext)
+        : 0;
+
     const asoboRepairStats = applyAsoboGeometryRepair(document);
 
     // Run structural cleanup after issue-specific and ASOBO repairs.
-    await document.transform(weld(), dedup(), prune(), unpartition());
+    await document.transform(weld(), dedup(), prune({ keepAttributes: true }), unpartition());
 
     await io.write(options.outputPath, document);
 
@@ -479,10 +740,11 @@ async function runRepairMode(options: RepairOptions): Promise<void> {
     console.log('ASOBO primitives reindexed:', asoboRepairStats.primitivesReindexed);
     console.log('Normals flipped:', asoboRepairStats.normalsFlipped);
     console.log('Tangents flipped:', asoboRepairStats.tangentsFlipped);
+    console.log('Source TEXCOORD attributes restored:', restoredTexCoordAttributes);
     console.log('Degenerate triangles dropped:', asoboRepairStats.degenerateTrianglesDropped);
     console.log('Out-of-range triangles dropped:', asoboRepairStats.outOfRangeTrianglesDropped);
     console.log('Duplicate triangles dropped:', asoboRepairStats.duplicateTrianglesDropped);
-    console.log('Applied repairs: asobo-primitive-geometry, weld, dedup, prune, unpartition');
+    console.log('Applied repairs: source-texcoord-restore, asobo-primitive-geometry, weld, dedup, prune(keepAttributes), unpartition');
     console.log('Wrote model:', options.outputPath);
 }
 
@@ -496,46 +758,17 @@ function getOrCreatePrimaryScene(document: Document): Scene {
     return document.createScene('Scene');
 }
 
-function attachMergedSceneAtTransform(
-    destinationDocument: Document,
-    mergedSourceScene: Scene | undefined,
-    sourceModelPath: string,
-    position: Vec3,
-    rotation: Quat,
-): void {
-    if (!mergedSourceScene) {
-        throw new Error('Unable to locate merged source scene in destination document.');
-    }
-
-    const destinationScene = getOrCreatePrimaryScene(destinationDocument);
-    const instanceName = path.basename(sourceModelPath, path.extname(sourceModelPath)) || 'assembled-model';
-
-    const placementNode = destinationDocument
-        .createNode(`${instanceName}-placement`)
-        .setTranslation(position)
-        .setRotation(rotation);
-
-    const sceneChildren = [...mergedSourceScene.listChildren()];
-    for (const child of sceneChildren) {
-        placementNode.addChild(child);
-    }
-
-    destinationScene.addChild(placementNode);
-    mergedSourceScene.dispose();
-}
-
 async function runAssembleMode(options: AssembleOptions): Promise<void> {
     if (!fs.existsSync(options.sourceModelPath)) {
         throw new Error(`Source model file does not exist: ${options.sourceModelPath}`);
     }
 
-    if (!fs.existsSync(options.destinationModelPath)) {
-        throw new Error(`Destination model file does not exist: ${options.destinationModelPath}`);
-    }
-
     const io = new NodeIO();
     const sourceDocument = await io.read(options.sourceModelPath);
-    const destinationDocument = await io.read(options.destinationModelPath);
+    var destinationDocument = new Document();
+    if (fs.existsSync(options.destinationModelPath)) {
+        destinationDocument = await io.read(options.destinationModelPath);
+    }
 
     const sourceScene = sourceDocument.getRoot().listScenes()[0];
     if (!sourceScene) {
@@ -544,24 +777,17 @@ async function runAssembleMode(options: AssembleOptions): Promise<void> {
 
     const map = mergeDocuments(destinationDocument, sourceDocument);
     const mergedSourceScene = map.get(sourceScene) as Scene | undefined;
+    for (const child of mergedSourceScene?.listChildren() ?? []) {
+        child.setMatrix(options.matrix);
+    }
 
-    attachMergedSceneAtTransform(
-        destinationDocument,
-        mergedSourceScene,
-        options.sourceModelPath,
-        options.position,
-        options.rotation,
-    );
-
-    await destinationDocument.transform(prune());
+    await destinationDocument.transform(prune({ keepAttributes: true }));
     await io.write(options.outputPath, destinationDocument);
 
     console.log('Mode: assemble');
     console.log('Model to add:', options.sourceModelPath);
     console.log('Destination model:', options.destinationModelPath);
-    console.log('Position:', options.position.join(', '));
-    console.log('Euler rotation XYZ (deg):', options.rotationEulerDeg.join(', '));
-    console.log('Quaternion XYZW:', options.rotation.join(', '));
+    console.log('Transformation matrix:', options.matrix);
     console.log('Wrote model:', options.outputPath);
 }
 
@@ -572,14 +798,19 @@ async function runOptimizeMode(options: OptimizeOptions): Promise<void> {
 
     const io = new NodeIO();
     const document = await io.read(options.modelPath);
+    const sourceUvContext = loadSourceUvContext(options.modelPath);
+    const restoredTexCoordAttributes = sourceUvContext
+        ? restoreTexCoordsFromOriginalModel(document, sourceUvContext)
+        : 0;
 
     // Apply optimization transforms.
-    await document.transform(dedup(), instance(), palette(), flatten(), join(), weld(), resample(), sparse(), prune(), unpartition());
+    await document.transform(dedup(), instance(), flatten(), join(), weld(), resample(), sparse(), prune({ keepAttributes: true }), unpartition());
     await io.write(options.outputPath, document);
 
     console.log('Mode: optimize');
     console.log('Input model:', options.modelPath);
-    console.log('Applied optimizations: dedup, instance, palette, flatten, join, weld, resample, sparse, prune, unpartition');
+    console.log('Source TEXCOORD attributes restored:', restoredTexCoordAttributes);
+    console.log('Applied optimizations: dedup, instance, flatten, join, weld, resample, sparse, prune(keepAttributes), unpartition');
     console.log('Wrote model:', options.outputPath);
 }
 

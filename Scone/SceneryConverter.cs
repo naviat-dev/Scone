@@ -6,9 +6,6 @@ using System.Text.RegularExpressions;
 using System.Xml;
 using System.Xml.Linq;
 using Newtonsoft.Json.Linq;
-using SharpGLTF.Scenes;
-using SharpGLTF.Schema2;
-using SharpGLTF.Validation;
 using Uno.Extensions.Specialized;
 
 namespace Scone;
@@ -1065,7 +1062,7 @@ public class SceneryConverter : INotifyPropertyChanged
 				(float)(libraryObjectsForTile.Count > 0 ? libraryObjectsForTile.Sum(lo => lo.longitude) / libraryObjectsForTile.Count : 0.0),
 				(float)(libraryObjectsForTile.Count > 0 ? libraryObjectsForTile.Sum(lo => lo.altitude) / libraryObjectsForTile.Count : 0.0)
 			);
-			SceneBuilder tileSceneGltf = ConvertSceneryGltf(inputPath, outputPath, kvp, center);
+			ConvertSceneryGltf(inputPath, outputPath, kvp, center);
 
 			if (isGltf)
 			{
@@ -1120,7 +1117,8 @@ public class SceneryConverter : INotifyPropertyChanged
 						string sourceGltfPath = Path.Combine(Path.GetDirectoryName(xmlPath)!, gltfFile);
 						JObject sourceJson = JObject.Parse(File.ReadAllText(sourceGltfPath));
 						(byte[] combinedBuffer, _) = LoadCombinedGltfBuffers(sourceJson, Path.GetDirectoryName(sourceGltfPath)!);
-						SceneBuilder scene = CreateGltfModel(combinedBuffer, sourceJson, texturePath, Path.GetDirectoryName(modelCfgFile)!);
+						string tempJetwayPath = Path.Combine(App.TempPath, $"{simObj.containerTitle}_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}");
+						CreateGltfModel(combinedBuffer, sourceJson, texturePath, Path.GetDirectoryName(modelCfgFile)!, tempJetwayPath);
 
 						// Find out if this is a jetway by looking for the 3 IKChain names
 						xmlReader = XmlReader.Create(xmlPath, new XmlReaderSettings { ConformanceLevel = ConformanceLevel.Fragment });
@@ -1199,7 +1197,6 @@ public class SceneryConverter : INotifyPropertyChanged
 								wheelsGroundLockEndNode["translation"]?[1]?.ToObject<float>() ?? 0,
 								wheelsGroundLockEndNode["translation"]?[2]?.ToObject<float>() ?? 0
 							);
-							List<(NodeBuilder node, string baseName)> sceneNodeBaseNames = CaptureSceneNodeBaseNames(scene);
 							while (xmlReader.Read())
 							{
 								if (xmlReader.NodeType == XmlNodeType.Element && xmlReader.Name == "IKConstraint")
@@ -1233,9 +1230,25 @@ public class SceneryConverter : INotifyPropertyChanged
 									seed /= 62;
 								}
 								string simObjId = simObjIdBuilder.ToString();
-								ApplySimObjectPrefixToSceneNodes(sceneNodeBaseNames, simObjId);
+								JObject jetwayJson = JObject.Parse(File.ReadAllText(Path.Combine(tempJetwayPath, "temp.gltf")));
+								foreach (JObject node in jetwayJson["nodes"]!.Cast<JObject>())
+								{
+									node["name"] = $"{simObjId}_{node["name"]?.ToString()}";
+								}
 								Matrix4x4 placementTransform = CreatePlacementTransform(simObj, center.X, center.Y, center.Z, i);
-								_ = tileSceneGltf.AddScene(scene, placementTransform);
+								Process validatorProcess = new()
+								{
+									StartInfo = {
+										FileName = App.GltfRepairPath,
+										Arguments = $"assemble \"{tempJetwayPath}\" \"{Path.Combine(outputPath, $"tile_{tileIndex}", "temp.gltf")}\"",
+										UseShellExecute = false,
+										CreateNoWindow = true,
+										RedirectStandardOutput = true,
+										RedirectStandardError = true
+									}
+								};
+								validatorProcess.Start();
+								validatorProcess.WaitForExit();
 								List<XDocument> jetwayDriverAnimation = [];
 								// Add in the driver code for all top-level nodes
 								double distMainHandleInit = Vector3.Distance(mainHandleStartPos, mainHandleEndPos);
@@ -1356,13 +1369,6 @@ public class SceneryConverter : INotifyPropertyChanged
 			{
 				gltfFilePath = Path.Combine(path, $"{tileIndex}.gltf");
 				Status = "Saving glTF to disk...";
-				tileSceneGltf.ToGltf2().SaveGLTF(gltfFilePath, new WriteSettings
-				{
-					ImageWriting = ResourceWriteMode.SatelliteFile,
-					// This name doesn't matter; we will fix up the URIs in the postprocessor
-					ImageWriteCallback = (context, assetName, image) => { return ""; },
-					JsonPostprocessor = (json) => JsonPostprocessor(json, path)
-				});
 			}
 
 			if (isAc3d && gltfFilePath != null)
@@ -1439,28 +1445,6 @@ public class SceneryConverter : INotifyPropertyChanged
 		Logger.FlushToFile();
 	}
 
-	private static string JsonPostprocessor(string json, string outputDir)
-	{
-		JObject gltfText = JObject.Parse(json);
-		if (gltfText["images"] is not JArray images)
-		{
-			return gltfText.ToString();
-		}
-
-		foreach (JObject image in images.OfType<JObject>())
-		{
-			string extrasUri = image["extras"]?["absolutePath"]?.Value<string>() ?? "";
-			if (File.Exists(extrasUri))
-			{
-				File.Copy(extrasUri, Path.Combine(outputDir, Path.GetFileName(extrasUri)), true);
-				image["uri"] = Path.GetFileName(extrasUri);
-			}
-
-			image.Property("extras")?.Remove();
-		}
-		return gltfText.ToString();
-	}
-
 	private static string GenerateJetwayDriverCode(double jetwayLongitude, double jetwayLatitude, double jetwayAltitude, double jetwayHeading, double distMainHandleInit, double distMainHandleFinal, double distSecondaryHandle, Vector2 centerWheelsGroundLock, Vector2 jetwayLimits, string jetwayId)
 	{
 #if DEBUG
@@ -1481,11 +1465,11 @@ public class SceneryConverter : INotifyPropertyChanged
 		return string.Join("\n", jetwayTemplate);
 	}
 
-	public SceneBuilder ConvertSceneryGltf(string inputPath, string outputPath, KeyValuePair<int, List<ModelReference>> kvp, Vector3 center)
+	public void ConvertSceneryGltf(string inputPath, string outputPath, KeyValuePair<int, List<ModelReference>> kvp, Vector3 center)
 	{
 		int tileIndex = kvp.Key;
+		string tempTilePath = Path.Combine(App.TempPath, $"tile_{tileIndex}_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}");
 		List<ModelReference> modelRefs = [.. kvp.Value.OrderByDescending(mr => mr.size)];
-		SceneBuilder scene = new();
 		double latOrigin = center.X;
 		double lonOrigin = center.Y;
 		double altOrigin = center.Z;
@@ -1494,7 +1478,7 @@ public class SceneryConverter : INotifyPropertyChanged
 			if (AbortAndCancel)
 			{
 				Logger.Info("Conversion aborted by user.");
-				return scene;
+				return;
 			}
 			modelsProcessed++;
 			List<LibraryObject> libraryObjectsForModel = libraryObjects.TryGetValue(modelRef.guid, out List<LibraryObject>? value) ? value : [];
@@ -1606,7 +1590,7 @@ public class SceneryConverter : INotifyPropertyChanged
 
 							byte[] glbBinBytes = glbBytes[(0x14 + (int)JSONLength + 8)..(0x14 + (int)JSONLength + 8 + (int)BitConverter.ToUInt32(glbBytes, 0x14 + (int)JSONLength))];
 
-							SceneBuilder sceneLocal = CreateGltfModel(glbBinBytes, json, inputPath, modelRef.file);
+							CreateGltfModel(glbBinBytes, json, inputPath, modelRef.file, tempTilePath);
 
 							foreach (LibraryObject libObj in libraryObjectsForModel)
 							{
@@ -1615,7 +1599,7 @@ public class SceneryConverter : INotifyPropertyChanged
 									continue;
 								}
 								Matrix4x4 placementTransform = CreatePlacementTransform(libObj, latOrigin, lonOrigin, altOrigin);
-								_ = scene.AddScene(sceneLocal, placementTransform);
+
 							}
 							glbIndex++;
 
@@ -1653,56 +1637,16 @@ public class SceneryConverter : INotifyPropertyChanged
 		string activeName = $"{tileIndex}.{(hasXml ? "xml" : "gltf")}";
 		string placementStr = $"OBJECT_STATIC {activeName} {lonOrigin} {latOrigin} {altOrigin} {270} {0} {90}";
 		File.WriteAllText(Path.Combine(path, $"{tileIndex}.stg"), placementStr);
-		if (AbortAndSave)
-		{
-			Logger.Info("Conversion aborted by user; saving progress.");
-			return scene;
-		}
-		return scene;
+		Directory.Delete(tempTilePath, true);
 	}
 
-	private static List<(NodeBuilder node, string baseName)> CaptureSceneNodeBaseNames(SceneBuilder scene)
+	private static bool CreateGltfModel(byte[] glbBinBytes, JObject json, string inputPath, string file, string tempTilePath)
 	{
-		HashSet<NodeBuilder> seenNodes = [];
-		List<(NodeBuilder node, string baseName)> result = [];
-
-		foreach (InstanceBuilder instance in scene.Instances)
+		string tempBinPath = Path.Combine(tempTilePath, "temp.bin");
+		string tempGltfPath = Path.Combine(tempTilePath, "temp.gltf");
+		if (!Directory.Exists(tempTilePath))
 		{
-			NodeBuilder? root = instance.Content.GetArmatureRoot()?.Root;
-			if (root == null)
-			{
-				continue;
-			}
-
-			foreach (NodeBuilder node in NodeBuilder.Flatten(root))
-			{
-				if (!seenNodes.Add(node) || string.IsNullOrEmpty(node.Name))
-				{
-					continue;
-				}
-
-				result.Add((node, node.Name));
-			}
-		}
-
-		return result;
-	}
-
-	private static void ApplySimObjectPrefixToSceneNodes(IEnumerable<(NodeBuilder node, string baseName)> sceneNodeBaseNames, string simObjId)
-	{
-		foreach ((NodeBuilder node, string baseName) in sceneNodeBaseNames)
-		{
-			node.Name = $"{simObjId}_{baseName}";
-		}
-	}
-
-	private static SceneBuilder CreateGltfModel(byte[] glbBinBytes, JObject json, string inputPath, string file)
-	{
-		string tempBinPath = Path.Combine(App.TempPath, "temp.bin");
-		string tempGltfPath = Path.Combine(App.TempPath, "temp.gltf");
-		if (!Directory.Exists(App.TempPath))
-		{
-			_ = Directory.CreateDirectory(App.TempPath);
+			_ = Directory.CreateDirectory(tempTilePath);
 		}
 		json["buffers"]![0]!["uri"] = "temp.bin";
 		json.Remove("extensionsRequired");
@@ -1713,39 +1657,39 @@ public class SceneryConverter : INotifyPropertyChanged
 			JObject extras = image["extras"] as JObject ?? [];
 			extras["absolutePath"] = ResolveAbsoluteTexturePath(inputPath, file, uri);
 			image["extras"] = extras;
-			if (!File.Exists(Path.Combine(App.TempPath, $"{Path.GetFileNameWithoutExtension(uri)}.DDS")))
+			if (!File.Exists(Path.Combine(tempTilePath, $"{Path.GetFileNameWithoutExtension(uri)}.DDS")))
 			{
-				File.Copy(ResolveAbsoluteTexturePath(inputPath, file, uri), Path.Combine(App.TempPath, $"{Path.GetFileNameWithoutExtension(uri)}.DDS"));
+				File.Copy(ResolveAbsoluteTexturePath(inputPath, file, uri), Path.Combine(tempTilePath, $"{Path.GetFileNameWithoutExtension(uri)}.DDS"));
 			}
 		}
 		File.WriteAllBytes(tempBinPath, glbBinBytes);
 		File.WriteAllBytes(tempGltfPath, Encoding.UTF8.GetBytes(json.ToString()));
-		ProcessStartInfo repairStartInfo = new()
+		Process repairProcess = new()
 		{
-			FileName = App.GltfRepairPath,
-			Arguments = $"repair \"{tempGltfPath}\" \"{Path.Combine(App.TempPath, "temp.gltf.report.json")}\" \"{tempGltfPath}\"",
-			UseShellExecute = false,
-			CreateNoWindow = true,
-			RedirectStandardOutput = false,
-			RedirectStandardError = false
+			StartInfo = {
+				FileName = App.GltfRepairPath,
+				Arguments = $"repair \"{tempGltfPath}\" \"{Path.Combine(tempTilePath, "temp.gltf.report.json")}\" \"{tempGltfPath}\"",
+				UseShellExecute = false,
+				CreateNoWindow = true,
+				RedirectStandardOutput = false,
+				RedirectStandardError = false
+			}
 		};
-
-		ProcessStartInfo validatorStartInfo = new()
+		Process validatorProcess = new()
 		{
-			FileName = App.GltfValidatorPath,
-			Arguments = $"--no-validate-resources -a \"{tempGltfPath}\"",
-			UseShellExecute = false,
-			CreateNoWindow = true,
-			RedirectStandardOutput = true,
-			RedirectStandardError = true
+			StartInfo = {
+				FileName = App.GltfValidatorPath,
+				Arguments = $"--no-validate-resources -a \"{tempGltfPath}\"",
+				UseShellExecute = false,
+				CreateNoWindow = true,
+				RedirectStandardOutput = true,
+				RedirectStandardError = true
+			}
 		};
-
-		Process repairProcess = new() { StartInfo = repairStartInfo };
-		Process validatorProcess = new() { StartInfo = validatorStartInfo };
 		validatorProcess.Start();
 		validatorProcess.WaitForExit();
 		int tries = 0;
-		int errorCount = JObject.Parse(File.ReadAllText(Path.Combine(App.TempPath, "temp.gltf.report.json")))["issues"]?["messages"]?.Count(i => i["severity"]?.Value<int>() == 0) ?? 0;
+		int errorCount = JObject.Parse(File.ReadAllText(Path.Combine(tempTilePath, "temp.gltf.report.json")))["issues"]?["messages"]?.Count(i => i["severity"]?.Value<int>() == 0) ?? 0;
 		while (tries < 3 && errorCount > 0)
 		{
 			tries++;
@@ -1754,37 +1698,19 @@ public class SceneryConverter : INotifyPropertyChanged
 			repairProcess.WaitForExit();
 			validatorProcess.Start();
 			validatorProcess.WaitForExit();
-			errorCount = JObject.Parse(File.ReadAllText(Path.Combine(App.TempPath, "temp.gltf.report.json")))["issues"]?["messages"]?.Count(i => i["severity"]?.Value<int>() == 0) ?? 0;
+			errorCount = JObject.Parse(File.ReadAllText(Path.Combine(tempTilePath, "temp.gltf.report.json")))["issues"]?["messages"]?.Count(i => i["severity"]?.Value<int>() == 0) ?? 0;
 		}
-		
+
 		if (errorCount > 0)
 		{
 			Logger.Error($"GLTF validation failed after {tries} attempts with {errorCount} errors. Aborting conversion for this model.");
-			foreach (JObject issue in JObject.Parse(File.ReadAllText(Path.Combine(App.TempPath, "temp.gltf.report.json")))["issues"]?["messages"]?.Where(i => i["severity"]?.Value<int>() == 0).Cast<JObject>() ?? [])
+			foreach (JObject issue in JObject.Parse(File.ReadAllText(Path.Combine(tempTilePath, "temp.gltf.report.json")))["issues"]?["messages"]?.Where(i => i["severity"]?.Value<int>() == 0).Cast<JObject>() ?? [])
 			{
 				Logger.Error($"GLTF Validation Error: Code: {issue["code"]?.Value<string>() ?? ""}, Message: {issue["message"]?.Value<string>() ?? ""}, Pointer: {issue["pointer"]?.Value<string>() ?? ""}");
 			}
 			throw new InvalidDataException($"GLTF validation failed after {tries} attempts with {errorCount} errors.");
 		}
-
-		// Strict validation throws if the amended model is not glTF-spec compliant.
-		_ = ModelRoot.Load(tempGltfPath, new ReadSettings
-		{
-			Validation = ValidationMode.Skip
-		});
-
-		SceneBuilder[] scenes;
-		try
-		{
-			scenes = SceneBuilder.LoadAllScenes(tempGltfPath);
-		}
-		catch (Exception ex)
-		{
-			Logger.Error($"Failed to load scenes from GLTF file {tempGltfPath}: {ex.Message}");
-			return new SceneBuilder();
-		}
-
-		return scenes[0];
+		return true;
 	}
 
 	private static string ResolveAbsoluteTexturePath(string inputPath, string sourcePath, string? textureUri)
