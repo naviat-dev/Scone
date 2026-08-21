@@ -2,11 +2,9 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { Document, NodeIO, Scene } from '@gltf-transform/core';
+import { Document, NodeIO, Scene, Property } from '@gltf-transform/core';
 import { dedup, instance, flatten, join, weld, resample, prune, sparse, mergeDocuments, unpartition, transformMesh } from '@gltf-transform/functions';
 
-type Vec3 = [number, number, number];
-type Quat = [number, number, number, number];
 type Mat4x4 = [number, number, number, number, number, number, number, number, number, number, number, number, number, number, number, number];
 
 type CliOptions = RepairOptions | AssembleOptions | OptimizeOptions;
@@ -713,6 +711,19 @@ async function runRepairMode(options: RepairOptions): Promise<void> {
                 }
                 break;
             }
+            case 'EMPTY_ENTITY': {
+                console.log(`Repairing issue: ${issue.code} at ${issue.pointer}`);
+                const pointerParts = issue.pointer.split('/');
+                if (pointerParts.length < 2) {
+                    console.error(`Invalid pointer for EMPTY_ENTITY issue: ${issue.pointer}`);
+                    continue;
+                }
+                // This method is rigid for now. It will work, but needs to be expanded.
+                if (pointerParts[1] === 'scene' && pointerParts[3] === 'nodes') {
+                    const scene = document.getRoot().listScenes()[Number(pointerParts[2])];
+                }
+                break;
+            }
             default:
                 console.error(`No repair action defined for issue: ${issue.code} at ${issue.pointer}`);
         }
@@ -748,15 +759,6 @@ async function runRepairMode(options: RepairOptions): Promise<void> {
     console.log('Wrote model:', options.outputPath);
 }
 
-function getOrCreatePrimaryScene(document: Document): Scene {
-    const root = document.getRoot();
-    const existingScene = root.listScenes()[0];
-    if (existingScene) {
-        return existingScene;
-    }
-
-    return document.createScene('Scene');
-}
 
 async function runAssembleMode(options: AssembleOptions): Promise<void> {
     if (!fs.existsSync(options.sourceModelPath)) {

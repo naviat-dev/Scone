@@ -1247,8 +1247,7 @@ public class SceneryConverter : INotifyPropertyChanged
 										RedirectStandardError = true
 									}
 								};
-								validatorProcess.Start();
-								validatorProcess.WaitForExit();
+								WaitForExitWithDrainedPipes(validatorProcess);
 								List<XDocument> jetwayDriverAnimation = [];
 								// Add in the driver code for all top-level nodes
 								double distMainHandleInit = Vector3.Distance(mainHandleStartPos, mainHandleEndPos);
@@ -1644,6 +1643,7 @@ public class SceneryConverter : INotifyPropertyChanged
 	{
 		string tempBinPath = Path.Combine(tempTilePath, "temp.bin");
 		string tempGltfPath = Path.Combine(tempTilePath, "temp.gltf");
+		string tempReportPath = Path.Combine(tempTilePath, "temp.gltf.report.json");
 		if (!Directory.Exists(tempTilePath))
 		{
 			_ = Directory.CreateDirectory(tempTilePath);
@@ -1659,7 +1659,16 @@ public class SceneryConverter : INotifyPropertyChanged
 			image["extras"] = extras;
 			if (!File.Exists(Path.Combine(tempTilePath, $"{Path.GetFileNameWithoutExtension(uri)}.DDS")))
 			{
-				File.Copy(ResolveAbsoluteTexturePath(inputPath, file, uri), Path.Combine(tempTilePath, $"{Path.GetFileNameWithoutExtension(uri)}.DDS"));
+				string absoluteTexturePath = ResolveAbsoluteTexturePath(inputPath, file, uri);
+				if (File.Exists(absoluteTexturePath))
+				{
+					File.Copy(absoluteTexturePath, Path.Combine(tempTilePath, $"{Path.GetFileNameWithoutExtension(uri)}.DDS"));
+				}
+				else
+				{
+					Logger.Warning($"Texture file not found: {uri}. This may result in missing textures in the converted model.");
+					File.Copy(Path.Combine(AppContext.BaseDirectory, "Assets", "dummy_tex.dds"), Path.Combine(tempTilePath, $"{Path.GetFileNameWithoutExtension(uri)}.DDS"));
+				}
 			}
 		}
 		File.WriteAllBytes(tempBinPath, glbBinBytes);
@@ -1668,7 +1677,7 @@ public class SceneryConverter : INotifyPropertyChanged
 		{
 			StartInfo = {
 				FileName = App.GltfRepairPath,
-				Arguments = $"repair \"{tempGltfPath}\" \"{Path.Combine(tempTilePath, "temp.gltf.report.json")}\" \"{tempGltfPath}\"",
+				Arguments = $"repair \"{tempGltfPath}\" \"{tempReportPath}\" \"{tempGltfPath}\"",
 				UseShellExecute = false,
 				CreateNoWindow = true,
 				RedirectStandardOutput = false,
@@ -1686,25 +1695,23 @@ public class SceneryConverter : INotifyPropertyChanged
 				RedirectStandardError = true
 			}
 		};
-		validatorProcess.Start();
-		validatorProcess.WaitForExit();
+		WaitForExitWithDrainedPipes(validatorProcess);
 		int tries = 0;
-		int errorCount = JObject.Parse(File.ReadAllText(Path.Combine(tempTilePath, "temp.gltf.report.json")))["issues"]?["messages"]?.Count(i => i["severity"]?.Value<int>() == 0) ?? 0;
+		int errorCount = JObject.Parse(File.ReadAllText(tempReportPath))["issues"]?["messages"]?.Count(i => i["severity"]?.Value<int>() == 0) ?? 0;
 		while (tries < 3 && errorCount > 0)
 		{
 			tries++;
 			Logger.Warning($"GLTF validation failed with {errorCount} errors. Attempting to fix...");
 			repairProcess.Start();
 			repairProcess.WaitForExit();
-			validatorProcess.Start();
-			validatorProcess.WaitForExit();
-			errorCount = JObject.Parse(File.ReadAllText(Path.Combine(tempTilePath, "temp.gltf.report.json")))["issues"]?["messages"]?.Count(i => i["severity"]?.Value<int>() == 0) ?? 0;
+			WaitForExitWithDrainedPipes(validatorProcess);
+			errorCount = JObject.Parse(File.ReadAllText(tempReportPath))["issues"]?["messages"]?.Count(i => i["severity"]?.Value<int>() == 0) ?? 0;
 		}
 
 		if (errorCount > 0)
 		{
 			Logger.Error($"GLTF validation failed after {tries} attempts with {errorCount} errors. Aborting conversion for this model.");
-			foreach (JObject issue in JObject.Parse(File.ReadAllText(Path.Combine(tempTilePath, "temp.gltf.report.json")))["issues"]?["messages"]?.Where(i => i["severity"]?.Value<int>() == 0).Cast<JObject>() ?? [])
+			foreach (JObject issue in JObject.Parse(File.ReadAllText(tempReportPath))["issues"]?["messages"]?.Where(i => i["severity"]?.Value<int>() == 0).Cast<JObject>() ?? [])
 			{
 				Logger.Error($"GLTF Validation Error: Code: {issue["code"]?.Value<string>() ?? ""}, Message: {issue["message"]?.Value<string>() ?? ""}, Pointer: {issue["pointer"]?.Value<string>() ?? ""}");
 			}
@@ -1713,10 +1720,25 @@ public class SceneryConverter : INotifyPropertyChanged
 		return true;
 	}
 
+	private static void WaitForExitWithDrainedPipes(Process process)
+	{
+		process.Start();
+
+		// Drain both redirected streams to avoid deadlocks when child-process output buffers fill up.
+		Task stdoutDrain = process.StandardOutput.BaseStream.CopyToAsync(Stream.Null);
+		Task stderrDrain = process.StandardError.BaseStream.CopyToAsync(Stream.Null);
+
+		process.WaitForExit();
+		stdoutDrain.GetAwaiter().GetResult();
+		stderrDrain.GetAwaiter().GetResult();
+	}
+
 	private static string ResolveAbsoluteTexturePath(string inputPath, string sourcePath, string? textureUri)
 	{
+		textureUri = textureUri?.Replace("\\", "/");
+		string fileName = Path.GetFileName(textureUri ?? "");
 		string mostLikelyMatch = "";
-		string[] imageMatches = [.. Directory.GetFiles(inputPath, "*", SearchOption.AllDirectories).Where(f => string.Equals(Path.GetFileName(f), textureUri, StringComparison.OrdinalIgnoreCase))];
+		string[] imageMatches = [.. Directory.GetFiles(inputPath, "*", SearchOption.AllDirectories).Where(f => string.Equals(Path.GetFileName(f), fileName, StringComparison.OrdinalIgnoreCase))];
 		int mostLikelyMatchScore = -1;
 		foreach (string match in imageMatches)
 		{
@@ -1731,12 +1753,7 @@ public class SceneryConverter : INotifyPropertyChanged
 				mostLikelyMatch = match;
 			}
 		}
-
-		if (!string.IsNullOrEmpty(mostLikelyMatch))
-		{
-			return mostLikelyMatch;
-		}
-		return mostLikelyMatch.Length > 0 ? mostLikelyMatch : "";
+		return mostLikelyMatch;
 	}
 
 	private static (AcBuilder builder, List<string> bufferFiles) BuildAcSceneFromGltf(string gltfFilePath)
