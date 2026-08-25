@@ -556,6 +556,60 @@ function withSuffix(filePath: string, suffix: string): string {
     return `${base}.${suffix}${effectiveExt}`;
 }
 
+function normalizeMsftTextureSources(modelPath: string): number {
+    if (path.extname(modelPath).toLowerCase() !== '.gltf') {
+        return 0;
+    }
+
+    let modelJson: Record<string, unknown>;
+    try {
+        modelJson = JSON.parse(fs.readFileSync(modelPath, 'utf8')) as Record<string, unknown>;
+    } catch {
+        return 0;
+    }
+
+    const textures = modelJson['textures'];
+    if (!Array.isArray(textures)) {
+        return 0;
+    }
+
+    let patchedTextureCount = 0;
+    for (const texture of textures) {
+        if (!texture || typeof texture !== 'object') {
+            continue;
+        }
+
+        const textureObject = texture as Record<string, unknown>;
+        if (typeof textureObject['source'] === 'number') {
+            continue;
+        }
+
+        const extensions = textureObject['extensions'];
+        if (!extensions || typeof extensions !== 'object') {
+            continue;
+        }
+
+        const msftTextureDds = (extensions as Record<string, unknown>)['MSFT_texture_dds'];
+        if (!msftTextureDds || typeof msftTextureDds !== 'object') {
+            continue;
+        }
+
+        const sourceValue = (msftTextureDds as Record<string, unknown>)['source'];
+        if (!Number.isInteger(sourceValue) || Number(sourceValue) < 0) {
+            continue;
+        }
+
+        textureObject['source'] = Number(sourceValue);
+        patchedTextureCount++;
+    }
+
+    if (patchedTextureCount > 0) {
+        fs.writeFileSync(modelPath, JSON.stringify(modelJson, null, 2), 'utf8');
+    }
+
+    return patchedTextureCount;
+}
+
 function parseCliArgs(args: string[]): CliOptions {
     if (args.length === 0) {
         throw new Error('No mode provided.');
@@ -627,6 +681,10 @@ async function runRepairMode(options: RepairOptions): Promise<void> {
 
     const issues = JSON.parse(fs.readFileSync(options.issuesJsonPath, 'utf8'))["issues"]["messages"] as RepairIssue[];
     const io = new NodeIO();
+    const patchedTextureCount = normalizeMsftTextureSources(options.modelPath);
+    if (patchedTextureCount > 0) {
+        console.log(`Patched ${patchedTextureCount} texture source references from MSFT_texture_dds.`);
+    }
     const document = await io.read(options.modelPath);
     const sourceUvContext = loadSourceUvContext(options.modelPath);
 
@@ -725,6 +783,13 @@ async function runRepairMode(options: RepairOptions): Promise<void> {
                     if (metallicFactor < 0 || metallicFactor > 1) {
                         console.log(`Adjusting metallic factor from ${metallicFactor} to be within [0, 1]`);
                         material.setMetallicFactor(metallicFactor % 1);
+                        break;
+                    }
+                    const emissiveFactor = material.getEmissiveFactor();
+                    if (emissiveFactor.some((value) => value < 0 || value > 1)) {
+                        console.log(`Adjusting emissive factor from [${emissiveFactor}] to be within [0, 1]`);
+                        material.setEmissiveFactor([Math.max(0, Math.min(1, emissiveFactor[0])), Math.max(0, Math.min(1, emissiveFactor[1])), Math.max(0, Math.min(1, emissiveFactor[2]))]);
+                        break;
                     }
                 }
                 break;
@@ -752,7 +817,7 @@ async function runRepairMode(options: RepairOptions): Promise<void> {
     }
 
     // Run structural cleanup after issue-specific and ASOBO repairs.
-    await document.transform(weld(), dedup(), prune(), unpartition());
+    await document.transform(weld(), dedup(), prune({ keepAttributes: true }), unpartition());
     // Clean up all scenes except for the default scene
     const root = document.getRoot();
     const defaultScene = root.getDefaultScene();
@@ -816,6 +881,10 @@ async function runOptimizeMode(options: OptimizeOptions): Promise<void> {
     }
 
     const io = new NodeIO();
+    const patchedTextureCount = normalizeMsftTextureSources(options.modelPath);
+    if (patchedTextureCount > 0) {
+        console.log(`Patched ${patchedTextureCount} texture source references from MSFT_texture_dds.`);
+    }
     const document = await io.read(options.modelPath);
     const sourceUvContext = loadSourceUvContext(options.modelPath);
     const restoredTexCoordAttributes = sourceUvContext
