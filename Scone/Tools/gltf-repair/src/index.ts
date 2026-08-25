@@ -713,14 +713,19 @@ async function runRepairMode(options: RepairOptions): Promise<void> {
             }
             case 'EMPTY_ENTITY': {
                 console.log(`Repairing issue: ${issue.code} at ${issue.pointer}`);
-                const pointerParts = issue.pointer.split('/');
-                if (pointerParts.length < 2) {
-                    console.error(`Invalid pointer for EMPTY_ENTITY issue: ${issue.pointer}`);
-                    continue;
-                }
-                // This method is rigid for now. It will work, but needs to be expanded.
-                if (pointerParts[1] === 'scene' && pointerParts[3] === 'nodes') {
-                    const scene = document.getRoot().listScenes()[Number(pointerParts[2])];
+                // TODO: Implement repair logic for EMPTY_ENTITY if needed. For now, we just log the issue.
+                break;
+            }
+            case 'VALUE_NOT_IN_RANGE': {
+                console.log(`Repairing issue: ${issue.code} at ${issue.pointer}`);
+                const pointerPartsRange = issue.pointer.split('/');
+                const material = document.getRoot().listMaterials()[Number(pointerPartsRange[2])];
+                if (material) {
+                    const metallicFactor = material.getMetallicFactor();
+                    if (metallicFactor < 0 || metallicFactor > 1) {
+                        console.log(`Adjusting metallic factor from ${metallicFactor} to be within [0, 1]`);
+                        material.setMetallicFactor(metallicFactor % 1);
+                    }
                 }
                 break;
             }
@@ -733,10 +738,29 @@ async function runRepairMode(options: RepairOptions): Promise<void> {
         ? restoreTexCoordsFromOriginalModel(document, sourceUvContext)
         : 0;
 
-    const asoboRepairStats = applyAsoboGeometryRepair(document);
+    const rootExtras = document.getRoot().getExtras() as Record<string, unknown> | null;
+    if (rootExtras?.['asobo-repair'] !== false) {
+        const asoboRepairStats = applyAsoboGeometryRepair(document);
+        document.getRoot().setExtras({ 'asobo-repair': asoboRepairStats });
+        console.log('ASOBO primitives visited:', asoboRepairStats.primitivesVisited);
+        console.log('ASOBO primitives reindexed:', asoboRepairStats.primitivesReindexed);
+        console.log('Normals flipped:', asoboRepairStats.normalsFlipped);
+        console.log('Tangents flipped:', asoboRepairStats.tangentsFlipped);
+        console.log('Degenerate triangles dropped:', asoboRepairStats.degenerateTrianglesDropped);
+        console.log('Out-of-range triangles dropped:', asoboRepairStats.outOfRangeTrianglesDropped);
+        console.log('Duplicate triangles dropped:', asoboRepairStats.duplicateTrianglesDropped);
+    }
 
     // Run structural cleanup after issue-specific and ASOBO repairs.
-    await document.transform(weld(), dedup(), prune({ keepAttributes: true }), unpartition());
+    await document.transform(weld(), dedup(), prune(), unpartition());
+    // Clean up all scenes except for the default scene
+    const root = document.getRoot();
+    const defaultScene = root.getDefaultScene();
+    for (const scene of root.listScenes()) {
+        if (scene !== defaultScene) {
+            scene.dispose();
+        }
+    }
 
     await io.write(options.outputPath, document);
 
@@ -747,14 +771,7 @@ async function runRepairMode(options: RepairOptions): Promise<void> {
     console.log('Issues JSON:', options.issuesJsonPath);
     console.log('Parsed issues:', issues.length);
     console.log('Errors:', errorCount);
-    console.log('ASOBO primitives visited:', asoboRepairStats.primitivesVisited);
-    console.log('ASOBO primitives reindexed:', asoboRepairStats.primitivesReindexed);
-    console.log('Normals flipped:', asoboRepairStats.normalsFlipped);
-    console.log('Tangents flipped:', asoboRepairStats.tangentsFlipped);
     console.log('Source TEXCOORD attributes restored:', restoredTexCoordAttributes);
-    console.log('Degenerate triangles dropped:', asoboRepairStats.degenerateTrianglesDropped);
-    console.log('Out-of-range triangles dropped:', asoboRepairStats.outOfRangeTrianglesDropped);
-    console.log('Duplicate triangles dropped:', asoboRepairStats.duplicateTrianglesDropped);
     console.log('Applied repairs: source-texcoord-restore, asobo-primitive-geometry, weld, dedup, prune(keepAttributes), unpartition');
     console.log('Wrote model:', options.outputPath);
 }

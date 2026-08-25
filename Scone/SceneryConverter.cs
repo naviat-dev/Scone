@@ -1081,7 +1081,7 @@ public class SceneryConverter : INotifyPropertyChanged
 						string texturePath = Path.Combine(Path.GetDirectoryName(simObj.containerPath)!, match.Groups[2].Value.Trim() == "" ? "texture" : $"texture.{match.Groups[2].Value.Replace("\r", "").Replace("\"", "").Trim()}");
 						string dirName = Path.GetDirectoryName(modelCfgFile)!;
 						string modelSource = new Regex(@"normal=(.+)", RegexOptions.Multiline).Match(File.ReadAllText(modelCfgFile)).Groups[1].Value;
-						string xmlPath = Path.Combine(dirName, modelSource);
+						string xmlPath = Path.Combine(dirName, modelSource).Replace("\\", "/");
 						XmlReader xmlReader = XmlReader.Create(xmlPath);
 						string gltfFile = "";
 						while (xmlReader.Read())
