@@ -781,6 +781,7 @@ async function runRepairMode(options: RepairOptions): Promise<void> {
                 if (material) {
                     const metallicFactor = material.getMetallicFactor();
                     if (metallicFactor < 0 || metallicFactor > 1) {
+                        // Most times we don't want the metallic factor to get maxed out, so wrap it around instead
                         console.log(`Adjusting metallic factor from ${metallicFactor} to be within [0, 1]`);
                         material.setMetallicFactor(metallicFactor % 1);
                         break;
@@ -789,6 +790,12 @@ async function runRepairMode(options: RepairOptions): Promise<void> {
                     if (emissiveFactor.some((value) => value < 0 || value > 1)) {
                         console.log(`Adjusting emissive factor from [${emissiveFactor}] to be within [0, 1]`);
                         material.setEmissiveFactor([Math.max(0, Math.min(1, emissiveFactor[0])), Math.max(0, Math.min(1, emissiveFactor[1])), Math.max(0, Math.min(1, emissiveFactor[2]))]);
+                        break;
+                    }
+                    const baseColorFactor = material.getBaseColorFactor();
+                    if (baseColorFactor.some((value) => value < 0 || value > 1)) {
+                        console.log(`Adjusting base color factor from [${baseColorFactor}] to be within [0, 1]`);
+                        material.setBaseColorFactor([Math.max(0, Math.min(1, baseColorFactor[0])), Math.max(0, Math.min(1, baseColorFactor[1])), Math.max(0, Math.min(1, baseColorFactor[2])), Math.max(0, Math.min(1, baseColorFactor[3]))]);
                         break;
                     }
                 }

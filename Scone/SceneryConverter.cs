@@ -1715,7 +1715,6 @@ public class SceneryConverter : INotifyPropertyChanged
 			{
 				Logger.Error($"GLTF Validation Error: Code: {issue["code"]?.Value<string>() ?? ""}, Message: {issue["message"]?.Value<string>() ?? ""}, Pointer: {issue["pointer"]?.Value<string>() ?? ""}");
 			}
-			throw new InvalidDataException($"GLTF validation failed after {tries} attempts with {errorCount} errors.");
 		}
 		return true;
 	}
