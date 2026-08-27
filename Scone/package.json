@@ -13,9 +13,9 @@
   "license": "CC-BY-NC-SA-4.0",
   "author": "\"Israel Emmanuel\"",
   "type": "commonjs",
-  "main": "main.js",
+  "main": "main.ts",
   "scripts": {
-    "start": "node start.js",
+    "start": "node start.ts",
     "package": "electron-builder --publish never",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
