@@ -7,9 +7,6 @@ on:
       - dev
       - dev-typescript-conversion
       - release/**
-    paths:
-      - /**
-      - .github/workflows/ci.yml
   pull_request:
     types: [opened, synchronize, reopened]
     branches:
@@ -17,9 +14,6 @@ on:
       - dev
       - dev-typescript-conversion
       - release/**
-    paths:
-      - /**
-      - .github/workflows/ci.yml
   workflow_dispatch:
 
 permissions:
@@ -28,10 +22,6 @@ permissions:
 concurrency:
   group: electron-ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
-
-defaults:
-  run:
-    working-directory: /
 
 jobs:
   build:
