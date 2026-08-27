@@ -21,7 +21,7 @@ export function getTileIndexFromCoord(lat, lon): Number {
 	}
 }
 
-export function getTileCoordFromIndex(index: Number): { lat: number, lon: number } {
+export function getCoordFromTileIndex(index: Number): { lat: number, lon: number } {
 	const x = index & 7;
 	const y = (index >> 3) & 7;
 	const baseY = ((index >> 6) & 255) - 90;

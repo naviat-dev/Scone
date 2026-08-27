@@ -12,7 +12,7 @@
   },
   "license": "CC-BY-NC-SA-4.0",
   "author": "\"Israel Emmanuel\"",
-  "type": "commonjs",
+  "type": "module",
   "main": "main.ts",
   "scripts": {
     "start": "node start.ts",
