@@ -8,7 +8,7 @@ on:
       - dev-typescript-conversion
       - release/**
     paths:
-      - Scone/**
+      - /**
       - .github/workflows/ci.yml
   pull_request:
     types: [opened, synchronize, reopened]
@@ -18,7 +18,7 @@ on:
       - dev-typescript-conversion
       - release/**
     paths:
-      - Scone/**
+      - /**
       - .github/workflows/ci.yml
   workflow_dispatch:
 
@@ -31,7 +31,7 @@ concurrency:
 
 defaults:
   run:
-    working-directory: Scone
+    working-directory: /
 
 jobs:
   build:
@@ -77,7 +77,7 @@ jobs:
           node-version: 24
           architecture: ${{ matrix.arch }}
           cache: npm
-          cache-dependency-path: Scone/package-lock.json
+          cache-dependency-path: package-lock.json
 
       - name: Show runtime versions
         run: |
@@ -97,7 +97,7 @@ jobs:
           shopt -s nullglob
           files=(dist/*)
           if ((${#files[@]} == 0)); then
-            echo "No packaged application found in Scone/dist" >&2
+            echo "No packaged application found in dist" >&2
             exit 1
           fi
           printf 'Packaged application output:\n%s\n' "${files[@]}"
@@ -106,7 +106,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: electron-${{ matrix.os }}-${{ matrix.arch }}
-          path: Scone/dist/
+          path: dist/
           if-no-files-found: error
           retention-days: 14
 
