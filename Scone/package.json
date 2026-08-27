@@ -1,0 +1,24 @@
+{
+  "name": "scone",
+  "version": "2.0.0",
+  "description": "\"Tooling to convert scenery for Microsoft Flight Simulator to FlightGear\"",
+  "homepage": "https://github.com/naviat-dev/Scone#readme",
+  "bugs": {
+    "url": "https://github.com/naviat-dev/Scone/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/naviat-dev/Scone.git"
+  },
+  "license": "CC-BY-NC-SA-4.0",
+  "author": "\"Israel Emmanuel\"",
+  "type": "commonjs",
+  "main": "main.js",
+  "scripts": {
+    "start": "node start.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "devDependencies": {
+    "electron": "^44.0.0"
+  }
+}
