@@ -20,7 +20,6 @@ app.whenReady().then(async () => {
 			createWindow()
 		}
 	})
-	convertScenery('/home/israel-emmanuel/Documents/Aviation/scone-packs/neptune-ljbl_1.0.2_jdesn', '/home/israel-emmanuel/Documents/Scone/Output', true, false);
 })
 
 app.on('window-all-closed', () => {

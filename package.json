@@ -15,15 +15,20 @@
   "type": "module",
   "main": "dist/main.js",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "npm run build:main && npm run build:renderer",
+    "build:main": "tsc -p tsconfig.json",
+    "build:renderer": "esbuild renderer.tsx --bundle --platform=browser --format=esm --outfile=dist/renderer.js",
     "start": "npm run build && node dist/start.js",
     "package": "electron-builder --publish never",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "devDependencies": {
     "@types/node": "^24.4.0",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.5",
     "electron": "^44.0.0",
     "electron-builder": "^26.15.3",
+    "esbuild": "^0.28.2",
     "typescript": "^5.9.3"
   },
   "build": {
@@ -35,6 +40,8 @@
   },
   "dependencies": {
     "gl-matrix": "^3.4.4",
-    "path": "^0.12.7"
+    "path": "^0.12.7",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
   }
 }

@@ -4,7 +4,8 @@ import * as path from 'path';
 
 export const config = {
 	tempDir: path.join(os.tmpdir(), 'scone'),
-	storeDir: path.join(os.homedir(), '.scone')
+	storeDir: path.join(os.homedir(), '.scone'),
+	outputDir: path.join(os.homedir(), 'SconeOutput')
 }
 
 export async function saveConfig() {
