@@ -1,11 +1,13 @@
 import { spawn } from 'node:child_process';
 import electron from 'electron';
 
+const electronBinary = electron as unknown as string;
+
 const electronArgs = process.platform === 'linux'
 	? ['--ozone-platform=x11', '.']
 	: ['.']
 
-const child = spawn(electron, electronArgs, {
+const child = spawn(electronBinary, electronArgs, {
 	stdio: 'inherit',
 })
 

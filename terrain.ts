@@ -1,6 +1,6 @@
 const latitudeIndex = [[89, 12], [86, 4], [83, 2], [76, 1], [62, 0.5], [22, 0.25], [0, 0.125]];
 
-function getTileWidth(input): Number {
+function getTileWidth(input: number): number {
 	for (let i = 0; i < latitudeIndex.length; i++) {
 		if (input >= latitudeIndex[i][0]) {
 			return latitudeIndex[i][1];
@@ -9,7 +9,7 @@ function getTileWidth(input): Number {
 	return -1;
 }
 
-export function getTileIndexFromCoord(lat, lon): Number {
+export function getTileIndexFromCoord(lat: number, lon: number): number {
 	const latAbs = Math.abs(lat);
 	if (latAbs <= 90 && Math.abs(lon) <= 180) {
 		const tileWidth = getTileWidth(latAbs);
@@ -19,9 +19,10 @@ export function getTileIndexFromCoord(lat, lon): Number {
 		const y = Math.trunc((lat - baseY) * 8);
 		return ((baseX + 180) << 14) + ((baseY + 90) << 6) + (y << 3) + x;
 	}
+	return -1;
 }
 
-export function getCoordFromTileIndex(index: Number): { lat: number, lon: number } {
+export function getCoordFromTileIndex(index: number): { lat: number, lon: number } {
 	const x = index & 7;
 	const y = (index >> 3) & 7;
 	const baseY = ((index >> 6) & 255) - 90;
@@ -33,7 +34,7 @@ export function getCoordFromTileIndex(index: Number): { lat: number, lon: number
 	return { lat, lon };
 }
 
-export async function getAltitude(lat, lon, version): Promise<Number> {
+export async function getAltitude(lat: number, lon: number, version: number): Promise<number> {
 	const response = await fetch(`https://51-68-215-9.sslip.io/api/elevation?lat=${lat}&lon=${lon}`);
 	return (await response.json())['altitudeFt'];
 }

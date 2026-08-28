@@ -1,6 +1,6 @@
 import { app, BrowserWindow } from 'electron/main';
-import { config, loadConfig, saveConfig } from './config.ts';
-import { convertScenery } from './converter.ts';
+import { config, loadConfig, saveConfig } from './config.js';
+import { convertScenery } from './converter.js';
 
 const createWindow = () => {
   const win = new BrowserWindow({

@@ -13,19 +13,28 @@
   "license": "CC-BY-NC-SA-4.0",
   "author": "\"Israel Emmanuel\"",
   "type": "module",
-  "main": "main.ts",
+  "main": "dist/main.js",
   "scripts": {
-    "start": "node start.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "npm run build && node dist/start.js",
     "package": "electron-builder --publish never",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "devDependencies": {
+    "@types/node": "^24.4.0",
     "electron": "^44.0.0",
-    "electron-builder": "^26.15.3"
+    "electron-builder": "^26.15.3",
+    "typescript": "^5.9.3"
   },
   "build": {
     "linux": {
-      "target": ["AppImage"]
+      "target": [
+        "AppImage"
+      ]
     }
+  },
+  "dependencies": {
+    "gl-matrix": "^3.4.4",
+    "path": "^0.12.7"
   }
 }
