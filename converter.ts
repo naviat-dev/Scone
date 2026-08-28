@@ -2,16 +2,16 @@ import { getTileIndexFromCoord, getCoordFromTileIndex, getAltitude } from './ter
 import * as fs from 'fs';
 import * as path from 'path';
 
-export function convertScenery(inputPath, outputPath, isGltf, isAc3d) {
+export function convertScenery(inputPath: string, outputPath: string, isGltf: boolean, isAc3d: boolean): void {
 	if (!fs.existsSync(inputPath)) {
 		throw new Error(`Input path does not exist: ${inputPath}`);
 	}
 
-	const allBglFiles = fs.readdirSync(inputPath).filter(file => path.extname(file).toLowerCase() === '.bgl');
-	let totalLibraryObjects = 0;
+	const allBglFiles: string[] = fs.readdirSync(inputPath).filter((file: string): boolean => path.extname(file).toLowerCase() === '.bgl');
+	let totalLibraryObjects: number = 0;
 	for (const file of allBglFiles) {
 		console.log(`Processing file: ${file}`);
 		const fileBuffer: ArrayBuffer = fs.readFileSync(file).buffer;
-		const fileView = new DataView(fileBuffer);
+		const fileView: DataView = new DataView(fileBuffer);
 	}
 }
