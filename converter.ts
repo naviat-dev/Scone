@@ -1,7 +1,11 @@
 import { getTileIndexFromCoord, getCoordFromTileIndex, getAltitude } from './terrain.js';
-import { LibraryObject, SimObject, Flags, Airport, Tower, Runway } from './structures.js'
+import { LibraryObject, SimObject, Flags, Airport, Tower, Runway, RunwayStart, TaxiwayPoint, TaxiwayParking, TaxiwayPath, TaxiwayPathType, Apron, TaxiwaySign, PaintedLine, PaintedHatchedArea, ApronEdgeLights, Helipad, ProjectedMesh } from './structures.js'
 import * as fs from 'fs';
 import * as path from 'path';
+
+function getViewBytes(fileView: DataView, address: number, length: number): Uint8Array {
+	return new Uint8Array(fileView.buffer, fileView.byteOffset + address, length);
+}
 
 function buildLibraryObject(fileView: DataView, address: number): LibraryObject {
 	const longitude = (fileView.getInt32(address + 4, true) * (360.0 / 805306368.0)) - 180.0;
@@ -14,7 +18,7 @@ function buildLibraryObject(fileView: DataView, address: number): LibraryObject 
 	const bank = fileView.getInt16(address + 20, true) * (360.0 / 65536.0);
 	const heading = fileView.getInt16(address + 22, true) * (360.0 / 65536.0);
 	const imageComplexity = fileView.getUint16(address + 24, true);
-	const guid = getGuidFromBytes(new Uint8Array(fileView.buffer, fileView.byteOffset + address + 44, 16));
+	const guid = getGuidFromBytes(getViewBytes(fileView, address + 44, 16));
 	const scale = fileView.getFloat32(address + 60, true);
 	return { longitude, latitude, altitude, flags, pitch, bank, heading, imageComplexity, guid, scale };
 }
@@ -33,8 +37,8 @@ function buildSimObject(fileView: DataView, address: number): SimObject {
 	const scale = fileView.getFloat32(address + 44, true);
 	const containerTitleLength = fileView.getUint16(address + 48, true);
 	const containerPathLength = fileView.getUint16(address + 50, true);
-	const containerTitle = new TextDecoder().decode(new Uint8Array(fileView.buffer, fileView.byteOffset + address + 52, containerTitleLength));
-	const containerPath = new TextDecoder().decode(new Uint8Array(fileView.buffer, fileView.byteOffset + address + 52 + containerTitleLength, containerPathLength));
+	const containerTitle = new TextDecoder().decode(getViewBytes(fileView, address + 52, containerTitleLength));
+	const containerPath = new TextDecoder().decode(getViewBytes(fileView, address + 52 + containerTitleLength, containerPathLength));
 	return { longitude, latitude, altitude, flags, pitch, bank, heading, imageComplexity, containerTitle, containerPath, scale };
 }
 
@@ -46,7 +50,7 @@ function convertIcaoBytesToString(icaoBytes: number): string {
 		icaoBytes = (icaoBytes - charVal) / 38;
 		const c = charVal == 0 ? ' ' :
 			charVal > 1 && charVal < 12 ? String.fromCharCode('0'.charCodeAt(0) + charVal - 2) :
-											String.fromCharCode('A'.charCodeAt(0) + charVal - 12);
+				String.fromCharCode('A'.charCodeAt(0) + charVal - 12);
 		sb.unshift(c);
 	}
 	return sb.join('');
@@ -56,6 +60,20 @@ function getGuidFromBytes(guidBytes: Uint8Array): string {
 	return Array.from(guidBytes).map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
+function getFilesRecursive(dir: string, extension: string, caseSensitive: boolean): string[] {
+	const result: string[] = [];
+	const files = fs.readdirSync(dir);
+	for (const file of files) {
+		const fullPath = path.join(dir, file);
+		if (fs.statSync(fullPath).isDirectory()) {
+			result.push(...getFilesRecursive(fullPath, extension, caseSensitive));
+		} else if ((caseSensitive ? path.extname(fullPath) === extension : path.extname(fullPath).toLowerCase() === extension.toLowerCase())) {
+			result.push(fullPath);
+		}
+	}
+	return result;
+}
+
 export function convertScenery(inputPath: string, outputPath: string, isGltf: boolean, isAc3d: boolean): void {
 	if (!fs.existsSync(inputPath)) {
 		throw new Error(`Input path does not exist: ${inputPath}`);
@@ -63,13 +81,14 @@ export function convertScenery(inputPath: string, outputPath: string, isGltf: bo
 
 	const libraryObjects: Map<string, LibraryObject[]> = new Map();
 	const simObjects: Map<string, SimObject[]> = new Map();
+	const airports: Airport[] = [];
 
-	const allBglFiles: string[] = fs.readdirSync(inputPath).filter((file: string): boolean => path.extname(file).toLowerCase() === '.bgl');
+	const allBglFiles: string[] = getFilesRecursive(inputPath, '.bgl', false);
 	let totalLibraryObjects: number = 0;
 	for (const file of allBglFiles) {
 		console.log(`Processing file: ${file}`);
-		const fileBuffer: ArrayBuffer = fs.readFileSync(file).buffer;
-		const fileView: DataView = new DataView(fileBuffer);
+		const fileBuffer = fs.readFileSync(file);
+		const fileView: DataView = new DataView(fileBuffer.buffer, fileBuffer.byteOffset, fileBuffer.byteLength);
 		const magicNumber1: number = fileView.getUint32(0, true);
 		const magicNumber2: number = fileView.getUint32(0x10, true);
 		if (magicNumber1 !== 0x19920201 || magicNumber2 !== 0x08051803) {
@@ -129,8 +148,9 @@ export function convertScenery(inputPath: string, outputPath: string, isGltf: bo
 					}
 					simObjects.get(simObject.containerPath)!.push(simObject);
 				} else {
-					console.warn(`Unexpected subrecord type at offset 0x${subrecord[0] + bytesRead.toString(16)}: 0x${id.toString(16)}, skipping ${size} bytes`);
+					console.warn(`Unexpected subrecord type at offset 0x${(subrecord[0] + bytesRead).toString(16)}: 0x${id.toString(16)}, skipping ${size} bytes`);
 					bytesRead += size;
+					// AI says this should be bytesRead instead of size
 					address = subrecord[0] + size;
 					continue;
 				}
@@ -138,7 +158,7 @@ export function convertScenery(inputPath: string, outputPath: string, isGltf: bo
 				bytesRead += size;
 			}
 		}
-		
+
 		// Parse Airport subrecords
 		const airportSubrecords: number[][] = [];
 		for (const airportOffset of airportOffsets) {
@@ -154,7 +174,7 @@ export function convertScenery(inputPath: string, outputPath: string, isGltf: bo
 				address += 2;
 				if (id !== 0x0056) { // Airport subrecord type
 					const skip = fileView.getUint32(address, true);
-					console.warn(`Unexpected airport subrecord type at offset 0x${subrecord[0] + bytesRead.toString(16)}: 0x${id.toString(16)}, skipping ${skip} bytes`);
+					console.warn(`Unexpected airport subrecord type at offset 0x${(subrecord[0] + bytesRead).toString(16)}: 0x${id.toString(16)}, skipping ${skip} bytes`);
 					bytesRead += skip;
 					continue;
 				}
@@ -220,7 +240,7 @@ export function convertScenery(inputPath: string, outputPath: string, isGltf: bo
 				address = subrecord[0] + bytesRead + 0x39; // Skip ahead to arrival count
 				const arrivalCt = fileView.getUint8(address);
 				address = subrecord[0] + bytesRead + 0x3c; // Skip ahead to remaining useful records
-				const apronCt = fileView.getUint16(address);
+				const apronCt = fileView.getUint16(address, true);
 				address += 2;
 				const paintedLineCt = fileView.getUint16(address, true);
 				address += 2;
@@ -240,7 +260,7 @@ export function convertScenery(inputPath: string, outputPath: string, isGltf: bo
 					address += 2; // Move past the record size
 					switch (recordId) {
 						case 0x0019: // Airport Name
-							airport.name = new TextDecoder('utf-8').decode(new Uint8Array(fileView.buffer, address, recordSize));
+							airport.name = new TextDecoder('utf-8').decode(getViewBytes(fileView, address, recordSize));
 							break;
 						case 0x00ce: // Runway
 							let runway: Runway = {
@@ -261,7 +281,7 @@ export function convertScenery(inputPath: string, outputPath: string, isGltf: bo
 								excludeVegetationAround: false,
 								falloff: -1,
 								surface: '',
-								coloration: [-1 , -1, -1, -1], // RGBA bytes
+								coloration: [-1, -1, -1, -1], // RGBA bytes
 								markingTypes: [],
 								lightTypes: [],
 								patternTypes: [],
@@ -287,24 +307,19 @@ export function convertScenery(inputPath: string, outputPath: string, isGltf: bo
 							const patternValue = fileView.getUint8(address);
 							address += 1;
 
-							for (let j = 0; j < 16; j++)
-							{
-								if (((markingValue >> j) & 1) != 0)
-								{
+							for (let j = 0; j < 16; j++) {
+								if (((markingValue >> j) & 1) != 0) {
 									runway.markingTypes.push(j);
 								}
 							}
 
-							if ((lightValue & (1 << 5)) != 0)
-							{
+							if ((lightValue & (1 << 5)) != 0) {
 								runway.markingTypes.push(16);
 							}
-							if ((lightValue & (1 << 6)) != 0)
-							{
+							if ((lightValue & (1 << 6)) != 0) {
 								runway.markingTypes.push(17);
 							}
-							if ((lightValue & (1 << 7)) != 0)
-							{
+							if ((lightValue & (1 << 7)) != 0) {
 								runway.markingTypes.push(18);
 							}
 
@@ -314,33 +329,26 @@ export function convertScenery(inputPath: string, outputPath: string, isGltf: bo
 							const centerLightsValue = (lightValue >> 2) & 0b11;
 							runway.lightTypes.push(4 + centerLightsValue);
 
-							if ((lightValue & (1 << 4)) != 0)
-							{
+							if ((lightValue & (1 << 4)) != 0) {
 								runway.lightTypes.push(8);
 							}
 
-							if ((patternValue & (1 << 0)) != 0)
-							{
+							if ((patternValue & (1 << 0)) != 0) {
 								runway.patternTypes.push(0);
 							}
-							if ((patternValue & (1 << 1)) != 0)
-							{
+							if ((patternValue & (1 << 1)) != 0) {
 								runway.patternTypes.push(1);
 							}
-							if ((patternValue & (1 << 2)) != 0)
-							{
+							if ((patternValue & (1 << 2)) != 0) {
 								runway.patternTypes.push(2);
 							}
-							if ((patternValue & (1 << 3)) != 0)
-							{
+							if ((patternValue & (1 << 3)) != 0) {
 								runway.patternTypes.push(3);
 							}
-							if ((patternValue & (1 << 4)) != 0)
-							{
+							if ((patternValue & (1 << 4)) != 0) {
 								runway.patternTypes.push(4);
 							}
-							if ((patternValue & (1 << 5)) != 0)
-							{
+							if ((patternValue & (1 << 5)) != 0) {
 								runway.patternTypes.push(5);
 							}
 							runway.groundMerging = (patternValue & (1 << 6)) != 0;
@@ -348,7 +356,7 @@ export function convertScenery(inputPath: string, outputPath: string, isGltf: bo
 							address += 0x14;
 							runway.falloff = fileView.getFloat32(address, true);
 							address += 4;
-							runway.surface = getGuidFromBytes(new Uint8Array(fileView.buffer, address, 16));
+							runway.surface = getGuidFromBytes(getViewBytes(fileView, address, 16));
 							address += 16;
 							runway.coloration = [
 								fileView.getUint8(address),
@@ -358,94 +366,582 @@ export function convertScenery(inputPath: string, outputPath: string, isGltf: bo
 							];
 							address += 4;
 							let runwayBytesRead = 0x60;
-							while (runwayBytesRead < recordSize)
+							while (runwayBytesRead < recordSize) {
+								address = subrecord[0] + bytesRead + airportBytesRead + runwayBytesRead;
+								const runwayRecordId = fileView.getUint16(address, true);
+								address += 2;
+								const runwayRecordSize = fileView.getUint32(address, true);
+								address += 4;
+								if (runwayRecordId >= 0x000b && runwayRecordId <= 0x000e) // VASI
 								{
-									address = subrecord[0] + bytesRead + airportBytesRead + runwayBytesRead;
-									const runwayRecordId = fileView.getUint16(address, true);
-									address += 2;
-									const runwayRecordSize = fileView.getUint32(address, true);
-									address += 4;
-									if (runwayRecordId >= 0x000b && runwayRecordId <= 0x000e) // VASI
-									{
-										runway.vasis.push({
-											childType: runwayRecordId - 0x000b,
-											type: runwayRecordId - 0x000b,
-											biasX: fileView.getFloat32(address, true),
-											biasZ: fileView.getFloat32(address + 4, true),
-											spacing: fileView.getFloat32(address + 8, true),
-											pitch: fileView.getFloat32(address + 12, true),
-										});
-										address += 16
-									}
-									else if (runwayRecordId == 0x0005) // OffsetThreshold
-									{
-										runway.offsetThresholds.push({
-											fsXSurface: fileView.getFloat32(address, true),
-											surface: getGuidFromBytes(new Uint8Array(fileView.buffer, address + 4, 16)),
-											length: fileView.getFloat32(address + 20, true),
-											width: fileView.getFloat32(address + 24, true),
-										});
-										address += 28
-									}
-									else if (runwayRecordId == 0x0007 || runwayRecordId == 0x0008) // BlastPad
-									{
-										runway.blastPads.push({
-											fsXSurface: fileView.getFloat32(address, true),
-											surface: getGuidFromBytes(new Uint8Array(fileView.buffer, address + 4, 16)),
-											length: fileView.getFloat32(address + 20, true),
-											width: fileView.getFloat32(address + 24, true),
-										});
-										address += 28;
-									}
-									else if (runwayRecordId == 0x0065 || runwayRecordId == 0x0066) // Overrun
-									{
-										runway.overruns.push({
-											fsXSurface: fileView.getFloat32(address, true),
-											surface: getGuidFromBytes(new Uint8Array(fileView.buffer, address + 4, 16)),
-											length: fileView.getFloat32(address + 20, true),
-											width: fileView.getFloat32(address + 24, true),
-										});
-										address += 28;
-									}
-									else if (runwayRecordId == 0x00df || runwayRecordId == 0x00e0) // ApproachLights
-									{
-										const typeValue = fileView.getUint8(address);
-										address += 1;
-										runway.approachLights.push({
-											type: typeValue & 0b1111,
-											endLights: (typeValue & 0b10000) != 0,
-											reil: (typeValue & 0b100000) != 0,
-											touchdown: (typeValue & 0b1000000) != 0,
-											strobes: fileView.getUint8(address),
-											spacing: fileView.getFloat32(address + 1, true),
-											offset: fileView.getFloat32(address + 5, true),
-											slope: fileView.getFloat32(address + 9, true),
-										});
-										address += 17; // Skip unknown field
-									}
-									else if (runwayRecordId == 0x00cb) // FacilityMaterial
-									{
-										address++; // Skip unknown field
-										runway.facilityMaterial = {
-											opacity: fileView.getUint8(address),
-											guid: getGuidFromBytes(new Uint8Array(fileView.buffer, address + 1, 16)),
-											tilingU: fileView.getFloat32(address + 21, true),
-											tilingV: fileView.getFloat32(address + 25, true),
-											width: fileView.getFloat32(address + 29, true),
-											falloff: fileView.getFloat32(address + 33, true),
-										};
-										address += 37;
-									}
-									runwayBytesRead += runwayRecordSize;
+									runway.vasis.push({
+										childType: runwayRecordId - 0x000b,
+										type: runwayRecordId - 0x000b,
+										biasX: fileView.getFloat32(address, true),
+										biasZ: fileView.getFloat32(address + 4, true),
+										spacing: fileView.getFloat32(address + 8, true),
+										pitch: fileView.getFloat32(address + 12, true),
+									});
+									address += 16
 								}
-								airport.runways.push(runway);
+								else if (runwayRecordId == 0x0005) // OffsetThreshold
+								{
+									runway.offsetThresholds.push({
+										fsXSurface: fileView.getFloat32(address, true),
+										surface: getGuidFromBytes(getViewBytes(fileView, address + 4, 16)),
+										length: fileView.getFloat32(address + 20, true),
+										width: fileView.getFloat32(address + 24, true),
+									});
+									address += 28
+								}
+								else if (runwayRecordId == 0x0007 || runwayRecordId == 0x0008) // BlastPad
+								{
+									runway.blastPads.push({
+										fsXSurface: fileView.getFloat32(address, true),
+										surface: getGuidFromBytes(getViewBytes(fileView, address + 4, 16)),
+										length: fileView.getFloat32(address + 20, true),
+										width: fileView.getFloat32(address + 24, true),
+									});
+									address += 28;
+								}
+								else if (runwayRecordId == 0x0065 || runwayRecordId == 0x0066) // Overrun
+								{
+									runway.overruns.push({
+										fsXSurface: fileView.getFloat32(address, true),
+										surface: getGuidFromBytes(getViewBytes(fileView, address + 4, 16)),
+										length: fileView.getFloat32(address + 20, true),
+										width: fileView.getFloat32(address + 24, true),
+									});
+									address += 28;
+								}
+								else if (runwayRecordId == 0x00df || runwayRecordId == 0x00e0) // ApproachLights
+								{
+									const typeValue = fileView.getUint8(address);
+									address += 1;
+									runway.approachLights.push({
+										type: typeValue & 0b1111,
+										endLights: (typeValue & 0b10000) != 0,
+										reil: (typeValue & 0b100000) != 0,
+										touchdown: (typeValue & 0b1000000) != 0,
+										strobes: fileView.getUint8(address),
+										spacing: fileView.getFloat32(address + 1, true),
+										offset: fileView.getFloat32(address + 5, true),
+										slope: fileView.getFloat32(address + 9, true),
+									});
+									address += 17; // Skip unknown field
+								}
+								else if (runwayRecordId == 0x00cb) // FacilityMaterial
+								{
+									address++; // Skip unknown field
+									runway.facilityMaterial = {
+										opacity: fileView.getUint8(address),
+										guid: getGuidFromBytes(getViewBytes(fileView, address + 1, 16)),
+										tilingU: fileView.getFloat32(address + 21, true),
+										tilingV: fileView.getFloat32(address + 25, true),
+										width: fileView.getFloat32(address + 29, true),
+										falloff: fileView.getFloat32(address + 33, true),
+									};
+									address += 37;
+								}
+								runwayBytesRead += runwayRecordSize;
+							}
+							airport.runways.push(runway);
+							break;
+						case 0x0011: // Start
+							let runwayStart: RunwayStart = {
+								runwayNumber: fileView.getUint8(address),
+								designator: 0,
+								type: 0,
+								longitude: 0,
+								latitude: 0,
+								altitude: 0,
+								heading: 0
+							};
+							address += 1;
+							const value = fileView.getUint8(address);
+							address += 1;
+							runwayStart.designator = value & 0b1111;
+							runwayStart.type = (value >> 4) & 0b1111;
+							runwayStart.longitude = (fileView.getUint32(address, true) * (360.0 / 805306368.0)) - 180.0;
+							address += 4;
+							runwayStart.latitude = 90.0 - (fileView.getUint32(address, true) * (180.0 / 536870912.0));
+							address += 4;
+							runwayStart.altitude = fileView.getInt32(address, true) / 1000.0;
+							address += 4;
+							runwayStart.heading = fileView.getFloat32(address, true) * (360.0 / 65536.0);
+							address += 4;
+							airport.runwayStarts.push(runwayStart);
+							break;
+						case 0x001a: // TaxiwayPoint
+							const taxiwayPointCount = fileView.getUint16(address, true);
+							address += 2;
+							for (let j = 0; j < taxiwayPointCount; j++) {
+								let taxiwayPoint: TaxiwayPoint = {
+									type: fileView.getUint8(address),
+									orientation: fileView.getUint8(address + 1),
+									longitude: 0,
+									latitude: 0
+								};
+								address += 4; // Skip unknown field and the two bytes already read
+								taxiwayPoint.longitude = (fileView.getUint32(address, true) * (360.0 / 805306368.0)) - 180.0;
+								address += 4;
+								taxiwayPoint.latitude = 90.0 - (fileView.getUint32(address, true) * (180.0 / 536870912.0));
+								address += 4;
+								airport.taxiwayPoints.push(taxiwayPoint);
+							}
+							break;
+						case 0x00e7: // TaxiwayParking
+							const taxiwayParkingCount = fileView.getUint16(address, true);
+							address += 2;
+							for (let j = 0; j < taxiwayParkingCount; j++) {
+								const value = fileView.getInt32(address, true);
+								address += 4;
+								let taxiwayParking: TaxiwayParking = {
+									name: value & 0b111111,
+									pushback: (value >> 6) & 0b11,
+									type: (value >> 8) & 0b1111,
+									number: (value >> 12) & 0xFFF,
+									airlineCodes: new Array(value >> 24 & 0xFF),
+									radius: fileView.getFloat32(address, true),
+									heading: fileView.getFloat32(address + 4, true) * (360.0 / 65536.0),
+									teeOffset1: fileView.getFloat32(address + 8, true),
+									teeOffset2: fileView.getFloat32(address + 12, true),
+									teeOffset3: fileView.getFloat32(address + 16, true),
+									teeOffset4: fileView.getFloat32(address + 20, true),
+									longitude: (fileView.getUint32(address + 24, true) * (360.0 / 805306368.0)) - 180.0,
+									latitude: 90.0 - (fileView.getUint32(address + 28, true) * (180.0 / 536870912.0)),
+									numberMarking: false,
+									suffix: 0,
+									numberBiasX: 0,
+									numberBiasZ: 0,
+									numberHeading: 0,
+								};
+								address += 32;
+								for (let k = 0; k < taxiwayParking.airlineCodes.length; k++) {
+									taxiwayParking.airlineCodes[k] = new TextDecoder().decode(getViewBytes(fileView, address, 4));
+									address += 4;
+								}
+								taxiwayParking.numberMarking = fileView.getUint8(address) !== 0;
+								address += 1;
+								taxiwayParking.suffix = fileView.getUint8(address);
+								address += 1;
+								address += 5; // Skip unknown fields
+								taxiwayParking.numberBiasX = fileView.getFloat32(address, true);
+								address += 4;
+								taxiwayParking.numberBiasZ = fileView.getFloat32(address, true);
+								address += 4;
+								taxiwayParking.numberHeading = fileView.getFloat32(address, true) * (360.0 / 65536.0);
+								address += 4;
+								airport.taxiwayParkings.push(taxiwayParking);
+							}
+							break;
+						case 0x00d4: // TaxiwayPath
+							const taxiwayPathCount = fileView.getUint16(address, true);
+							address += 2;
+							for (let j = 0; j < taxiwayPathCount; j++) {
+								let taxiwayPath: TaxiwayPath = {
+									start: fileView.getUint16(address, true),
+									legacyEnd: 0,
+									designator: 0,
+									type: 0,
+									enhanced: false,
+									drawSurface: false,
+									drawDetail: false,
+									runwayNumber: 0,
+									name: 0,
+									centerLine: false,
+									centerLineLighted: false,
+									leftEdge: 0,
+									leftEdgeLighted: false,
+									rightEdge: 0,
+									rightEdgeLighted: false,
+									fsXSurface: 0,
+									width: 0,
+									weightLimit: 0,
+									surface: '',
+									coloration: [],
+									materials: [],
+									groundMerging: false,
+									excludeVegetationAround: false,
+									excludeVegetationInside: false,
+									end: 0,
+								};
+								address += 2;
+								let value1 = fileView.getInt16(address, true);
+								address += 2;
+								let value2 = fileView.getUint8(address);
+								address += 1;
+								taxiwayPath.legacyEnd = value1 & 0x7FF;
+								taxiwayPath.designator = (value1 >> 11) & 0b1111;
+								taxiwayPath.type = value2 & 0b111;
+								taxiwayPath.enhanced = (value2 & 0b1000) == 0b1000;
+								taxiwayPath.drawSurface = (value2 & 0b10000) == 0b10000;
+								taxiwayPath.drawDetail = (value2 & 0b100000) == 0b100000;
+								if (taxiwayPath.type == TaxiwayPathType.Runway) {
+									taxiwayPath.runwayNumber = fileView.getUint8(address);
+									address += 1;
+								}
+								else {
+									taxiwayPath.name = fileView.getUint8(address);
+									address += 1;
+								}
+								let value3 = fileView.getUint8(address);
+								address += 1;
+								taxiwayPath.centerLine = (value3 & 0b1) == 1;
+								taxiwayPath.centerLineLighted = (value3 & 0b10) !== 0;
+								taxiwayPath.leftEdge = (value3 >> 2) & 0b11;
+								taxiwayPath.leftEdgeLighted = (value3 & 0b10000) !== 0;
+								taxiwayPath.rightEdge = (value3 >> 5) & 0b11;
+								taxiwayPath.rightEdgeLighted = (value3 & 0b10000000) !== 0;
+								taxiwayPath.fsXSurface = fileView.getUint8(address);
+								address += 1;
+								taxiwayPath.width = fileView.getFloat32(address, true);
+								address += 4;
+								taxiwayPath.weightLimit = fileView.getUint32(address, true);
+								address += 12; // Skip unknown field
+								taxiwayPath.surface = getGuidFromBytes(getViewBytes(fileView, address, 16));
+								address += 16;
+								taxiwayPath.coloration = [fileView.getUint8(address), fileView.getUint8(address + 1), fileView.getUint8(address + 2), fileView.getUint8(address + 3)];
+								address += 4;
+								let materialCt = fileView.getUint8(address);
+								address += 1;
+								let value4 = fileView.getUint8(address);
+								address += 1;
+								taxiwayPath.groundMerging = (value4 & 0b1) == 1;
+								taxiwayPath.excludeVegetationAround = (value4 & 0b10) == 0;
+								taxiwayPath.excludeVegetationInside = (value4 & 0b100) == 0;
+								taxiwayPath.end = fileView.getUint16(address, true);
+								address += 2;
+								taxiwayPath.materials = [];
+								for (let k = 0; k < materialCt; k++) {
+									const materialRecordId = fileView.getInt16(address, true);
+									address += 2;
+									if (materialRecordId == 0x00d5) // TaxiwayPathMaterial
+									{
+										address += 4; // The record size, but it's the same every time
+										taxiwayPath.materials.push({
+											type: fileView.getUint8(address),
+											opacity: fileView.getUint8(address + 1),
+											surface: getGuidFromBytes(getViewBytes(fileView, address + 2, 16)),
+											materialType: fileView.getUint32(address + 18, true),
+											tilingU: fileView.getFloat32(address + 22, true),
+											tilingV: fileView.getFloat32(address + 26, true),
+											width: fileView.getFloat32(address + 30, true),
+											falloff: fileView.getFloat32(address + 34, true)
+										});
+										address += 38;
+									}
+								}
+								airport.taxiwayPaths.push(taxiwayPath);
+							}
+							break;
+						case 0x001d: // TaxiName
+							const taxiNameCount = fileView.getUint16(address, true);
+							address += 2;
+							for (let j = 0; j < taxiNameCount; j++) {
+								airport.taxiNames.push(new TextDecoder().decode(getViewBytes(fileView, address, 8)));
+								address += 8;
+							}
+							break;
+						case 0x00d3: // Apron
+							const valueApron = fileView.getUint8(address);
+							address++;
+							let apron: Apron = {
+								drawSurface: (valueApron & 0b1) !== 0,
+								drawDetail: (valueApron & 0b10) !== 0,
+								localUV: (valueApron & 0b100) !== 0,
+								stretchUV: (valueApron & 0b1000) !== 0,
+								groundMerging: (valueApron & 0b10000) === 0,
+								excludeVegetationAround: (valueApron & 0b100000) === 0,
+								excludeVegetationInside: (valueApron & 0b1000000) === 0,
+								opacity: fileView.getUint8(address),
+								coloration: [fileView.getUint8(address + 1), fileView.getUint8(address + 2), fileView.getUint8(address + 3), fileView.getUint8(address + 4)],
+								surface: getGuidFromBytes(getViewBytes(fileView, address + 5, 16)),
+								tiling: fileView.getFloat32(address + 21, true),
+								heading: fileView.getFloat32(address + 25, true) * (360.0 / 65536.0),
+								falloff: fileView.getFloat32(address + 29, true),
+								priority: fileView.getInt32(address + 33, true),
+								vertices: [],
+								tris: []
+							};
+							address += 37;
+							const vertexCt = fileView.getUint16(address, true);
+							address += 2;
+							const triangleCt = fileView.getUint16(address, true);
+							address += 2;
+							for (let j = 0; j < vertexCt; j++) {
+								apron.vertices.push([
+									((fileView.getUint32(address, true) * (360.0 / 805306368.0)) - 180.0),
+									(90.0 - (fileView.getUint32(address + 4, true) * (180.0 / 536870912.0)))
+								]);
+								address += 8;
+							}
+							for (let j = 0; j < triangleCt; j++) {
+								apron.tris.push([
+									fileView.getUint16(address, true),
+									fileView.getUint16(address + 2, true),
+									fileView.getUint16(address + 4, true)
+								]);
+								address += 6;
+							}
+							airport.aprons.push(apron);
+							break;
+						case 0x00d9: // TaxiwaySign
+							address += 2; // Skip record size, it's always the same
+							const taxiwaySign: TaxiwaySign = {
+								longitude: (fileView.getUint32(address, true) * (360.0 / 805306368.0)) - 180.0,
+								latitude: 90.0 - (fileView.getUint32(address + 4, true) * (180.0 / 536870912.0)),
+								heading: fileView.getFloat32(address + 8, true) * (360.0 / 65536.0),
+								size: fileView.getUint8(address + 12),
+								justificationRight: (fileView.getUint8(address + 13) & 0b1) == 1,
+								label: new TextDecoder().decode(getViewBytes(fileView, address + 14, 0x3e)),
+							};
+							address += 14 + 0x3e;
+							airport.taxiwaySigns.push(taxiwaySign);
+							break;
+						case 0x00cf: // PaintedLine
+							const paintedLine: PaintedLine = {
+								type: fileView.getUint8(address),
+								trueAngle: fileView.getUint8(address + 1),
+								vertices: [],
+								surface: ''
+							};
+							address += 2;
+							const vertexCtPaintedLine = fileView.getUint32(address, true);
+							address += 4;
+							paintedLine.surface = getGuidFromBytes(getViewBytes(fileView, address, 16));
+							address += 16;
+							for (let j = 0; j < vertexCtPaintedLine; j++) {
+								paintedLine.vertices.push([
+									((fileView.getUint32(address, true) * (360.0 / 805306368.0)) - 180.0),
+									(90.0 - (fileView.getUint32(address + 4, true) * (180.0 / 536870912.0)))
+								]);
+								address += 8;
+							}
+							airport.paintedLines.push(paintedLine);
+							break;
+						case 0x00d8: // PaintedHatchedArea
+							const paintedHatchedArea: PaintedHatchedArea = {
+								type: fileView.getUint8(address),
+								vertices: [],
+								heading: 0,
+								spacing: 0,
+								vertexCount: 0
+							};
+							address += 1;
+							paintedHatchedArea.vertexCount = fileView.getUint16(address, true);
+							address += 2;
+							paintedHatchedArea.heading = fileView.getFloat32(address, true) * (360.0 / 65536.0);
+							address += 4;
+							paintedHatchedArea.spacing = fileView.getFloat32(address, true);
+							address += 4;
+							for (let j = 0; j < paintedHatchedArea.vertexCount; j++) {
+								paintedHatchedArea.vertices.push([
+									((fileView.getUint32(address, true) * (360.0 / 805306368.0)) - 180.0),
+									(90.0 - (fileView.getUint32(address + 4, true) * (180.0 / 536870912.0)))
+								]);
+								address += 8;
+							}
+							airport.paintedHatchedAreas.push(paintedHatchedArea);
+							break;
+						case 0x00de: // Jetway
+							airport.jetways.push({
+								parkingNumber: fileView.getUint16(address, true),
+								gateName: fileView.getUint16(address + 2, true),
+								suffix: fileView.getUint16(address + 4, true),
+							});
+							address += 8; // Skip unknown field
+							const sceneryObjectLength1 = fileView.getUint16(address, true);
+							address += 2;
+							const sceneryObjectLength2 = fileView.getUint16(address, true);
+							address += 2;
+							if (sceneryObjectLength1 > 0)
+							{
+								const sceneryObjectBytes = getViewBytes(fileView, address, sceneryObjectLength1);
+								if (new DataView(sceneryObjectBytes.buffer, sceneryObjectBytes.byteOffset, sceneryObjectBytes.byteLength).getUint16(0, true) == 0x000b)
+								{
+									const libObj: LibraryObject = buildLibraryObject(fileView, address);
+									if (libraryObjects.has(libObj.guid))
+									{
+										libraryObjects.get(libObj.guid)!.push(libObj);
+									}
+									else
+									{
+										libraryObjects.set(libObj.guid, [libObj]);
+									}
+								}
+								else if (new DataView(sceneryObjectBytes.buffer, sceneryObjectBytes.byteOffset, sceneryObjectBytes.byteLength).getUint16(0, true) == 0x0019)
+								{
+									const simObj = buildSimObject(fileView, address);
+									if (simObjects.has(simObj.containerPath))
+									{
+										simObjects.get(simObj.containerPath)!.push(simObj);
+									}
+									else
+									{
+										simObjects.set(simObj.containerPath, [simObj]);
+									}
+								}
+								else
+								{
+									console.warn(`Unexpected scenery object type in jetway record at offset 0x${(subrecord[0] + bytesRead + airportBytesRead).toString(16)}: 0x${new DataView(sceneryObjectBytes.buffer, sceneryObjectBytes.byteOffset, sceneryObjectBytes.byteLength).getUint16(0, true).toString(16).padStart(4, '0')}`);
+								}
+								address += sceneryObjectLength1;
+							}
+							if (sceneryObjectLength2 > 0)
+							{
+								const sceneryObjectBytes = getViewBytes(fileView, address, sceneryObjectLength2);
+								if (new DataView(sceneryObjectBytes.buffer, sceneryObjectBytes.byteOffset, sceneryObjectBytes.byteLength).getUint16(0, true) == 0x000b)
+								{
+									const libObj: LibraryObject = buildLibraryObject(fileView, address);
+									if (libraryObjects.has(libObj.guid))
+									{
+										libraryObjects.get(libObj.guid)!.push(libObj);
+									}
+									else
+									{
+										libraryObjects.set(libObj.guid, [libObj]);
+									}
+								}
+								else if (new DataView(sceneryObjectBytes.buffer, sceneryObjectBytes.byteOffset, sceneryObjectBytes.byteLength).getUint16(0, true) == 0x0019)
+								{
+									const simObj = buildSimObject(fileView, address);
+									if (simObjects.has(simObj.containerPath))
+									{
+										simObjects.get(simObj.containerPath)!.push(simObj);
+									}
+									else
+									{
+										simObjects.set(simObj.containerPath, [simObj]);
+									}
+								}
+								else
+								{
+									console.warn(`Unexpected scenery object type in jetway record at offset 0x${(subrecord[0] + bytesRead + airportBytesRead).toString(16)}: 0x${new DataView(sceneryObjectBytes.buffer, sceneryObjectBytes.byteOffset, sceneryObjectBytes.byteLength).getUint16(0, true).toString(16).padStart(4, '0')}`);
+								}
+								address += sceneryObjectLength2;
+							}
+							break;
+						case 0x0057: // LightSupport
+							address += 2; // Skip unknown field
+							airport.lightSupports.push({
+								latitude: 90.0 - (fileView.getUint32(address, true) * (180.0 / 536870912.0)),
+								longitude: (fileView.getUint32(address + 4, true) * (360.0 / 805306368.0)) - 180.0,
+								altitude: fileView.getInt32(address + 8, true) / 1000.0,
+								altitude2: fileView.getInt32(address + 12, true) / 1000.0,
+								heading: fileView.getFloat32(address + 16, true) * (360.0 / 65536.0),
+								width: fileView.getFloat32(address + 20, true),
+								length: fileView.getFloat32(address + 24, true),
+							});
+							address += 28; // Move past the entire LightSupport structure
+							break;
+						case 0x0024: // Approach
+							// This has taken far too long to implement properly, so we'll skip it for now.
+							address += recordSize;
+							break;
+						case 0x0031: // ApronEdgeLights
+							address += 2; // Skip unknown record
+							const vertexCtApronEdgeLights = fileView.getUint16(address, true);
+							address += 2;
+							const edgeCt = fileView.getUint16(address, true);
+							address += 2;
+							const apronEdgeLights: ApronEdgeLights = {
+								coloration: [fileView.getUint8(address), fileView.getUint8(address + 1), fileView.getUint8(address + 2), fileView.getUint8(address + 3)],
+								scale: fileView.getFloat32(address + 4, true),
+								falloff: fileView.getFloat32(address + 8, true),
+								vertices: [],
+								edges: []
+							};
+							address += 12;
+							for (let j = 0; j < vertexCtApronEdgeLights; j++)
+							{
+								apronEdgeLights.vertices.push([
+									(fileView.getUint32(address, true) * (360.0 / 805306368.0)) - 180.0,
+									90.0 - (fileView.getUint32(address + 4, true) * (180.0 / 536870912.0))
+								]);
+								address += 8;
+							}
+							for (let j = 0; j < edgeCt; j++)
+							{
+								apronEdgeLights.edges.push([
+									fileView.getFloat32(address, true),
+									fileView.getUint16(address + 4, true),
+									fileView.getUint16(address + 6, true)
+								]);
+								address += 8;
+							}
+							airport.apronEdgeLights.push(apronEdgeLights);
+							break;
+						case 0x0026: // Helipad
+							const helipad: Helipad = {
+								surface: fileView.getUint8(address),
+								type: 0,
+								transparent: false,
+								closed: false,
+								color: [0, 0, 0, 0],
+								longitude: 0,
+								latitude: 0,
+								altitude: 0,
+								length: 0,
+								width: 0,
+								heading: 0
+							};
+							address += 1;
+							const valueHelipad = fileView.getUint8(address);
+							address += 1;
+							helipad.type = valueHelipad & 0b1111;
+							helipad.transparent = (valueHelipad & 0b10000) !== 0;
+							helipad.closed = (valueHelipad & 0b100000) !== 0;
+							helipad.color = [
+								fileView.getUint8(address),
+								fileView.getUint8(address + 1),
+								fileView.getUint8(address + 2),
+								fileView.getUint8(address + 3)
+							];
+							address += 4;
+							helipad.longitude = (fileView.getUint32(address, true) * (360.0 / 805306368.0)) - 180.0;
+							address += 4;
+							helipad.latitude = 90.0 - (fileView.getUint32(address, true) * (180.0 / 536870912.0));
+							address += 4;
+							helipad.altitude = fileView.getInt32(address, true) / 1000.0;
+							address += 4;
+							helipad.length = fileView.getFloat32(address, true);
+							address += 4;
+							helipad.width = fileView.getFloat32(address, true);
+							address += 4;
+							helipad.heading = fileView.getFloat32(address, true) * (360.0 / 65536.0);
+							address += 4;
+							airport.helipads.push(helipad);
+							break;
+						case 0x00e8: // ProjectedMesh
+							const projectedMesh: ProjectedMesh = {
+								priority: fileView.getUint8(address),
+								groundMerging: false,
+								libraryObject: {} as LibraryObject
+							};
+							address += 2; // Skip unknown field
+							const valueProjectedMesh = fileView.getInt32(address, true);
+							address += 4;
+							projectedMesh.groundMerging = (valueProjectedMesh & 0b1) == 1;
+							const subRecordSize = fileView.getUint16(address, true);
+							address += 2;
+							if (fileView.getInt16(address, true) == 0x000b)
+							{
+								projectedMesh.libraryObject = buildLibraryObject(fileView, address);
+							}
+							address += subRecordSize;
+							airport.projectedMeshes.push(projectedMesh);
 							break;
 						default:
+							console.warn(`Unexpected airport record type at offset 0x${(subrecord[0] + bytesRead + airportBytesRead).toString(16)}: 0x${recordId.toString(16).padStart(4, '0')}, skipping ${recordSize} bytes`);
 							// Skip unknown record types
+							address += recordSize;
 							break;
-						
 					}
+					airportBytesRead += recordSize;
 				}
+				airports.push(airport);
+				bytesRead += size;
 			}
 		}
 	}
