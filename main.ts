@@ -1,5 +1,5 @@
 import { app, BrowserWindow } from 'electron/main';
-import { config, loadConfig, saveConfig } from './config.js';
+import { config, initializeRuntimeConfig, loadConfig, saveConfig } from './config.js';
 import { convertScenery } from './converter.js';
 
 const createWindow = () => {
@@ -13,6 +13,7 @@ const createWindow = () => {
 
 app.whenReady().then(async () => {
 	await loadConfig();
+	initializeRuntimeConfig();
 	createWindow()
 
 	app.on('activate', () => {
@@ -22,8 +23,9 @@ app.whenReady().then(async () => {
 	})
 })
 
-app.on('window-all-closed', () => {
+app.on('window-all-closed', async () => {
 	if (process.platform !== 'darwin') {
+		await saveConfig();
 		app.quit()
 	}
 })

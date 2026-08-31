@@ -6,7 +6,11 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { create } from 'xmlbuilder2';
 import { vec3, mat4 } from 'gl-matrix';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 import { Document, NodeIO } from '@gltf-transform/core';
+
+const execFileAsync = promisify(execFile);
 
 function getViewBytes(fileView: DataView, address: number, length: number): Uint8Array {
 	return new Uint8Array(fileView.buffer, fileView.byteOffset + address, length);
@@ -65,6 +69,70 @@ function getGuidFromBytes(guidBytes: Uint8Array): string {
 	return Array.from(guidBytes).map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
+function readFourCC(buffer: Uint8Array, offset: number): string {
+	if (offset < 0 || offset + 4 > buffer.length) {
+		return '';
+	}
+	return Buffer.from(buffer.subarray(offset, offset + 4)).toString('ascii');
+}
+
+function parseValidatorErrorCount(report: unknown): number {
+	const messages = (report as { issues?: { messages?: Array<{ severity?: number }>; numErrors?: number } })?.issues?.messages;
+	if (Array.isArray(messages)) {
+		return messages.filter((message) => message?.severity === 0).length;
+	}
+
+	const numErrors = (report as { issues?: { numErrors?: number } })?.issues?.numErrors;
+	return typeof numErrors === 'number' ? numErrors : 0;
+}
+
+async function runGltfValidator(validatorExecutable: string, modelPath: string, reportPath: string): Promise<number> {
+	let stdoutText = '';
+	let stderrText = '';
+	let executionErrorMessage = '';
+
+	try {
+		const result = await execFileAsync(validatorExecutable, ['--no-validate-resources', '-a', modelPath], {
+			maxBuffer: 10 * 1024 * 1024,
+		});
+		stdoutText = `${result.stdout ?? ''}`;
+		stderrText = `${result.stderr ?? ''}`;
+	} catch (error) {
+		const execError = error as { stdout?: string | Buffer; stderr?: string | Buffer; message?: string };
+		stdoutText = `${execError.stdout ?? ''}`;
+		stderrText = `${execError.stderr ?? execError.message ?? ''}`;
+		executionErrorMessage = execError.message ?? '';
+	}
+
+	if (stderrText.trim().length > 0) {
+		console.error(`Validator stderr: ${stderrText}`);
+	}
+
+	const reportText = stdoutText.trim().length > 0
+		? stdoutText
+		: fs.existsSync(reportPath)
+			? fs.readFileSync(reportPath, 'utf-8')
+			: '{}';
+
+	if (stdoutText.trim().length === 0 && !fs.existsSync(reportPath) && executionErrorMessage.length > 0) {
+		throw new Error(`Failed to run glTF validator at ${validatorExecutable}: ${executionErrorMessage}`);
+	}
+
+	let report: unknown;
+	try {
+		report = JSON.parse(reportText) as unknown;
+	} catch {
+		if (fs.existsSync(reportPath)) {
+			report = JSON.parse(fs.readFileSync(reportPath, 'utf-8')) as unknown;
+		} else {
+			throw new Error(`glTF validator did not produce valid JSON output for ${modelPath}`);
+		}
+	}
+
+	fs.writeFileSync(reportPath, JSON.stringify(report, null, 2), 'utf-8');
+	return parseValidatorErrorCount(report);
+}
+
 function getFilesRecursive(dir: string, extension: string, caseSensitive: boolean): string[] {
 	const result: string[] = [];
 	const files = fs.readdirSync(dir);
@@ -92,37 +160,77 @@ function createPlacementTransform(center: vec3, position: vec3, orientation: vec
 	return transform;
 }
 
+function resolveAbsoluteTexturePath(inputPath: string, file: string, textureUri: string): string {
+	textureUri = textureUri.replace(/\//g, path.sep);
+	const fileName: string = path.basename(textureUri);
+	let mostLikelyMatch: string = "";
+	const extension = path.extname(fileName);
+	const imageMatches: string[] = extension.length > 0
+		? getFilesRecursive(inputPath, extension, false)
+			.filter((match) => path.basename(match).toLowerCase() === fileName.toLowerCase())
+		: [];
+	let mostLikelyMatchScore = -1;
+	for (const match of imageMatches) {
+		let i: number = 0;
+		while (i < match.length && i < file.length && match[i] === file[i]) {
+			i++;
+		}
+		if (i > mostLikelyMatchScore) {
+			mostLikelyMatchScore = i;
+			mostLikelyMatch = match;
+		}
+	}
+	return mostLikelyMatch;
+}
+
 async function assembleModel(inputPath: string, outputPath: string, tileIndex: number, modelReferences: ModelReference[], center: vec3, libraryObjects: Map<string, LibraryObject[]>) {
 	const tempTilePath = path.join(config.tempDir, `tile_${tileIndex}_${Date.now()}`);
-	for (const modelRef of modelReferences) {
+	const tempBinPath = path.join(tempTilePath, 'temp.bin');
+	const tempGltfPath = path.join(tempTilePath, 'temp.gltf');
+	const tempReportPath = path.join(tempTilePath, 'temp.gltf.report.json');
+	const validatorExecutable = config.gltfValidationPath;
+	fs.mkdirSync(tempTilePath, { recursive: true });
+	try {
+		for (const modelRef of modelReferences) {
 		// TODO: increase the model count here, without making this object-oriented
 		const libraryObjectsForModel = libraryObjects.get(modelRef.guid) || [];
-		const fileBuffer = fs.readFileSync(modelRef.file);
+		const modelFileBuffer = fs.readFileSync(modelRef.file);
+		if (modelRef.offset < 0 || modelRef.offset + modelRef.size > modelFileBuffer.byteLength) {
+			console.warn(`Model reference out of bounds for ${modelRef.file}: offset=0x${modelRef.offset.toString(16)} size=${modelRef.size}`);
+			continue;
+		}
+
+		const fileBuffer = modelFileBuffer.subarray(modelRef.offset, modelRef.offset + modelRef.size);
 		const fileView: DataView = new DataView(fileBuffer.buffer, fileBuffer.byteOffset, fileBuffer.byteLength);
-		let address = 0;
 		console.debug(`Model reference: ${modelRef.file} at offset 0x${modelRef.offset.toString(16)} size ${modelRef.size} guid ${modelRef.guid}`);
 		let name = '';
-		const chunkID: string = fileView.getUint32(address, true).toString(16);
-		address += 4;
+		const chunkID: string = readFourCC(fileBuffer, 0);
 		if (chunkID !== 'RIFF') {
 			continue;
 		}
+
 		// Enter this model and get LOD info, GLB files, and mesh data
-		for (let i = 8; i < fileBuffer.byteLength; i += 4) {
-			const chunk = fileView.getUint32(i, true).toString(16);
+		for (let i = 8; i + 8 <= fileBuffer.byteLength; i += 4) {
+			const chunk = readFourCC(fileBuffer, i);
 			let glbIndex = 0; // for unique filenames per GLB in this chunk
 			if (chunk === 'GXML') {
 				const size: number = fileView.getUint32(i + 4, true);
-				const gxmlContent: Uint8Array = new Uint8Array(fileBuffer.buffer, fileBuffer.byteOffset + i + 8, size);
+				if (i + 8 + size > fileBuffer.byteLength) {
+					console.warn(`Invalid GXML chunk size ${size} for model ${modelRef.guid}`);
+					break;
+				}
+
+				const gxmlContent = Buffer.from(fileBuffer.subarray(i + 8, i + 8 + size)).toString('utf-8');
 				try {
-					const xmlDoc = create(new TextDecoder().decode(gxmlContent));
-					name = xmlDoc.root().node.nodeName === "ModelInfo" ? xmlDoc.root().node.nodeName : "Unnamed_Model";
+					create(gxmlContent);
+					const match = /<ModelInfo[^>]*name="([^"]+)"/i.exec(gxmlContent);
+					name = match?.[1]?.replace(/\.gltf$/i, '').replace(/ /g, '_') ?? 'Unnamed_Model';
 				} catch (error) {
 					console.error(`Failed to process GXML chunk at offset 0x${i.toString(16)} in file: ${modelRef.file}`, error);
 				}
 				i += size;
 			} else if (chunk === 'GLBD') {
-				if (glbIndex > 0) {
+				if (glbIndex >= 1) {
 					console.info(`More than one LOD present for ${name}; skipping remaining GLB in chunk.`);
 					glbIndex = 0;
 					// The highest LOD is the first GLB; break after processing it
@@ -137,55 +245,160 @@ async function assembleModel(inputPath: string, outputPath: string, tileIndex: n
 						break;
 					}
 
-					const sig: string = fileView.getUint32(j, true).toString(16);
+					const sig: string = readFourCC(fileBuffer, j);
 					if (sig === 'GLB\0') {
 						const glbSize: number = fileView.getUint32(j + 4, true);
-						const glbBytes: Uint8Array = new Uint8Array(fileBuffer.buffer, fileBuffer.byteOffset + j + 8, glbSize);
-						
+						if (j + 8 + glbSize > fileBuffer.byteLength) {
+							console.warn(`Invalid GLB payload size ${glbSize} for model ${modelRef.guid}`);
+							break;
+						}
+
+						const glbBytes = fileBuffer.subarray(j + 8, j + 8 + glbSize);
+						const glbView = new DataView(glbBytes.buffer, glbBytes.byteOffset, glbBytes.byteLength);
+
+						if (glbBytes.byteLength < 0x14) {
+							j += 8 + glbSize;
+							continue;
+						}
+
 						// Fill the end of the JSON chunk with spaces, and replace non-printable characters with spaces.
-						const jsonLength: number = fileView.getUint32(0x0C, true);
-						const jsonBytes: Uint8Array = new Uint8Array(fileBuffer.buffer, fileBuffer.byteOffset + 0x14, jsonLength);
+						const jsonLength: number = glbView.getUint32(0x0C, true);
+						const jsonStart = 0x14;
+						const jsonEnd = jsonStart + jsonLength;
+						if (jsonEnd > glbBytes.byteLength) {
+							console.warn(`GLB JSON chunk exceeds payload bounds for model ${modelRef.guid}`);
+							j += 8 + glbSize;
+							continue;
+						}
+
+						const jsonBytes = glbBytes.subarray(jsonStart, jsonEnd);
 						for (let k = 0; k < jsonBytes.length; k++) {
 							if (jsonBytes[k] < 32 || jsonBytes[k] > 126) {
 								jsonBytes[k] = 32; // replace non-printable characters with space
 							}
 						}
 
-						const json: Record<string, any> = JSON.parse(new TextDecoder().decode(jsonBytes));
-						if (json.bufferViews.length == 0 || json.accessors.length == 0 || json.meshes.length == 0 ) {
+						const json: Record<string, unknown> = JSON.parse(Buffer.from(jsonBytes).toString('utf-8').trim());
+						const meshes = Array.isArray(json.meshes) ? json.meshes : [];
+						const accessors = Array.isArray(json.accessors) ? json.accessors : [];
+						const bufferViews = Array.isArray(json.bufferViews) ? json.bufferViews : [];
+						if (bufferViews.length === 0 || accessors.length === 0 || meshes.length === 0) {
 							console.info(`GLB in model ${name} (${modelRef.guid}) has no mesh data; skipping.`);
 							// Advance j past this GLB record (type[4] + size[4] + payload[glbSize])
 							j += 8 + glbSize;
 							continue;
 						}
-						const glbBinBytes: Uint8Array = new Uint8Array(fileBuffer.buffer, fileBuffer.byteOffset + j + 8, glbSize);
-						fs.writeFile(path.join(tempTilePath, 'temp.gltf'), JSON.stringify(json), (err) => {
-							if (err) {
-								console.error(`Failed to write glTF for model ${name} (${modelRef.guid}):`, err);
-							}
-						});
-						fs.writeFile(path.join(tempTilePath, 'temp.bin'), glbBinBytes, (err) => {
-							if (err) {
-								console.error(`Failed to write binary for model ${name} (${modelRef.guid}):`, err);
-							}
-						});
 
-						const document: Document = await new NodeIO().read(path.join(tempTilePath, 'temp.gltf'));
+						const binChunkHeader = jsonEnd;
+						if (binChunkHeader + 8 > glbBytes.byteLength) {
+							console.warn(`GLB missing BIN chunk for model ${modelRef.guid}`);
+							j += 8 + glbSize;
+							continue;
+						}
+
+						const binChunkLength = glbView.getUint32(binChunkHeader, true);
+						const binStart = binChunkHeader + 8;
+						const binEnd = binStart + binChunkLength;
+						if (binEnd > glbBytes.byteLength) {
+							console.warn(`GLB BIN chunk exceeds payload bounds for model ${modelRef.guid}`);
+							j += 8 + glbSize;
+							continue;
+						}
+
+						const glbBinBytes = glbBytes.subarray(binStart, binEnd);
+						if (Array.isArray(json.buffers) && json.buffers.length > 0 && typeof json.buffers[0] === 'object' && json.buffers[0] !== null) {
+							(json.buffers[0] as Record<string, unknown>).uri = 'temp.bin';
+						}
+						delete (json as { extensionsRequired?: unknown }).extensionsRequired;
+
+						const images = Array.isArray(json.images) ? json.images : [];
+						for (const image of images) {
+							if (!image || typeof image !== 'object') {
+								continue;
+							}
+
+							const imageRecord = image as Record<string, unknown>;
+							const uri = typeof imageRecord.uri === 'string' ? imageRecord.uri : '';
+							if (uri.length === 0) {
+								continue;
+							}
+
+							const outputUri = `${path.basename(uri, path.extname(uri))}.DDS`;
+							imageRecord.uri = outputUri;
+							const extras = (imageRecord.extras && typeof imageRecord.extras === 'object')
+								? imageRecord.extras as Record<string, unknown>
+								: {};
+							const absoluteTexturePath = resolveAbsoluteTexturePath(inputPath, modelRef.file, uri);
+							extras.absolutePath = absoluteTexturePath;
+							imageRecord.extras = extras;
+
+							const outputTexturePath = path.join(tempTilePath, outputUri);
+							if (!fs.existsSync(outputTexturePath)) {
+								if (absoluteTexturePath.length > 0 && fs.existsSync(absoluteTexturePath)) {
+									fs.copyFileSync(absoluteTexturePath, outputTexturePath);
+								} else {
+									console.warn(`Texture file not found: ${uri}`);
+									const fallbackTexturePath = path.join(process.cwd(), 'Assets', 'dummy_tex.dds');
+									if (fs.existsSync(fallbackTexturePath)) {
+										fs.copyFileSync(fallbackTexturePath, outputTexturePath);
+									}
+								}
+							}
+						}
+
+						fs.writeFileSync(tempGltfPath, JSON.stringify(json), 'utf-8');
+						fs.writeFileSync(tempBinPath, glbBinBytes);
+
+						const document: Document = await new NodeIO().read(tempGltfPath);
+						// Repair Asobo-specific geometry issues, then re-export for validation
 						applyAsoboGeometryRepair(document);
-						
+						await new NodeIO().write(tempGltfPath, document);
+
+						let errorCount = await runGltfValidator(validatorExecutable, tempGltfPath, tempReportPath);
+						let tries = 0;
+						while (tries < config.maxRepairRetries && errorCount > 0) {
+							tries++;
+							console.warn(`Attempt ${tries} to repair geometry for model ${name} (${modelRef.guid})`);
+							repairDocument(document, tempGltfPath, tempReportPath);
+							await new NodeIO().write(tempGltfPath, document);
+							errorCount = await runGltfValidator(validatorExecutable, tempGltfPath, tempReportPath);
+						}
+
+						if (errorCount > 0) {
+							console.error(`Failed to repair geometry for model ${name} (${modelRef.guid}) after ${tries} attempts`);
+							const issues = JSON.parse(fs.readFileSync(tempReportPath, 'utf-8')).issues?.messages ?? [];
+							for (const error of issues) {
+								if (error.severity === 0) {
+									console.error(`${error.code} at ${error.pointer}: ${error.message}`);
+								}
+							}
+							j += 8 + glbSize;
+							continue;
+						}
+
 						for (const libObj of libraryObjectsForModel) {
 							if (getTileIndexFromCoord(libObj.position[1], libObj.position[0]) === tileIndex) {
 								const transform: mat4 = createPlacementTransform(center, libObj.position, libObj.orientation, [libObj.scale]);
 							}
 						}
+
+						glbIndex++;
+						j += 8 + glbSize;
+					} else {
+						j += 4;
 					}
 				}
+
+				i += size;
 			}
 		}
+		}
+	} finally {
+		fs.rmSync(tempTilePath, { recursive: true, force: true });
 	}
 }
 
-export function convertScenery(inputPath: string, outputPath: string, isGltf: boolean, isAc3d: boolean): void {
+export async function convertScenery(inputPath: string, outputPath: string, isGltf: boolean, isAc3d: boolean): Promise<void> {
 	if (!fs.existsSync(inputPath)) {
 		throw new Error(`Input path does not exist: ${inputPath}`);
 	}
@@ -193,7 +406,7 @@ export function convertScenery(inputPath: string, outputPath: string, isGltf: bo
 	const libraryObjects: Map<string, LibraryObject[]> = new Map();
 	const simObjects: Map<string, SimObject[]> = new Map();
 	const airports: Airport[] = [];
-	const guidsWithModels: string[] = [];
+	const guidsWithModels: Set<string> = new Set();
 	const modelReferencesByTile: Map<number, ModelReference[]> = new Map();
 	const allBglFiles: string[] = getFilesRecursive(inputPath, '.bgl', false);
 	
@@ -1125,7 +1338,7 @@ export function convertScenery(inputPath: string, outputPath: string, isGltf: bo
 				}
 
 				// Mark this GUID as having a model
-				guidsWithModels.push(guid);
+				guidsWithModels.add(guid);
 				const tileIndices: Set<number> = new Set(libraryObjects.get(guid)!.map(obj => getTileIndexFromCoord(obj.position[1], obj.position[0])));
 				for (const tileIndex of tileIndices) {
 					if (!modelReferencesByTile.has(tileIndex)) {
@@ -1166,7 +1379,7 @@ export function convertScenery(inputPath: string, outputPath: string, isGltf: bo
 				}
 			}
 		}
-		const modelRefs: ModelReference[] = modelReferences.sort((a, b) => a.size - b.size);
+		const modelRefs: ModelReference[] = modelReferences.sort((a, b) => b.size - a.size);
 		console.info(`Tile ${tileIndex} has ${modelRefs.length} model references and ${simObjectsForTile.length} sim objects`);
 		const libraryObjectsForTile: LibraryObject[] = [];
 		for (const guid of guidsWithModels) {
@@ -1182,10 +1395,16 @@ export function convertScenery(inputPath: string, outputPath: string, isGltf: bo
 				}
 			}
 		}
-		center[0] /= simObjectsForTile.length + libraryObjectsForTile.length;
-		center[1] /= simObjectsForTile.length + libraryObjectsForTile.length;
-		center[2] /= simObjectsForTile.length + libraryObjectsForTile.length;
+		const placementCount = simObjectsForTile.length + libraryObjectsForTile.length;
+		if (placementCount > 0) {
+			center[0] /= placementCount;
+			center[1] /= placementCount;
+			center[2] /= placementCount;
+		} else {
+			const coord = getCoordFromTileIndex(tileIndex);
+			center = [coord.lon, coord.lat, 0];
+		}
 
-		assembleModel(inputPath, outputPath, tileIndex, modelRefs, center, libraryObjects);
+		await assembleModel(inputPath, outputPath, tileIndex, modelRefs, center, libraryObjects);
 	}
 }
