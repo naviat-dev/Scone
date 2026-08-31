@@ -1,8 +1,10 @@
 import { getTileIndexFromCoord, getCoordFromTileIndex, getAltitude } from './terrain.js';
 import { LibraryObject, SimObject, Flags, Airport, Tower, Runway, RunwayStart, TaxiwayPoint, TaxiwayParking, TaxiwayPath, TaxiwayPathType, Apron, TaxiwaySign, PaintedLine, PaintedHatchedArea, ApronEdgeLights, Helipad, ProjectedMesh, ModelReference } from './structures.js'
+import { config } from './config.js';
 import * as fs from 'fs';
 import * as path from 'path';
 import { create } from 'xmlbuilder2';
+import { vec3, mat4 } from 'gl-matrix';
 
 function getViewBytes(fileView: DataView, address: number, length: number): Uint8Array {
 	return new Uint8Array(fileView.buffer, fileView.byteOffset + address, length);
@@ -21,7 +23,7 @@ function buildLibraryObject(fileView: DataView, address: number): LibraryObject 
 	const imageComplexity = fileView.getUint16(address + 24, true);
 	const guid = getGuidFromBytes(getViewBytes(fileView, address + 44, 16));
 	const scale = fileView.getFloat32(address + 60, true);
-	return { longitude, latitude, altitude, flags, pitch, bank, heading, imageComplexity, guid, scale };
+	return { position: [longitude, latitude, altitude], flags, orientation: [pitch, bank, heading], imageComplexity, guid, scale };
 }
 
 function buildSimObject(fileView: DataView, address: number): SimObject {
@@ -40,7 +42,7 @@ function buildSimObject(fileView: DataView, address: number): SimObject {
 	const containerPathLength = fileView.getUint16(address + 50, true);
 	const containerTitle = new TextDecoder().decode(getViewBytes(fileView, address + 52, containerTitleLength));
 	const containerPath = new TextDecoder().decode(getViewBytes(fileView, address + 52 + containerTitleLength, containerPathLength));
-	return { longitude, latitude, altitude, flags, pitch, bank, heading, imageComplexity, containerTitle, containerPath, scale };
+	return { position: [longitude, latitude, altitude], flags, orientation: [pitch, bank, heading], imageComplexity, containerTitle, containerPath, scale };
 }
 
 function convertIcaoBytesToString(icaoBytes: number): string {
@@ -73,6 +75,100 @@ function getFilesRecursive(dir: string, extension: string, caseSensitive: boolea
 		}
 	}
 	return result;
+}
+
+function createPlacementTransform(center: vec3, position: vec3, orientation: vec3, scale: vec3): mat4 {
+	const deg2rad = Math.PI / 180.0;
+	const transform = mat4.create();
+	const lonOffsetMeters = -(position[1] - center[1]) * 111320.0 * Math.cos(center[0] * deg2rad);
+	const latOffsetMeters = (position[0] - center[0]) * 110540.0;
+	mat4.translate(transform, transform, vec3.fromValues(latOffsetMeters, lonOffsetMeters, position[2] - center[2]));
+	mat4.rotateZ(transform, transform, orientation[2] * deg2rad);
+	mat4.rotateX(transform, transform, orientation[0] * deg2rad);
+	mat4.rotateY(transform, transform, orientation[1] * deg2rad);
+	mat4.scale(transform, transform, scale);
+	return transform;
+}
+
+function assembleModel(inputPath: string, outputPath: string, tileIndex: number, modelReferences: ModelReference[], center: vec3, libraryObjects: Map<string, LibraryObject[]>) {
+	const tempTilePath = path.join(config.tempDir, `tile_${tileIndex}_${Date.now()}`);
+	for (const modelRef of modelReferences) {
+		// TODO: increase the model count here, without making this object-oriented
+		const libraryObjectsForModel = libraryObjects.get(modelRef.guid) || [];
+		const fileBuffer = fs.readFileSync(modelRef.file);
+		const fileView: DataView = new DataView(fileBuffer.buffer, fileBuffer.byteOffset, fileBuffer.byteLength);
+		let address = 0;
+		console.debug(`Model reference: ${modelRef.file} at offset 0x${modelRef.offset.toString(16)} size ${modelRef.size} guid ${modelRef.guid}`);
+		let name = '';
+		const chunkID: string = fileView.getUint32(address, true).toString(16);
+		address += 4;
+		if (chunkID !== 'RIFF') {
+			continue;
+		}
+		// Enter this model and get LOD info, GLB files, and mesh data
+		for (let i = 8; i < fileBuffer.byteLength; i += 4) {
+			const chunk = fileView.getUint32(i, true).toString(16);
+			let glbIndex = 0; // for unique filenames per GLB in this chunk
+			if (chunk === 'GXML') {
+				const size: number = fileView.getUint32(i + 4, true);
+				const gxmlContent: Uint8Array = new Uint8Array(fileBuffer.buffer, fileBuffer.byteOffset + i + 8, size);
+				try {
+					const xmlDoc = create(new TextDecoder().decode(gxmlContent));
+					name = xmlDoc.root().node.nodeName === "ModelInfo" ? xmlDoc.root().node.nodeName : "Unnamed_Model";
+				} catch (error) {
+					console.error(`Failed to process GXML chunk at offset 0x${i.toString(16)} in file: ${modelRef.file}`, error);
+				}
+				i += size;
+			} else if (chunk === 'GLBD') {
+				if (glbIndex > 0) {
+					console.info(`More than one LOD present for ${name}; skipping remaining GLB in chunk.`);
+					glbIndex = 0;
+					// The highest LOD is the first GLB; break after processing it
+					break;
+				}
+				console.info(`Processing GLBD chunk for model ${name} (${modelRef.guid}) in ${modelRef.file}`);
+				const size: number = fileView.getUint32(i + 4, true);
+				// Scan GLBD payload and skip past each GLB block once processed
+				for (let j = i + 8; j < i + 8 + size; ) {
+					// Ensure there are at least 8 bytes for type + size
+					if (j + 8 > fileBuffer.byteLength) {
+						break;
+					}
+
+					const sig: string = fileView.getUint32(j, true).toString(16);
+					if (sig === 'GLB\0') {
+						const glbSize: number = fileView.getUint32(j + 4, true);
+						const glbBytes: Uint8Array = new Uint8Array(fileBuffer.buffer, fileBuffer.byteOffset + j + 8, glbSize);
+						
+						// Fill the end of the JSON chunk with spaces, and replace non-printable characters with spaces.
+						const jsonLength: number = fileView.getUint32(0x0C, true);
+						const jsonBytes: Uint8Array = new Uint8Array(fileBuffer.buffer, fileBuffer.byteOffset + 0x14, jsonLength);
+						for (let k = 0; k < jsonBytes.length; k++) {
+							if (jsonBytes[k] < 32 || jsonBytes[k] > 126) {
+								jsonBytes[k] = 32; // replace non-printable characters with space
+							}
+						}
+
+						const json: Record<string, any> = JSON.parse(new TextDecoder().decode(jsonBytes));
+						if (json.bufferViews.length == 0 || json.accessors.length == 0 || json.meshes.length == 0 ) {
+							console.info(`GLB in model ${name} (${modelRef.guid}) has no mesh data; skipping.`);
+							// Advance j past this GLB record (type[4] + size[4] + payload[glbSize])
+							j += 8 + glbSize;
+							continue;
+						}
+
+						const glbBinBytes: Uint8Array = new Uint8Array(fileBuffer.buffer, fileBuffer.byteOffset + j + 8, glbSize);
+
+						for (const libObj of libraryObjectsForModel) {
+							if (getTileIndexFromCoord(libObj.position[1], libObj.position[0]) === tileIndex) {
+								const transform: mat4 = createPlacementTransform(center, libObj.position, libObj.orientation, [libObj.scale]);
+							}
+						}
+					}
+				}
+			}
+		}
+	}
 }
 
 export function convertScenery(inputPath: string, outputPath: string, isGltf: boolean, isAc3d: boolean): void {
@@ -193,9 +289,9 @@ export function convertScenery(inputPath: string, outputPath: string, isGltf: bo
 					altitude: -1,
 					tower: {} as Tower,
 					magvar: -1,
-					icao: "",
-					regIdent: "",
-					name: "",
+					icao: '',
+					regIdent: '',
+					name: '',
 					runways: [],
 					runwayStarts: [],
 					taxiwayPoints: [],
@@ -1016,7 +1112,7 @@ export function convertScenery(inputPath: string, outputPath: string, isGltf: bo
 
 				// Mark this GUID as having a model
 				guidsWithModels.push(guid);
-				const tileIndices: Set<number> = new Set(libraryObjects.get(guid)!.map(obj => getTileIndexFromCoord(obj.latitude, obj.longitude)));
+				const tileIndices: Set<number> = new Set(libraryObjects.get(guid)!.map(obj => getTileIndexFromCoord(obj.position[1], obj.position[0])));
 				for (const tileIndex of tileIndices) {
 					if (!modelReferencesByTile.has(tileIndex)) {
 						modelReferencesByTile.set(tileIndex, []);
@@ -1045,14 +1141,37 @@ export function convertScenery(inputPath: string, outputPath: string, isGltf: bo
 	for (const [tileIndex, modelReferences] of modelReferencesByTile.entries()) {
 		const animations = [];
 		const simObjectsForTile: SimObject[] = [];
+		let center: vec3 = [0, 0, 0];
 		for (const simObject of simObjects) {
 			for (const simObjectPlacement of simObject[1]) {
-				if (getTileIndexFromCoord(simObjectPlacement.latitude, simObjectPlacement.longitude) === tileIndex) {
+				if (getTileIndexFromCoord(simObjectPlacement.position[1], simObjectPlacement.position[0]) === tileIndex) {
 					simObjectsForTile.push(simObjectPlacement);
+					center[0] += simObjectPlacement.position[0];
+					center[1] += simObjectPlacement.position[1];
+					center[2] += simObjectPlacement.position[2];
 				}
 			}
 		}
 		const modelRefs: ModelReference[] = modelReferences.sort((a, b) => a.size - b.size);
 		console.info(`Tile ${tileIndex} has ${modelRefs.length} model references and ${simObjectsForTile.length} sim objects`);
+		const libraryObjectsForTile: LibraryObject[] = [];
+		for (const guid of guidsWithModels) {
+			const objects = libraryObjects.get(guid);
+			if (objects) {
+				for (const obj of objects) {
+					if (getTileIndexFromCoord(obj.position[1], obj.position[0]) === tileIndex) {
+						libraryObjectsForTile.push(obj);
+						center[0] += obj.position[0];
+						center[1] += obj.position[1];
+						center[2] += obj.position[2];
+					}
+				}
+			}
+		}
+		center[0] /= simObjectsForTile.length + libraryObjectsForTile.length;
+		center[1] /= simObjectsForTile.length + libraryObjectsForTile.length;
+		center[2] /= simObjectsForTile.length + libraryObjectsForTile.length;
+
+		assembleModel(inputPath, outputPath, tileIndex, modelRefs, center, libraryObjects);
 	}
 }

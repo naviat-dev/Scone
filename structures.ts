@@ -11,26 +11,18 @@ export enum Flags {
 }
 
 export interface LibraryObject {
-	longitude: number;
-	latitude: number;
-	altitude: number;
+	position: vec3; // longitude, latitude, altitude
 	flags: Flags[];
-	pitch: number;
-	bank: number;
-	heading: number;
+	orientation: vec3; // pitch, bank, heading
 	imageComplexity: number;
 	guid: string;
 	scale: number;
 }
 
 export interface SimObject {
-	longitude: number;
-	latitude: number;
-	altitude: number;
+	position: vec3; // longitude, latitude, altitude
 	flags: Flags[];
-	pitch: number;
-	bank: number;
-	heading: number;
+	orientation: vec3; // pitch, bank, heading
 	imageComplexity: number;
 	containerTitle: string;
 	containerPath: string;
