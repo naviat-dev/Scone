@@ -1,10 +1,12 @@
 import { getTileIndexFromCoord, getCoordFromTileIndex, getAltitude } from './terrain.js';
 import { LibraryObject, SimObject, Flags, Airport, Tower, Runway, RunwayStart, TaxiwayPoint, TaxiwayParking, TaxiwayPath, TaxiwayPathType, Apron, TaxiwaySign, PaintedLine, PaintedHatchedArea, ApronEdgeLights, Helipad, ProjectedMesh, ModelReference } from './structures.js'
 import { config } from './config.js';
+import { applyAsoboGeometryRepair, repairDocument, optimizeDocument } from './repair.js';
 import * as fs from 'fs';
 import * as path from 'path';
 import { create } from 'xmlbuilder2';
 import { vec3, mat4 } from 'gl-matrix';
+import { Document, NodeIO } from '@gltf-transform/core';
 
 function getViewBytes(fileView: DataView, address: number, length: number): Uint8Array {
 	return new Uint8Array(fileView.buffer, fileView.byteOffset + address, length);
@@ -90,7 +92,7 @@ function createPlacementTransform(center: vec3, position: vec3, orientation: vec
 	return transform;
 }
 
-function assembleModel(inputPath: string, outputPath: string, tileIndex: number, modelReferences: ModelReference[], center: vec3, libraryObjects: Map<string, LibraryObject[]>) {
+async function assembleModel(inputPath: string, outputPath: string, tileIndex: number, modelReferences: ModelReference[], center: vec3, libraryObjects: Map<string, LibraryObject[]>) {
 	const tempTilePath = path.join(config.tempDir, `tile_${tileIndex}_${Date.now()}`);
 	for (const modelRef of modelReferences) {
 		// TODO: increase the model count here, without making this object-oriented
@@ -156,9 +158,21 @@ function assembleModel(inputPath: string, outputPath: string, tileIndex: number,
 							j += 8 + glbSize;
 							continue;
 						}
-
 						const glbBinBytes: Uint8Array = new Uint8Array(fileBuffer.buffer, fileBuffer.byteOffset + j + 8, glbSize);
+						fs.writeFile(path.join(tempTilePath, 'temp.gltf'), JSON.stringify(json), (err) => {
+							if (err) {
+								console.error(`Failed to write glTF for model ${name} (${modelRef.guid}):`, err);
+							}
+						});
+						fs.writeFile(path.join(tempTilePath, 'temp.bin'), glbBinBytes, (err) => {
+							if (err) {
+								console.error(`Failed to write binary for model ${name} (${modelRef.guid}):`, err);
+							}
+						});
 
+						const document: Document = await new NodeIO().read(path.join(tempTilePath, 'temp.gltf'));
+						applyAsoboGeometryRepair(document);
+						
 						for (const libObj of libraryObjectsForModel) {
 							if (getTileIndexFromCoord(libObj.position[1], libObj.position[0]) === tileIndex) {
 								const transform: mat4 = createPlacementTransform(center, libObj.position, libObj.orientation, [libObj.scale]);

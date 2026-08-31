@@ -1,9 +1,7 @@
-#!/usr/bin/env node
-
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { Document, NodeIO, Scene, Property } from '@gltf-transform/core';
-import { dedup, instance, flatten, join, weld, resample, prune, sparse, mergeDocuments, unpartition, transformMesh } from '@gltf-transform/functions';
+import { Document } from '@gltf-transform/core';
+import { dedup, instance, flatten, join, weld, resample, prune, sparse, unpartition} from '@gltf-transform/functions';
 
 interface RepairIssue {
     code: string;
@@ -511,7 +509,6 @@ export function repairDocument(document: Document, modelPath: string, issuesJson
     }
 
     const issues = JSON.parse(fs.readFileSync(issuesJsonPath, 'utf8'))["issues"]["messages"] as RepairIssue[];
-    const io = new NodeIO();
     const patchedTextureCount = normalizeMsftTextureSources(modelPath);
     if (patchedTextureCount > 0) {
         console.log(`Patched ${patchedTextureCount} texture source references from MSFT_texture_dds.`);

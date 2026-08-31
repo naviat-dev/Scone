@@ -2,10 +2,11 @@ import os from 'os';
 import * as fs from 'fs';
 import * as path from 'path';
 
-export const config = {
+export let config = {
 	tempDir: path.join(os.tmpdir(), 'scone'),
 	storeDir: path.join(os.homedir(), '.scone'),
-	outputDir: path.join(os.homedir(), 'SconeOutput')
+	outputDir: path.join(os.homedir(), 'SconeOutput'),
+	gltfValidationPath: path.join('Tools', 'gltf-validator')
 }
 
 export async function saveConfig() {
