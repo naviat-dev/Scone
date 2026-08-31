@@ -1,7 +1,8 @@
 import { getTileIndexFromCoord, getCoordFromTileIndex, getAltitude } from './terrain.js';
-import { LibraryObject, SimObject, Flags, Airport, Tower, Runway, RunwayStart, TaxiwayPoint, TaxiwayParking, TaxiwayPath, TaxiwayPathType, Apron, TaxiwaySign, PaintedLine, PaintedHatchedArea, ApronEdgeLights, Helipad, ProjectedMesh } from './structures.js'
+import { LibraryObject, SimObject, Flags, Airport, Tower, Runway, RunwayStart, TaxiwayPoint, TaxiwayParking, TaxiwayPath, TaxiwayPathType, Apron, TaxiwaySign, PaintedLine, PaintedHatchedArea, ApronEdgeLights, Helipad, ProjectedMesh, ModelReference } from './structures.js'
 import * as fs from 'fs';
 import * as path from 'path';
+import { create } from 'xmlbuilder2';
 
 function getViewBytes(fileView: DataView, address: number, length: number): Uint8Array {
 	return new Uint8Array(fileView.buffer, fileView.byteOffset + address, length);
@@ -82,23 +83,31 @@ export function convertScenery(inputPath: string, outputPath: string, isGltf: bo
 	const libraryObjects: Map<string, LibraryObject[]> = new Map();
 	const simObjects: Map<string, SimObject[]> = new Map();
 	const airports: Airport[] = [];
-
+	const guidsWithModels: string[] = [];
+	const modelReferencesByTile: Map<number, ModelReference[]> = new Map();
 	const allBglFiles: string[] = getFilesRecursive(inputPath, '.bgl', false);
+	
+	let totalModelCount: number = 0;
+
 	let totalLibraryObjects: number = 0;
 	for (const file of allBglFiles) {
 		console.log(`Processing file: ${file}`);
 		const fileBuffer = fs.readFileSync(file);
 		const fileView: DataView = new DataView(fileBuffer.buffer, fileBuffer.byteOffset, fileBuffer.byteLength);
-		const magicNumber1: number = fileView.getUint32(0, true);
-		const magicNumber2: number = fileView.getUint32(0x10, true);
+		let address: number = 0; // all binary indexing should use this variable
+		const magicNumber1: number = fileView.getUint32(address, true);
+		address = 0x10;
+		const magicNumber2: number = fileView.getUint32(address, true);
+		address += 4;
 		if (magicNumber1 !== 0x19920201 || magicNumber2 !== 0x08051803) {
+			console.warn(`Invalid BGL header in model data file: ${path.basename(file)}`);
 			continue;
 		}
 		const recordCt = fileView.getUint32(0x14, true);
 
 		const sceneryObjectOffsets: number[] = [];
 		const airportOffsets: number[] = [];
-		let address: number = 0x38; // all binary indexing should use this variable
+		address = 0x38;
 		for (let i = 0; i < recordCt; i++) {
 			const recType = fileView.getUint32(address, true);
 			address += 8;
@@ -944,5 +953,106 @@ export function convertScenery(inputPath: string, outputPath: string, isGltf: bo
 				bytesRead += size;
 			}
 		}
+	}
+
+	// Look for models after placements have been gathered
+	for (const file of allBglFiles) {
+		console.log(`Processing file: ${file}`);
+		const fileBuffer = fs.readFileSync(file);
+		const fileView: DataView = new DataView(fileBuffer.buffer, fileBuffer.byteOffset, fileBuffer.byteLength);
+		let address: number = 0; // all binary indexing should use this variable
+		const magicNumber1: number = fileView.getUint32(address, true);
+		address = 0x10;
+		const magicNumber2: number = fileView.getUint32(address, true);
+		address += 4;
+		if (magicNumber1 !== 0x19920201 || magicNumber2 !== 0x08051803) {
+			console.warn(`Invalid BGL header in model data file: ${path.basename(file)}`);
+			continue;
+		}
+		const recordCt = fileView.getUint32(0x14, true);
+
+		const mdlDataOffsets: number[] = [];
+		address = 0x38;
+		for (let i = 0; i < recordCt; i++) {
+			const recType = fileView.getUint32(address, true);
+			address += 0x0C;
+			const subrecordCount = fileView.getUint32(address, true);
+			address += 4;
+			const startSubsection = fileView.getUint32(address, true);
+			address += 8;
+			if (recType === 0x002B) { // ModelData
+				mdlDataOffsets.push(startSubsection);
+			}
+		}
+
+		let bytesRead = 0;
+		
+		// Parse ModelData subrecords
+		const modelDataSubrecords: [number, number][] = [];
+		for (const mdlDataOffset of mdlDataOffsets) {
+			address = mdlDataOffset + 8;
+			const subrecOffset = fileView.getInt32(address, true);
+			address += 4;
+			const size = fileView.getInt32(address, true);
+			modelDataSubrecords.push([subrecOffset, size]);
+		}
+		for (const subrecord of modelDataSubrecords) {
+			// Reset per-subrecord counters so all subrecords are processed
+			let objectsRead = 0;
+			bytesRead = 0;
+			while (bytesRead < subrecord[1]) {
+				address = subrecord[0] + (24 * objectsRead);
+				const guid: string = getGuidFromBytes(getViewBytes(fileView, address, 16));
+				address += 16;
+				const startModelDataOffset: number = fileView.getInt32(address, true);
+				address += 4;
+				const modelDataSize: number = fileView.getInt32(address, true);
+				if (!libraryObjects.has(guid)) {
+					console.info(`Model GUID ${guid}, size ${modelDataSize} at offset 0x${startModelDataOffset.toString(16)} not found in placements; skipping.`);
+					bytesRead += modelDataSize + 24;
+					objectsRead++;
+					continue;
+				}
+
+				// Mark this GUID as having a model
+				guidsWithModels.push(guid);
+				const tileIndices: Set<number> = new Set(libraryObjects.get(guid)!.map(obj => getTileIndexFromCoord(obj.latitude, obj.longitude)));
+				for (const tileIndex of tileIndices) {
+					if (!modelReferencesByTile.has(tileIndex)) {
+						modelReferencesByTile.set(tileIndex, []);
+					}
+
+					modelReferencesByTile.get(tileIndex)!.push({
+						guid: guid,
+						file: file,
+						offset: startModelDataOffset + 0x80, // Why the 0x80-byte offset? Who knows?
+						size: modelDataSize
+					});
+				}
+				address = subrecord[0] + startModelDataOffset + modelDataSize;
+				bytesRead += modelDataSize + 24;
+				objectsRead++;
+			}
+		}
+	}
+
+	totalModelCount = Array.from(modelReferencesByTile.values()).reduce((sum, l) => sum + l.length, 0);
+	console.info(`Found ${totalModelCount} models`);
+	if (totalModelCount === 0) {
+		return;
+	}
+
+	for (const [tileIndex, modelReferences] of modelReferencesByTile.entries()) {
+		const animations = [];
+		const simObjectsForTile: SimObject[] = [];
+		for (const simObject of simObjects) {
+			for (const simObjectPlacement of simObject[1]) {
+				if (getTileIndexFromCoord(simObjectPlacement.latitude, simObjectPlacement.longitude) === tileIndex) {
+					simObjectsForTile.push(simObjectPlacement);
+				}
+			}
+		}
+		const modelRefs: ModelReference[] = modelReferences.sort((a, b) => a.size - b.size);
+		console.info(`Tile ${tileIndex} has ${modelRefs.length} model references and ${simObjectsForTile.length} sim objects`);
 	}
 }

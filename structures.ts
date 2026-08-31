@@ -37,6 +37,13 @@ export interface SimObject {
 	scale: number;
 }
 
+export interface ModelReference {
+	guid: string;
+	file: string;
+	size: number;
+	offset: number;
+}
+
 export interface Tower
 {
 	longitude: number;
