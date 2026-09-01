@@ -12,21 +12,28 @@
       "name": "Renderer",
       "port": 9222,
       "request": "attach",
-      "type": "chrome",
-      "webRoot": "${workspaceFolder}"
+      "type": "pwa-chrome",
+      "webRoot": "${workspaceFolder}",
+      "timeout": 30000
     },
     {
       "name": "Main",
-      "type": "node",
+      "type": "pwa-node",
       "request": "launch",
       "cwd": "${workspaceFolder}",
       "runtimeExecutable": "${workspaceFolder}/node_modules/.bin/electron",
       "windows": {
         "runtimeExecutable": "${workspaceFolder}/node_modules/.bin/electron.cmd"
       },
-      "args": [".", "--remote-debugging-port=9222"],
+      "args": ["--remote-debugging-port=9222", "."],
+      "linux": {
+        "args": ["--ozone-platform=x11", "--remote-debugging-port=9222", "."]
+      },
+      "preLaunchTask": "npm: build",
+      "outFiles": ["${workspaceFolder}/dist/**/*.js", "${workspaceFolder}/dist/**/*.cjs"],
       "outputCapture": "std",
-      "console": "integratedTerminal"
+      "console": "integratedTerminal",
+      "skipFiles": ["<node_internals>/**", "${workspaceFolder}/node_modules/**"]
     }
   ]
 }

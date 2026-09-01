@@ -10,6 +10,35 @@ export let config = {
 	maxRepairRetries: 3
 }
 
+const MAX_REPAIR_RETRY_LIMIT = 100;
+
+function normalizeOutputDir(value: unknown): string {
+	if (typeof value !== 'string' || value.trim().length === 0) {
+		return path.join(os.homedir(), 'SconeOutput');
+	}
+	return path.resolve(value);
+}
+
+function normalizeMaxRepairRetries(value: unknown): number {
+	if (typeof value !== 'number' || !Number.isFinite(value)) {
+		return 3;
+	}
+
+	const normalized = Math.trunc(value);
+	if (normalized < 0) {
+		return 0;
+	}
+	if (normalized > MAX_REPAIR_RETRY_LIMIT) {
+		return MAX_REPAIR_RETRY_LIMIT;
+	}
+	return normalized;
+}
+
+function sanitizeConfigValues(): void {
+	config.outputDir = normalizeOutputDir(config.outputDir);
+	config.maxRepairRetries = normalizeMaxRepairRetries(config.maxRepairRetries);
+}
+
 function resolveValidatorExecutablePath(): string {
 	const platformFolder = process.platform === 'win32'
 		? 'windows'
@@ -33,6 +62,8 @@ export function initializeRuntimeConfig() {
 }
 
 export async function saveConfig() {
+	sanitizeConfigValues();
+
 	if (!fs.existsSync(config.storeDir)) {
 		fs.mkdirSync(config.storeDir, { recursive: true });
 	}
@@ -41,7 +72,13 @@ export async function saveConfig() {
 
 export async function loadConfig() {
 	if (fs.existsSync(path.join(config.storeDir, 'config.json'))) {
-		const data = fs.readFileSync(path.join(config.storeDir, 'config.json'), 'utf-8');
-		Object.assign(config, JSON.parse(data));
+		try {
+			const data = fs.readFileSync(path.join(config.storeDir, 'config.json'), 'utf-8');
+			Object.assign(config, JSON.parse(data));
+		} catch {
+			// Keep defaults when config cannot be parsed.
+		}
 	}
+
+	sanitizeConfigValues();
 }

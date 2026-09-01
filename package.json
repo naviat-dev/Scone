@@ -15,9 +15,10 @@
   "type": "module",
   "main": "dist/main.js",
   "scripts": {
-    "build": "npm run build:main && npm run build:renderer",
+    "build": "npm run build:main && npm run build:renderer && npm run build:tools",
     "build:main": "tsc -p tsconfig.json",
-    "build:renderer": "esbuild renderer.tsx --bundle --platform=browser --format=esm --outfile=dist/renderer.js",
+    "build:renderer": "esbuild renderer.tsx --bundle --platform=browser --format=esm --sourcemap --outfile=dist/renderer.js",
+    "build:tools": "node scripts/copy-gltf-validator.cjs",
     "start": "npm run build && node dist/start.js",
     "package": "electron-builder --publish never",
     "test": "echo \"Error: no test specified\" && exit 1"
