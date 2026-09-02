@@ -19,14 +19,13 @@ body:
     id: api-changes
     attributes:
       label: API Changes
-      description: Include a list of all API changes, additions, subtractions as would be required by your proposal. These APIs should be considered placeholders, so the naming is not as important as getting the concepts correct. If possible you should include some example (pseudo-)code of usage of your new API.
+      description: Describe changes to the Electron main process, renderer, TypeScript modules, CLI, or packaging configuration. Include a TypeScript example where useful.
       placeholder: |
-        ```csharp
-        var button = new Button ();
-        button.MakeShiny = true; // new API
+        ```ts
+        export function convertScenery(inputPath: string): Promise<string> {
+          // proposed API
+        }
         ```
-
-        The MakeShiny API works even if the button is already visible.
     validations:
       required: true
   - type: textarea

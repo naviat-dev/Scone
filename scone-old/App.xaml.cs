@@ -1,0 +1,231 @@
+namespace Scone;
+
+using System.Runtime.InteropServices;
+
+public partial class App : Application
+{
+	public static readonly string TempPath = Path.Combine(Path.GetTempPath(), "scone");
+	public static readonly string StorePath = ResolveStorePath();
+	public static readonly string ConfigPath = Path.Combine(StorePath, "config.json");
+	public static Config AppConfig = new();
+	public static string GltfValidatorPath { get; private set; } = string.Empty;
+	public static string GltfRepairPath { get; private set; } = string.Empty;
+
+	private static string ResolveStorePath()
+	{
+		try
+		{
+			return Path.Combine(ApplicationData.Current.LocalFolder.Path, "scone");
+		}
+		catch
+		{
+			// CLI / non-packaged invocation: fall back to %LOCALAPPDATA%\scone.
+			return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "scone");
+		}
+	}
+	/// <summary>
+	/// Initializes the singleton application object. This is the first line of authored code
+	/// executed, and as such is the logical equivalent of main() or WinMain().
+	/// </summary>
+	public App()
+	{
+		InitializeRuntimePaths();
+
+		if (!Directory.Exists(TempPath))
+		{
+			_ = Directory.CreateDirectory(TempPath);
+		}
+		if (!Directory.Exists(StorePath))
+		{
+			_ = Directory.CreateDirectory(StorePath);
+		}
+		if (File.Exists(ConfigPath))
+		{
+			try
+			{
+				string json = File.ReadAllText(ConfigPath);
+				AppConfig = System.Text.Json.JsonSerializer.Deserialize<Config>(json);
+			}
+			catch (Exception ex)
+			{
+				Logger.Error($"Failed to load config: {ex}");
+				AppConfig = new();
+			}
+		}
+		Suspending += static (s, e) =>
+		{
+			// Save config on exit
+			File.WriteAllText(ConfigPath, System.Text.Json.JsonSerializer.Serialize(AppConfig));
+		};
+		InitializeComponent();
+	}
+
+	public static void InitializeRuntimePaths()
+	{
+		(string folder, string executable) platformValidator = RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
+			? ("windows", "gltf_validator.exe")
+			: RuntimeInformation.IsOSPlatform(OSPlatform.OSX)
+				? ("macos", "gltf_validator")
+				: ("linux", "gltf_validator");
+
+		string[] candidates =
+		[
+			Path.Combine(AppContext.BaseDirectory, "Tools", "gltf-validator", platformValidator.folder, platformValidator.executable),
+			Path.Combine(Directory.GetCurrentDirectory(), "Tools", "gltf-validator", platformValidator.folder, platformValidator.executable),
+			Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "Tools", "gltf-validator", platformValidator.folder, platformValidator.executable)
+		];
+
+		string? discoveredPath = candidates
+			.Select(Path.GetFullPath)
+			.FirstOrDefault(File.Exists);
+
+		GltfValidatorPath = discoveredPath ?? Path.GetFullPath(candidates[0]);
+
+		string runtimeArch = RuntimeInformation.ProcessArchitecture switch
+		{
+			Architecture.X64 => "x64",
+			Architecture.Arm64 => "arm64",
+			Architecture.X86 => "x86",
+			_ => "x64"
+		};
+
+		string[] repairExecutables = RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
+			? runtimeArch == "x86"
+				? ["gltf-repair-win-x86.exe", "gltf-repair-win-x64.exe"]
+				: [$"gltf-repair-win-{runtimeArch}.exe"]
+			: RuntimeInformation.IsOSPlatform(OSPlatform.OSX)
+				? [$"gltf-repair-macos-{runtimeArch}"]
+				: [$"gltf-repair-linux-{runtimeArch}"];
+
+		string[] repairRoots =
+		[
+			Path.Combine(AppContext.BaseDirectory, "Tools", "gltf-repair"),
+			Path.Combine(Directory.GetCurrentDirectory(), "Tools", "gltf-repair"),
+			Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "Tools", "gltf-repair", "bin")
+		];
+
+		string[] repairCandidates = [.. repairRoots.SelectMany((root) => repairExecutables.Select((exe) => Path.Combine(root, exe)))];
+
+		string? discoveredRepairPath = repairCandidates
+			.Select(Path.GetFullPath)
+			.FirstOrDefault(File.Exists);
+
+		GltfRepairPath = discoveredRepairPath ?? Path.GetFullPath(repairCandidates[0]);
+	}
+
+	public static Window? MainWindow { get; private set; }
+
+	protected override void OnLaunched(LaunchActivatedEventArgs args)
+	{
+		MainWindow = new Window();
+#if DEBUG
+		MainWindow.UseStudio();
+#endif
+
+
+		// Do not repeat app initialization when the Window already has content,
+		// just ensure that the window is active
+		if (MainWindow.Content is not Frame rootFrame)
+		{
+			// Create a Frame to act as the navigation context and navigate to the first page
+			rootFrame = new Frame();
+
+			// Place the frame in the current Window
+			MainWindow.Content = rootFrame;
+
+			rootFrame.NavigationFailed += OnNavigationFailed;
+		}
+
+		if (rootFrame.Content == null)
+		{
+			// When the navigation stack isn't restored navigate to the first page,
+			// configuring the new page by passing required information as a navigation
+			// parameter
+			rootFrame.Navigate(typeof(MainPage), args.Arguments);
+		}
+
+		MainWindow.SetWindowIcon();
+		// Ensure the current window is active
+		MainWindow.Activate();
+	}
+
+	/// <summary>
+	/// Invoked when Navigation to a certain page fails
+	/// </summary>
+	/// <param name="sender">The Frame which failed navigation</param>
+	/// <param name="e">Details about the navigation failure</param>
+	private void OnNavigationFailed(object sender, NavigationFailedEventArgs e)
+	{
+		throw new InvalidOperationException($"Failed to load {e.SourcePageType.FullName}: {e.Exception}");
+	}
+
+	/// <summary>
+	/// Configures global Uno Platform logging
+	/// </summary>
+	public static void InitializeLogging()
+	{
+#if DEBUG
+		// Logging is disabled by default for release builds, as it incurs a significant
+		// initialization cost from Microsoft.Extensions.Logging setup. If startup performance
+		// is a concern for your application, keep this disabled. If you're running on the web or
+		// desktop targets, you can use URL or command line parameters to enable it.
+		//
+		// For more performance documentation: https://platform.uno/docs/articles/Uno-UI-Performance.html
+
+		var factory = LoggerFactory.Create(builder =>
+		{
+#if __WASM__
+            builder.AddProvider(new global::Uno.Extensions.Logging.WebAssembly.WebAssemblyConsoleLoggerProvider());
+#elif __IOS__
+            builder.AddProvider(new global::Uno.Extensions.Logging.OSLogLoggerProvider());
+
+            // Log to the Visual Studio Debug console
+            builder.AddConsole();
+#else
+			builder.AddConsole();
+#endif
+
+			// Exclude logs below this level
+			builder.SetMinimumLevel((Microsoft.Extensions.Logging.LogLevel)LogLevel.Info);
+
+			// Default filters for Uno Platform namespaces
+			builder.AddFilter("Uno", (Microsoft.Extensions.Logging.LogLevel)LogLevel.Warning);
+			builder.AddFilter("Windows", (Microsoft.Extensions.Logging.LogLevel)LogLevel.Warning);
+			builder.AddFilter("Microsoft", (Microsoft.Extensions.Logging.LogLevel)LogLevel.Warning);
+
+			// Generic Xaml events
+			// builder.AddFilter("Microsoft.UI.Xaml", LogLevel.Debug );
+			// builder.AddFilter("Microsoft.UI.Xaml.VisualStateGroup", LogLevel.Debug );
+			// builder.AddFilter("Microsoft.UI.Xaml.StateTriggerBase", LogLevel.Debug );
+			// builder.AddFilter("Microsoft.UI.Xaml.UIElement", LogLevel.Debug );
+			// builder.AddFilter("Microsoft.UI.Xaml.FrameworkElement", LogLevel.Trace );
+
+			// Layouter specific messages
+			// builder.AddFilter("Microsoft.UI.Xaml.Controls", LogLevel.Debug );
+			// builder.AddFilter("Microsoft.UI.Xaml.Controls.Layouter", LogLevel.Debug );
+			// builder.AddFilter("Microsoft.UI.Xaml.Controls.Panel", LogLevel.Debug );
+
+			// builder.AddFilter("Windows.Storage", LogLevel.Debug );
+
+			// Binding related messages
+			// builder.AddFilter("Microsoft.UI.Xaml.Data", LogLevel.Debug );
+			// builder.AddFilter("Microsoft.UI.Xaml.Data", LogLevel.Debug );
+
+			// Binder memory references tracking
+			// builder.AddFilter("Uno.UI.DataBinding.BinderReferenceHolder", LogLevel.Debug );
+
+			// DevServer and HotReload related
+			// builder.AddFilter("Uno.UI.RemoteControl", LogLevel.Information);
+
+			// Debug JS interop
+			// builder.AddFilter("Uno.Foundation.WebAssemblyRuntime", LogLevel.Debug );
+		});
+
+		global::Uno.Extensions.LogExtensionPoint.AmbientLoggerFactory = factory;
+
+#if HAS_UNO
+		global::Uno.UI.Adapter.Microsoft.Extensions.Logging.LoggingAdapter.Initialize();
+#endif
+#endif
+	}
+}

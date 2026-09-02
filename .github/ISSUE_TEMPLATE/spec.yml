@@ -8,7 +8,7 @@ body:
       value: |
         Thank you for taking the time to provide us with a detailed specification of your idea.
 
-        In a spec you will give a detailed and complete representation of the (public) APIs that are implemented as part of this change. Additionally please think about backwards compatibility, breaking changes, supported platforms and the difficulty.
+        In a spec, describe the Electron main-process, renderer, TypeScript, CLI, and packaging changes. Include backwards compatibility and supported OS/architecture combinations.
   - type: textarea
     id: description
     attributes:
@@ -20,7 +20,7 @@ body:
     id: api-changes
     attributes:
       label: (Public) API Changes
-      description: Include a complete list of all API changes, additions, subtractions as would be required by your proposal.
+      description: Include the TypeScript APIs, Electron IPC channels, CLI arguments, configuration, and packaging changes required by your proposal.
       value: |
         # [ class ]
 
@@ -43,16 +43,12 @@ body:
       label: Usage Scenarios
       description: Give us a couple of scenarios that demonstrate how developers would consume the above APIs.
       placeholder: |
-        # C# Example
-        ```csharp
-        var thing = new MyNewControl();
-        thing.BeAwesome = true;
-        thing.Color = Colors.Cornsilk;
-        ```
-
-        # XAML Example
-        ```xaml
-        <MyNewControl x:Name="thing" BeAwesome="true" Color="Cornsilk" />
+        # TypeScript example
+        ```ts
+        const result = await convertScenery({
+          source: inputPath,
+          output: outputPath,
+        });
         ```
     validations:
       required: true
@@ -60,7 +56,7 @@ body:
     id: backwards-compatibility
     attributes:
       label: Backward Compatibility
-      description: Please describe here anything in terms of backwards compatibility. Will there be breaking changes? Do we need to update dependencies to support this? What are the minimum supported API/OS levels? And lastly, are there any platforms that can't support this and why?
+      description: Describe breaking changes, dependency requirements, minimum Electron/Node versions, and support for Windows, macOS, and Linux on x64 and arm64.
       placeholder: |
         Minimum API levels?
         Breaking changes?

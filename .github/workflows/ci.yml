@@ -1,176 +1,151 @@
-name: CI
+name: Electron CI
 
 on:
   push:
     branches:
       - main
-      - release/**
       - dev
-
+      - dev-typescript-conversion
+      - release/**
   pull_request:
     types: [opened, synchronize, reopened]
     branches:
       - main
-      - release/**
       - dev
-env:
-  STEP_TIMEOUT_MINUTES: 60
+      - dev-typescript-conversion
+      - release/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: electron-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  smoke_test:
-    name: Smoke Test (Debug Build of Scone)
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Install Dependencies
-        timeout-minutes: ${{ fromJSON(env.STEP_TIMEOUT_MINUTES) }}
-        uses: "./.github/steps/install_dependencies"
-
-      # Add  MSBuild to the PATH: https://github.com/microsoft/setup-msbuild
-      - name: Setup MSBuild
-        uses: microsoft/setup-msbuild@v1.3.1
-
-      - name: Build Scone (Debug)
-        shell: pwsh
-        run: msbuild ./Scone/Scone.csproj /r
-
-  build_windows:
-    name: Build Windows (${{ matrix.arch }})
-    runs-on: windows-latest
+  build:
+    name: Build (${{ matrix.os }}, ${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
     strategy:
+      fail-fast: false
       matrix:
-        arch: [x64, x86, arm64]
+        include:
+          - os: linux
+            platform: linux
+            arch: x64
+            runner: ubuntu-24.04
+          - os: linux
+            platform: linux
+            arch: arm64
+            runner: ubuntu-24.04-arm
+          - os: windows
+            platform: win
+            arch: x64
+            runner: windows-latest
+          - os: windows
+            platform: win
+            arch: arm64
+            runner: windows-11-arm
+          - os: macos
+            platform: mac
+            arch: x64
+            runner: macos-13
+          - os: macos
+            platform: mac
+            arch: arm64
+            runner: macos-14
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          fetch-depth: 0
+          node-version: 24
+          architecture: ${{ matrix.arch }}
+          cache: npm
+          cache-dependency-path: package-lock.json
 
-      - name: Install Dependencies
-        timeout-minutes: ${{ fromJSON(env.STEP_TIMEOUT_MINUTES) }}
-        uses: "./.github/steps/install_dependencies"
+      - name: Show runtime versions
+        run: |
+          node --version
+          npm --version
 
-      - name: Setup MSBuild
-        uses: microsoft/setup-msbuild@v1.3.1
+      - name: Install dependencies
+        run: npm ci
 
-      - name: Publish Scone Windows ${{ matrix.arch }}
-        shell: pwsh
-        run: dotnet publish ./Scone/Scone.csproj -c Release -r win-${{ matrix.arch }} /p:PublishProfile=win-${{ matrix.arch }}
+      - name: Build and package application
+        run: npm run package -- --${{ matrix.platform }} --${{ matrix.arch }}
 
-      - name: Upload Windows ${{ matrix.arch }} Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: scone-windows-${{ matrix.arch }}
-          path: ./Scone/bin/Release/net10.0-desktop/win-${{ matrix.arch }}/publish/
-
-  build_macos:
-    name: Build macOS (${{ matrix.arch }})
-    runs-on: macos-latest
-    strategy:
-      matrix:
-        arch: [x64, arm64]
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Install Dependencies
-        timeout-minutes: ${{ fromJSON(env.STEP_TIMEOUT_MINUTES) }}
-        uses: "./.github/steps/install_dependencies"
-        with:
-          target-platform: 'macos'
-
-      - name: Publish Scone macOS ${{ matrix.arch }}
+      - name: Verify packaged application
         shell: bash
-        run: dotnet publish ./Scone/Scone.csproj -c Release -r osx-${{ matrix.arch }} --self-contained
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(dist/*)
+          if ((${#files[@]} == 0)); then
+            echo "No packaged application found in dist" >&2
+            exit 1
+          fi
+          printf 'Packaged application output:\n%s\n' "${files[@]}"
 
-      - name: Upload macOS ${{ matrix.arch }} Artifact
+      - name: Upload application artifact
         uses: actions/upload-artifact@v4
         with:
-          name: scone-macos-${{ matrix.arch }}
-          path: ./Scone/bin/Release/net10.0-desktop/osx-${{ matrix.arch }}/publish/
-
-  build_linux:
-    name: Build Linux (${{ matrix.arch }})
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        arch: [x64, arm64]
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Install Dependencies
-        timeout-minutes: ${{ fromJSON(env.STEP_TIMEOUT_MINUTES) }}
-        uses: "./.github/steps/install_dependencies"
-        with:
-          target-platform: 'linux'
-
-      - name: Publish Scone Linux ${{ matrix.arch }}
-        shell: bash
-        run: dotnet publish ./Scone/Scone.csproj -c Release -r linux-${{ matrix.arch }} --self-contained
-
-      - name: Upload Linux ${{ matrix.arch }} Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: scone-linux-${{ matrix.arch }}
-          path: ./Scone/bin/Release/net10.0-desktop/linux-${{ matrix.arch }}/publish/
+          name: electron-${{ matrix.os }}-${{ matrix.arch }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14
 
   release:
     name: Publish Release
-    runs-on: ubuntu-latest
-    needs:
-      - build_windows
-      - build_macos
-      - build_linux
+    runs-on: ubuntu-24.04
+    needs: build
+    if: github.ref == 'refs/heads/main'
     permissions:
       contents: write
-    if: github.ref == 'refs/heads/main'
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      - name: Determine Next Version
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Determine next version
         id: version
         shell: bash
         run: |
           set -euo pipefail
           git fetch --tags --force
           latest=$(git tag -l 'v*' | sort -V | tail -n1)
-          if [ -z "$latest" ]; then
+          if [[ -z "$latest" ]]; then
             next="v0.1.0"
           else
             version=${latest#v}
             IFS='.' read -r major minor patch <<<"$version"
-            patch=$((patch + 1))
-            next="v${major}.${minor}.${patch}"
+            next="v${major}.${minor}.$((patch + 1))"
           fi
           echo "version=$next" >> "$GITHUB_OUTPUT"
 
-      - name: Download Build Artifacts
+      - name: Download application artifacts
         uses: actions/download-artifact@v4
         with:
-          pattern: scone-*
+          pattern: electron-*
           path: dist
           merge-multiple: false
 
-      - name: Package Artifacts
-        if: ${{ always() }}
+      - name: Archive application artifacts
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p packaged
-          shopt -s nullglob
           for artifact in dist/*; do
             name=$(basename "$artifact")
             zip -r "packaged/${name}.zip" "$artifact"
           done
 
-      - name: Create GitHub Release
+      - name: Create GitHub release
         uses: ncipollo/release-action@v1
         with:
           tag: ${{ steps.version.outputs.version }}
