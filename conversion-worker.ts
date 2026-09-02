@@ -61,6 +61,7 @@ void runConversion()
 			postMessage({ type: 'cancelled', mode: error.mode });
 			return;
 		}
+		console.error(error);
 		const message = error instanceof Error ? error.message : String(error);
 		postMessage({ type: 'failed', error: message });
 	});

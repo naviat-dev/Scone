@@ -1,4 +1,4 @@
-import { getTileIndexFromCoord, getCoordFromTileIndex, getAltitude } from './terrain.js';
+import { getTileIndexFromCoord, getCoordFromTileIndex, getAltitude, getFilePathFromTileIndex } from './terrain.js';
 import { LibraryObject, SimObject, Flags, Airport, Tower, Runway, RunwayStart, TaxiwayPoint, TaxiwayParking, TaxiwayPath, TaxiwayPathType, Apron, TaxiwaySign, PaintedLine, PaintedHatchedArea, ApronEdgeLights, Helipad, ProjectedMesh, ModelReference } from './structures.js'
 import { config } from './config.js';
 import { applyAsoboGeometryRepair, repairDocument, optimizeDocument } from './repair.js';
@@ -8,7 +8,8 @@ import { create } from 'xmlbuilder2';
 import { vec3, mat4 } from 'gl-matrix';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
-import { Document, NodeIO } from '@gltf-transform/core';
+import { Document, NodeIO, type mat4 as GltfMat4 } from '@gltf-transform/core';
+import { dedup, instance, flatten, join, weld, resample, prune, sparse, unpartition, transformMesh, mergeDocuments, cloneDocument } from '@gltf-transform/functions';
 
 const execFileAsync = promisify(execFile);
 
@@ -188,6 +189,15 @@ function createPlacementTransform(center: vec3, position: vec3, orientation: vec
 	return transform;
 }
 
+function toGltfMat4(matrix: mat4): GltfMat4 {
+	return [
+		matrix[0], matrix[1], matrix[2], matrix[3],
+		matrix[4], matrix[5], matrix[6], matrix[7],
+		matrix[8], matrix[9], matrix[10], matrix[11],
+		matrix[12], matrix[13], matrix[14], matrix[15],
+	];
+}
+
 function resolveAbsoluteTexturePath(inputPath: string, file: string, textureUri: string): string {
 	textureUri = textureUri.replace(/\//g, path.sep);
 	const fileName: string = path.basename(textureUri);
@@ -213,13 +223,15 @@ function resolveAbsoluteTexturePath(inputPath: string, file: string, textureUri:
 
 async function assembleModel(inputPath: string, outputPath: string, tileIndex: number, modelReferences: ModelReference[], center: vec3, libraryObjects: Map<string, LibraryObject[]>, control?: ConversionControl) {
 	const tempTilePath = path.join(config.tempDir, `tile_${tileIndex}_${Date.now()}`);
-	const tempBinPath = path.join(tempTilePath, 'temp.bin');
-	const tempGltfPath = path.join(tempTilePath, 'temp.gltf');
-	const tempReportPath = path.join(tempTilePath, 'temp.gltf.report.json');
-	const validatorExecutable = config.gltfValidationPath;
 	fs.mkdirSync(tempTilePath, { recursive: true });
+	const validatorExecutable = config.gltfValidationPath;
+	const tileDocument: Document = new Document();
+	let mergeSequence = 0;
 	try {
 		for (const modelRef of modelReferences) {
+			const tempBinPath = path.join(tempTilePath, `temp-${modelRef.guid}.bin`);
+			const tempGltfPath = path.join(tempTilePath, `temp-${modelRef.guid}.gltf`);
+			const tempReportPath = path.join(tempTilePath, `temp-${modelRef.guid}.gltf.report.json`);
 			checkAbort(control);
 			reportStatus(control, `Processing model source ${path.basename(modelRef.file)}...`);
 			// TODO: increase the model count here, without making this object-oriented
@@ -339,7 +351,7 @@ async function assembleModel(inputPath: string, outputPath: string, tileIndex: n
 
 							const glbBinBytes = glbBytes.subarray(binStart, binEnd);
 							if (Array.isArray(json.buffers) && json.buffers.length > 0 && typeof json.buffers[0] === 'object' && json.buffers[0] !== null) {
-								(json.buffers[0] as Record<string, unknown>).uri = 'temp.bin';
+								(json.buffers[0] as Record<string, unknown>).uri = `temp-${modelRef.guid}.bin`;
 							}
 							delete (json as { extensionsRequired?: unknown }).extensionsRequired;
 
@@ -378,10 +390,18 @@ async function assembleModel(inputPath: string, outputPath: string, tileIndex: n
 								}
 							}
 
+							const textures = Array.isArray(json.textures) ? json.textures : [];
+							for (const texture of textures) {
+								if (texture.extensions && texture.extensions.MSFT_texture_dds) {
+									texture.source = texture.extensions.MSFT_texture_dds.source;
+									delete texture.extensions.MSFT_texture_dds;
+								}
+							}
+
 							fs.writeFileSync(tempGltfPath, JSON.stringify(json), 'utf-8');
 							fs.writeFileSync(tempBinPath, glbBinBytes);
 
-							const document: Document = await new NodeIO().read(tempGltfPath);
+							let document: Document = await new NodeIO().read(tempGltfPath);
 							// Repair Asobo-specific geometry issues, then re-export for validation
 							applyAsoboGeometryRepair(document);
 							await new NodeIO().write(tempGltfPath, document);
@@ -392,7 +412,7 @@ async function assembleModel(inputPath: string, outputPath: string, tileIndex: n
 								checkAbort(control);
 								tries++;
 								console.warn(`Attempt ${tries} to repair geometry for model ${name} (${modelRef.guid})`);
-								repairDocument(document, tempGltfPath, tempReportPath);
+								await repairDocument(document, tempGltfPath, tempReportPath);
 								await new NodeIO().write(tempGltfPath, document);
 								errorCount = await runGltfValidator(validatorExecutable, tempGltfPath, tempReportPath);
 							}
@@ -409,10 +429,28 @@ async function assembleModel(inputPath: string, outputPath: string, tileIndex: n
 								continue;
 							}
 
+							let placementIndex = 0;
 							for (const libObj of libraryObjectsForModel) {
-								if (getTileIndexFromCoord(libObj.position[1], libObj.position[0]) === tileIndex) {
-									const transform: mat4 = createPlacementTransform(center, libObj.position, libObj.orientation, [libObj.scale]);
+								if (getTileIndexFromCoord(libObj.position[1], libObj.position[0]) !== tileIndex) {
+									continue;
 								}
+
+								const uniformScale = Number.isFinite(libObj.scale) ? libObj.scale : 1;
+								const transform: mat4 = createPlacementTransform(center, libObj.position, libObj.orientation, [uniformScale, uniformScale, uniformScale]);
+								const placedDocument = cloneDocument(document);
+
+								for (const mesh of placedDocument.getRoot().listMeshes()) {
+									transformMesh(mesh, toGltfMat4(transform));
+								}
+
+								const buffers = placedDocument.getRoot().listBuffers();
+								for (let bufferIndex = 0; bufferIndex < buffers.length; bufferIndex++) {
+									buffers[bufferIndex].setURI(`${tileIndex}_${mergeSequence}_${bufferIndex}.bin`);
+								}
+
+								mergeDocuments(tileDocument, placedDocument);
+								mergeSequence++;
+								placementIndex++;
 							}
 
 							glbIndex++;
@@ -421,7 +459,6 @@ async function assembleModel(inputPath: string, outputPath: string, tileIndex: n
 							j += 4;
 						}
 					}
-
 					i += size;
 				}
 			}
@@ -429,6 +466,13 @@ async function assembleModel(inputPath: string, outputPath: string, tileIndex: n
 	} finally {
 		fs.rmSync(tempTilePath, { recursive: true, force: true });
 	}
+	fs.mkdirSync(path.join(outputPath, getFilePathFromTileIndex(tileIndex)), { recursive: true });
+	await tileDocument.transform(dedup(), instance(), flatten(), join(), weld(), resample(), sparse(), prune({ keepAttributes: true }), unpartition());
+	await new NodeIO().write(path.join(outputPath, getFilePathFromTileIndex(tileIndex), `${tileIndex}.gltf`), tileDocument);
+	fs.writeFileSync(
+		path.join(outputPath, getFilePathFromTileIndex(tileIndex), `${tileIndex}.stg`),
+		`OBJECT_STATIC ${tileIndex}.gltf ${center[1]} ${center[0]} ${center[2]} 270 0 90`
+	);
 }
 
 export async function convertScenery(inputPath: string, outputPath: string, control?: ConversionControl): Promise<void> {
@@ -511,10 +555,10 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 				} else if (id === 0x19) { //SimObject
 					address -= 4; // Reverse back to get all of the bytes
 					const simObject = buildSimObject(fileView, address);
-					if (!simObjects.has(simObject.containerPath)) {
-						simObjects.set(simObject.containerPath, []);
+					if (!simObjects.has(simObject.containerTitle)) {
+						simObjects.set(simObject.containerTitle, []);
 					}
-					simObjects.get(simObject.containerPath)!.push(simObject);
+					simObjects.get(simObject.containerTitle)!.push(simObject);
 				} else {
 					console.warn(`Unexpected subrecord type at offset 0x${(subrecord[0] + bytesRead).toString(16)}: 0x${id.toString(16)}, skipping ${size} bytes`);
 					bytesRead += size;
@@ -593,13 +637,13 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 				airport.altitude = fileView.getInt32(address, true) / 1000.0;
 				address += 4;
 				airport.tower = {
-					latitude: 90.0 - (fileView.getInt32(address, true) * (180.0 / 536870912.0)),
-					longitude: (fileView.getInt32(address + 4, true) * (360.0 / 805306368.0)) - 180.0,
+					latitude: 90.0 - (fileView.getUint32(address, true) * (180.0 / 536870912.0)),
+					longitude: (fileView.getUint32(address + 4, true) * (360.0 / 805306368.0)) - 180.0,
 					altitude: fileView.getInt32(address + 8, true) / 1000.0
 				};
 				address += 12;
-				airport.magvar = fileView.getUint8(address);
-				address += 1;
+				airport.magvar = fileView.getFloat32(address, true);
+				address += 4;
 				airport.icao = convertIcaoBytesToString(fileView.getUint32(address, true));
 				address += 4;
 				airport.regIdent = convertIcaoBytesToString(fileView.getUint32(address, true));
@@ -631,6 +675,7 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 							airport.name = new TextDecoder('utf-8').decode(getViewBytes(fileView, address, recordSize));
 							break;
 						case 0x00ce: // Runway
+							address += 2;
 							let runway: Runway = {
 								primaryNumber: fileView.getUint8(address),
 								primaryDesignator: fileView.getUint8(address + 1),
@@ -1136,11 +1181,11 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 								}
 								else if (new DataView(sceneryObjectBytes.buffer, sceneryObjectBytes.byteOffset, sceneryObjectBytes.byteLength).getUint16(0, true) == 0x0019) {
 									const simObj = buildSimObject(fileView, address);
-									if (simObjects.has(simObj.containerPath)) {
-										simObjects.get(simObj.containerPath)!.push(simObj);
+									if (simObjects.has(simObj.containerTitle)) {
+										simObjects.get(simObj.containerTitle)!.push(simObj);
 									}
 									else {
-										simObjects.set(simObj.containerPath, [simObj]);
+										simObjects.set(simObj.containerTitle, [simObj]);
 									}
 								}
 								else {
@@ -1161,11 +1206,11 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 								}
 								else if (new DataView(sceneryObjectBytes.buffer, sceneryObjectBytes.byteOffset, sceneryObjectBytes.byteLength).getUint16(0, true) == 0x0019) {
 									const simObj = buildSimObject(fileView, address);
-									if (simObjects.has(simObj.containerPath)) {
-										simObjects.get(simObj.containerPath)!.push(simObj);
+									if (simObjects.has(simObj.containerTitle)) {
+										simObjects.get(simObj.containerTitle)!.push(simObj);
 									}
 									else {
-										simObjects.set(simObj.containerPath, [simObj]);
+										simObjects.set(simObj.containerTitle, [simObj]);
 									}
 								}
 								else {
@@ -1318,9 +1363,9 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 		for (let i = 0; i < recordCt; i++) {
 			const recType = fileView.getUint32(address, true);
 			address += 0x0C;
-			const subrecordCount = fileView.getUint32(address, true);
-			address += 4;
 			const startSubsection = fileView.getUint32(address, true);
+			address += 4;
+			const recSize = fileView.getUint32(address, true);
 			address += 8;
 			if (recType === 0x002B) { // ModelData
 				mdlDataOffsets.push(startSubsection);

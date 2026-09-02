@@ -1,3 +1,5 @@
+import path from 'path';
+
 const latitudeIndex = [[89, 12], [86, 4], [83, 2], [76, 1], [62, 0.5], [22, 0.25], [0, 0.125]];
 
 function getTileWidth(input: number): number {
@@ -37,4 +39,13 @@ export function getCoordFromTileIndex(index: number): { lat: number, lon: number
 export async function getAltitude(lat: number, lon: number, version: number): Promise<number> {
 	const response = await fetch(`https://51-68-215-9.sslip.io/api/elevation?lat=${lat}&lon=${lon}`);
 	return (await response.json())['altitudeFt'];
+}
+
+export function getFilePathFromTileIndex(index: number): string {
+	const coord = getCoordFromTileIndex(index);
+	const lonHemi = coord.lon >= 0 ? 'e' : 'w';
+	const latHemi = coord.lat >= 0 ? 'n' : 's';
+	return path.join(
+		`${lonHemi}${Math.abs(Math.floor(coord.lon / 10)) * 10}${latHemi}${Math.abs(Math.floor(coord.lat / 10)) * 10}`,
+		`${lonHemi}${Math.abs(Math.floor(coord.lon))}${latHemi}${Math.abs(Math.floor(coord.lat))}`);
 }

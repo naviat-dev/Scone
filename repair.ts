@@ -499,7 +499,7 @@ function normalizeMsftTextureSources(modelPath: string): number {
     return patchedTextureCount;
 }
 
-export function repairDocument(document: Document, modelPath: string, issuesJsonPath: string): Document {
+export async function repairDocument(document: Document, modelPath: string, issuesJsonPath: string): Promise<Document> {
     if (!fs.existsSync(modelPath)) {
         throw new Error(`Model file does not exist: ${modelPath}`);
     }
@@ -637,7 +637,7 @@ export function repairDocument(document: Document, modelPath: string, issuesJson
     restoreTexCoordsFromOriginalModel(document, sourceUvContext);
 
     // Run structural cleanup after issue-specific and ASOBO repairs.
-    document.transform(weld(), dedup(), prune({ keepAttributes: true }), unpartition());
+    await document.transform(weld(), dedup(), prune({ keepAttributes: true }), unpartition());
     // Clean up all scenes except for the default scene
     const root = document.getRoot();
     const defaultScene = root.getDefaultScene();
@@ -646,10 +646,10 @@ export function repairDocument(document: Document, modelPath: string, issuesJson
             scene.dispose();
         }
     }
-	return document;
+    return document;
 }
 
-export function optimizeDocument(document: Document, modelPath: string): Document {
+export async function optimizeDocument(document: Document, modelPath: string): Promise<Document> {
     const patchedTextureCount = normalizeMsftTextureSources(modelPath);
     if (patchedTextureCount > 0) {
         console.log(`Patched ${patchedTextureCount} texture source references from MSFT_texture_dds.`);
@@ -658,6 +658,6 @@ export function optimizeDocument(document: Document, modelPath: string): Documen
     restoreTexCoordsFromOriginalModel(document, sourceUvContext);
 
     // Apply optimization transforms.
-    document.transform(dedup(), instance(), flatten(), join(), weld(), resample(), sparse(), prune({ keepAttributes: true }), unpartition());
+    await document.transform(dedup(), instance(), flatten(), join(), weld(), resample(), sparse(), prune({ keepAttributes: true }), unpartition());
     return document;
 }
