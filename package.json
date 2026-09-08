@@ -45,7 +45,9 @@
     "@gltf-transform/extensions": "^4.4.2",
     "@gltf-transform/functions": "^4.4.2",
     "gl-matrix": "^3.4.4",
+    "ktx-parse": "^2.0.0",
     "path": "^0.12.7",
+    "pngjs": "^7.0.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "xmlbuilder2": "^4.0.3"

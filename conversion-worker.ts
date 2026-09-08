@@ -44,7 +44,11 @@ async function runConversion(): Promise<void> {
 
 	await convertScenery(
 		payload.taskPath,
-		payload.outputPath
+		payload.outputPath,
+		{
+			shouldAbort: () => abortMode,
+			onStatus: (status) => postMessage({ type: 'status', status }),
+		}
 	);
 }
 

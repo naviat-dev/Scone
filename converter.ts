@@ -2,10 +2,11 @@ import { getTileIndexFromCoord, getCoordFromTileIndex, getFilePathFromTileIndex 
 import { LibraryObject, SimObject, Flags, Airport, Tower, Runway, RunwayStart, TaxiwayPoint, TaxiwayParking, TaxiwayPath, TaxiwayPathType, Apron, TaxiwaySign, PaintedLine, PaintedHatchedArea, ApronEdgeLights, Helipad, ProjectedMesh, ModelReference } from './structures.js'
 import { config } from './config.js';
 import { applyAsoboGeometryRepair, repairDocument } from './repair.js';
+import { convertToDDS } from './texconv.js'
 import * as fs from 'fs';
 import * as path from 'path';
 import { create } from 'xmlbuilder2';
-import { vec3, mat4 } from 'gl-matrix';
+import { vec3, mat4, quat } from 'gl-matrix';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { Document, NodeIO, type mat4 as GltfMat4, Node, Scene } from '@gltf-transform/core';
@@ -177,15 +178,20 @@ function getFilesRecursive(dir: string, extension: string, caseSensitive: boolea
 }
 
 function createPlacementTransform(center: vec3, position: vec3, orientation: vec3, scale: vec3): mat4 {
-	const deg2rad = Math.PI / 180.0;
-	const transform = mat4.create();
+	const deg2rad: number = Math.PI / 180.0;
+	const transform: mat4 = mat4.create();
+
 	const lonOffsetMeters = -(position[0] - center[0]) * 111320.0 * Math.cos(center[1] * deg2rad);
 	const latOffsetMeters = (position[1] - center[1]) * 110540.0;
-	mat4.translate(transform, transform, vec3.fromValues(latOffsetMeters, lonOffsetMeters, position[2] - center[2]));
-	mat4.rotateZ(transform, transform, orientation[2] * deg2rad);
-	mat4.rotateX(transform, transform, orientation[0] * deg2rad);
-	mat4.rotateY(transform, transform, orientation[1] * deg2rad);
-	mat4.scale(transform, transform, scale);
+	const altOffsetMeters = position[2] - center[2];
+
+	mat4.fromRotationTranslationScale(
+		transform,
+		quat.fromEuler(quat.create(), orientation[0], orientation[1], orientation[2]),
+		[lonOffsetMeters, altOffsetMeters, latOffsetMeters],
+		scale
+	);
+
 	return transform;
 }
 
@@ -199,7 +205,7 @@ function toGltfMat4(matrix: mat4): GltfMat4 {
 }
 
 function resolveAbsoluteTexturePath(inputPath: string, file: string, textureUri: string): string {
-	textureUri = textureUri.replace(/\//g, path.sep);
+	textureUri = textureUri.replace(/\\/g, path.sep).replace(/\//g, path.sep);
 	const fileName: string = path.basename(textureUri);
 	let mostLikelyMatch: string = "";
 	const extension = path.extname(fileName);
@@ -362,25 +368,25 @@ async function assembleModel(inputPath: string, outputPath: string, tileIndex: n
 									continue;
 								}
 
-								const imageRecord = image as Record<string, unknown>;
-								const uri = typeof imageRecord.uri === 'string' ? imageRecord.uri : '';
+								let uri = typeof image.uri === 'string' ? image.uri : '';
+								uri = uri.replace(/\\/g, path.sep).replace(/\//g, path.sep);
 								if (uri.length === 0) {
 									continue;
 								}
 
 								const outputUri = `${path.basename(uri, path.extname(uri))}.DDS`;
-								imageRecord.uri = outputUri;
-								const extras = (imageRecord.extras && typeof imageRecord.extras === 'object')
-									? imageRecord.extras as Record<string, unknown>
+								image.uri = outputUri;
+								const extras = (image.extras && typeof image.extras === 'object')
+									? image.extras as Record<string, unknown>
 									: {};
 								const absoluteTexturePath = resolveAbsoluteTexturePath(inputPath, modelRef.file, uri);
 								extras.absolutePath = absoluteTexturePath;
-								imageRecord.extras = extras;
+								image.extras = extras;
 
 								const outputTexturePath = path.join(tempTilePath, outputUri);
 								if (!fs.existsSync(outputTexturePath)) {
 									if (absoluteTexturePath.length > 0 && fs.existsSync(absoluteTexturePath)) {
-										fs.copyFileSync(absoluteTexturePath, outputTexturePath);
+										convertToDDS(absoluteTexturePath, outputTexturePath);
 									} else {
 										console.warn(`Texture file not found: ${uri}`);
 										const fallbackTexturePath = path.join(process.cwd(), 'Assets', 'dummy_tex.dds');
@@ -479,9 +485,10 @@ async function assembleModel(inputPath: string, outputPath: string, tileIndex: n
 		fs.rmSync(tempTilePath, { recursive: true, force: true });
 	}
 
-	fs.mkdirSync(path.join(outputPath, getFilePathFromTileIndex(tileIndex)), { recursive: true });
+	reportStatus(control, 'Writing to disk...');
+	fs.mkdirSync(path.join(outputPath, 'Objects', getFilePathFromTileIndex(tileIndex)), { recursive: true });
 	await tileDocument.transform(dedup(), instance(), flatten(), join(), weld(), resample(), sparse(), prune({ keepAttributes: true }), unpartition());
-	await new NodeIO().write(path.join(outputPath, getFilePathFromTileIndex(tileIndex), `${tileIndex}.gltf`), tileDocument);
+	await new NodeIO().write(path.join(outputPath, 'Objects', getFilePathFromTileIndex(tileIndex), `${tileIndex}.gltf`), tileDocument);
 	fs.writeFileSync(
 		path.join(outputPath, 'Objects', getFilePathFromTileIndex(tileIndex), `${tileIndex}.stg`),
 		`OBJECT_STATIC ${tileIndex}.gltf ${center[1]} ${center[0]} ${center[2]} 270 0 90`
