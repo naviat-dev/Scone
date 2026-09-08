@@ -163,6 +163,10 @@ async function runGltfValidator(validatorExecutable: string, modelPath: string, 
 	return parseValidatorErrorCount(report);
 }
 
+async function runKram(kramExecutable: string, inputPath: string, outputPath: string) {
+	
+}
+
 function getFilesRecursive(dir: string, extension: string, caseSensitive: boolean): string[] {
 	const result: string[] = [];
 	const files = fs.readdirSync(dir);
@@ -230,7 +234,6 @@ function resolveAbsoluteTexturePath(inputPath: string, file: string, textureUri:
 async function assembleModel(inputPath: string, outputPath: string, tileIndex: number, modelReferences: ModelReference[], center: vec3, libraryObjects: Map<string, LibraryObject[]>, control?: ConversionControl) {
 	const tempTilePath = path.join(config.tempDir, `tile_${tileIndex}_${Date.now()}`);
 	fs.mkdirSync(tempTilePath, { recursive: true });
-	const validatorExecutable = config.gltfValidationPath;
 	const tileDocument: Document = new Document();
 
 	try {
@@ -386,7 +389,7 @@ async function assembleModel(inputPath: string, outputPath: string, tileIndex: n
 								const outputTexturePath = path.join(tempTilePath, outputUri);
 								if (!fs.existsSync(outputTexturePath)) {
 									if (absoluteTexturePath.length > 0 && fs.existsSync(absoluteTexturePath)) {
-										convertToDDS(absoluteTexturePath, outputTexturePath);
+										fs.copyFileSync(absoluteTexturePath, outputTexturePath);
 									} else {
 										console.warn(`Texture file not found: ${uri}`);
 										const fallbackTexturePath = path.join(process.cwd(), 'Assets', 'dummy_tex.dds');
@@ -413,7 +416,7 @@ async function assembleModel(inputPath: string, outputPath: string, tileIndex: n
 							applyAsoboGeometryRepair(document);
 							await new NodeIO().write(tempGltfPath, document);
 
-							let errorCount = await runGltfValidator(validatorExecutable, tempGltfPath, tempReportPath);
+							let errorCount = await runGltfValidator(config.gltfValidationPath, tempGltfPath, tempReportPath);
 							let tries = 0;
 							while (tries < config.maxRepairRetries && errorCount > 0) {
 								checkAbort(control);
@@ -421,7 +424,7 @@ async function assembleModel(inputPath: string, outputPath: string, tileIndex: n
 								console.warn(`Attempt ${tries} to repair geometry for model ${name} (${modelRef.guid})`);
 								await repairDocument(document, tempGltfPath, tempReportPath);
 								await new NodeIO().write(tempGltfPath, document);
-								errorCount = await runGltfValidator(validatorExecutable, tempGltfPath, tempReportPath);
+								errorCount = await runGltfValidator(config.gltfValidationPath, tempGltfPath, tempReportPath);
 							}
 
 							if (errorCount > 0) {

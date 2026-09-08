@@ -7,6 +7,7 @@ export let config = {
 	storeDir: path.join(os.homedir(), '.scone'),
 	outputDir: path.join(os.homedir(), 'SconeOutput'),
 	gltfValidationPath: path.join('Tools', 'gltf-validator'),
+	kramPath: path.join('Tools', 'kram'),
 	maxRepairRetries: 3
 }
 
@@ -39,18 +40,11 @@ function sanitizeConfigValues(): void {
 	config.maxRepairRetries = normalizeMaxRepairRetries(config.maxRepairRetries);
 }
 
-function resolveValidatorExecutablePath(): string {
-	const platformFolder = process.platform === 'win32'
-		? 'windows'
-		: process.platform === 'darwin'
-			? 'macos'
-			: 'linux';
-	const executableName = process.platform === 'win32' ? 'gltf_validator.exe' : 'gltf_validator';
-
+function resolveToolsExecutablePath(): string {
 	const candidates = [
-		path.resolve(process.cwd(), 'dist', 'Tools', 'gltf-validator', platformFolder, executableName),
-		path.resolve(process.cwd(), 'Tools', 'gltf-validator', platformFolder, executableName),
-		path.resolve(path.dirname(process.argv[1] ?? process.cwd()), 'Tools', 'gltf-validator', platformFolder, executableName)
+		path.resolve(process.cwd(), 'dist', 'Tools'),
+		path.resolve(process.cwd(), 'Tools'),
+		path.resolve(path.dirname(process.argv[1] ?? process.cwd()), 'Tools')
 	];
 
 	const discoveredPath = candidates.find((candidate) => fs.existsSync(candidate));
@@ -58,7 +52,13 @@ function resolveValidatorExecutablePath(): string {
 }
 
 export function initializeRuntimeConfig() {
-	config.gltfValidationPath = resolveValidatorExecutablePath();
+	const platformFolder = process.platform === 'win32'
+		? 'windows'
+		: process.platform === 'darwin'
+			? 'macos'
+			: 'linux';
+	config.gltfValidationPath = path.join(resolveToolsExecutablePath(), 'gltf-validator', platformFolder, process.platform === 'win32' ? 'gltf_validator.exe' : 'gltf_validator');
+	config.kramPath = path.join(resolveToolsExecutablePath(), 'kram', platformFolder, process.platform === 'win32' ? 'kram.exe' : 'kram');
 }
 
 export async function saveConfig() {
