@@ -483,7 +483,7 @@ async function assembleModel(inputPath: string, outputPath: string, tileIndex: n
 	await tileDocument.transform(dedup(), instance(), flatten(), join(), weld(), resample(), sparse(), prune({ keepAttributes: true }), unpartition());
 	await new NodeIO().write(path.join(outputPath, getFilePathFromTileIndex(tileIndex), `${tileIndex}.gltf`), tileDocument);
 	fs.writeFileSync(
-		path.join(outputPath, getFilePathFromTileIndex(tileIndex), `${tileIndex}.stg`),
+		path.join(outputPath, 'Objects', getFilePathFromTileIndex(tileIndex), `${tileIndex}.stg`),
 		`OBJECT_STATIC ${tileIndex}.gltf ${center[1]} ${center[0]} ${center[2]} 270 0 90`
 	);
 }
