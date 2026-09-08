@@ -1,15 +1,15 @@
-import { getTileIndexFromCoord, getCoordFromTileIndex, getAltitude, getFilePathFromTileIndex } from './terrain.js';
+import { getTileIndexFromCoord, getCoordFromTileIndex, getFilePathFromTileIndex } from './terrain.js';
 import { LibraryObject, SimObject, Flags, Airport, Tower, Runway, RunwayStart, TaxiwayPoint, TaxiwayParking, TaxiwayPath, TaxiwayPathType, Apron, TaxiwaySign, PaintedLine, PaintedHatchedArea, ApronEdgeLights, Helipad, ProjectedMesh, ModelReference } from './structures.js'
 import { config } from './config.js';
-import { applyAsoboGeometryRepair, repairDocument, optimizeDocument } from './repair.js';
+import { applyAsoboGeometryRepair, repairDocument } from './repair.js';
 import * as fs from 'fs';
 import * as path from 'path';
 import { create } from 'xmlbuilder2';
 import { vec3, mat4 } from 'gl-matrix';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
-import { Document, NodeIO, type mat4 as GltfMat4 } from '@gltf-transform/core';
-import { dedup, instance, flatten, join, weld, resample, prune, sparse, unpartition, transformMesh, mergeDocuments, cloneDocument } from '@gltf-transform/functions';
+import { Document, NodeIO, type mat4 as GltfMat4, Node, Scene } from '@gltf-transform/core';
+import { dedup, instance, flatten, join, weld, resample, prune, sparse, unpartition, mergeDocuments } from '@gltf-transform/functions';
 
 const execFileAsync = promisify(execFile);
 
@@ -179,8 +179,8 @@ function getFilesRecursive(dir: string, extension: string, caseSensitive: boolea
 function createPlacementTransform(center: vec3, position: vec3, orientation: vec3, scale: vec3): mat4 {
 	const deg2rad = Math.PI / 180.0;
 	const transform = mat4.create();
-	const lonOffsetMeters = -(position[1] - center[1]) * 111320.0 * Math.cos(center[0] * deg2rad);
-	const latOffsetMeters = (position[0] - center[0]) * 110540.0;
+	const lonOffsetMeters = -(position[0] - center[0]) * 111320.0 * Math.cos(center[1] * deg2rad);
+	const latOffsetMeters = (position[1] - center[1]) * 110540.0;
 	mat4.translate(transform, transform, vec3.fromValues(latOffsetMeters, lonOffsetMeters, position[2] - center[2]));
 	mat4.rotateZ(transform, transform, orientation[2] * deg2rad);
 	mat4.rotateX(transform, transform, orientation[0] * deg2rad);
@@ -226,7 +226,7 @@ async function assembleModel(inputPath: string, outputPath: string, tileIndex: n
 	fs.mkdirSync(tempTilePath, { recursive: true });
 	const validatorExecutable = config.gltfValidationPath;
 	const tileDocument: Document = new Document();
-	let mergeSequence = 0;
+
 	try {
 		for (const modelRef of modelReferences) {
 			const tempBinPath = path.join(tempTilePath, `temp-${modelRef.guid}.bin`);
@@ -234,7 +234,7 @@ async function assembleModel(inputPath: string, outputPath: string, tileIndex: n
 			const tempReportPath = path.join(tempTilePath, `temp-${modelRef.guid}.gltf.report.json`);
 			checkAbort(control);
 			reportStatus(control, `Processing model source ${path.basename(modelRef.file)}...`);
-			// TODO: increase the model count here, without making this object-oriented
+
 			const libraryObjectsForModel = libraryObjects.get(modelRef.guid) || [];
 			const modelFileBuffer = fs.readFileSync(modelRef.file);
 			if (modelRef.offset < 0 || modelRef.offset + modelRef.size > modelFileBuffer.byteLength) {
@@ -245,13 +245,13 @@ async function assembleModel(inputPath: string, outputPath: string, tileIndex: n
 			const fileBuffer = modelFileBuffer.subarray(modelRef.offset, modelRef.offset + modelRef.size);
 			const fileView: DataView = new DataView(fileBuffer.buffer, fileBuffer.byteOffset, fileBuffer.byteLength);
 			console.debug(`Model reference: ${modelRef.file} at offset 0x${modelRef.offset.toString(16)} size ${modelRef.size} guid ${modelRef.guid}`);
+
 			let name = '';
 			const chunkID: string = readFourCC(fileBuffer, 0);
 			if (chunkID !== 'RIFF') {
 				continue;
 			}
 
-			// Enter this model and get LOD info, GLB files, and mesh data
 			for (let i = 8; i + 8 <= fileBuffer.byteLength; i += 4) {
 				const chunk = readFourCC(fileBuffer, i);
 				let glbIndex = 0; // for unique filenames per GLB in this chunk
@@ -278,6 +278,7 @@ async function assembleModel(inputPath: string, outputPath: string, tileIndex: n
 						// The highest LOD is the first GLB; break after processing it
 						break;
 					}
+
 					reportStatus(control, `Converting ${name || modelRef.guid}...`);
 					console.info(`Processing GLBD chunk for model ${name} (${modelRef.guid}) in ${modelRef.file}`);
 					const size: number = fileView.getUint32(i + 4, true);
@@ -429,7 +430,6 @@ async function assembleModel(inputPath: string, outputPath: string, tileIndex: n
 								continue;
 							}
 
-							let placementIndex = 0;
 							for (const libObj of libraryObjectsForModel) {
 								if (getTileIndexFromCoord(libObj.position[1], libObj.position[0]) !== tileIndex) {
 									continue;
@@ -437,24 +437,36 @@ async function assembleModel(inputPath: string, outputPath: string, tileIndex: n
 
 								const uniformScale = Number.isFinite(libObj.scale) ? libObj.scale : 1;
 								const transform: mat4 = createPlacementTransform(center, libObj.position, libObj.orientation, [uniformScale, uniformScale, uniformScale]);
-								const placedDocument = cloneDocument(document);
-
-								for (const mesh of placedDocument.getRoot().listMeshes()) {
-									transformMesh(mesh, toGltfMat4(transform));
+								const map = mergeDocuments(tileDocument, document);
+								const sourceScene = document.getRoot().listScenes()[0];
+								if (!sourceScene) {
+									continue;
 								}
 
-								const buffers = placedDocument.getRoot().listBuffers();
-								for (let bufferIndex = 0; bufferIndex < buffers.length; bufferIndex++) {
-									buffers[bufferIndex].setURI(`${tileIndex}_${mergeSequence}_${bufferIndex}.bin`);
+								// Find original Scene.
+								const sceneA = tileDocument.getRoot().listScenes()[0] ?? tileDocument.createScene();
+
+								// Find counterpart of the source Scene in the target Document.
+								const sceneB = map.get(sourceScene);
+								if (!(sceneB instanceof Scene)) {
+									continue;
 								}
 
-								mergeDocuments(tileDocument, placedDocument);
-								mergeSequence++;
-								placementIndex++;
+								// Create a Node, and append source Scene's direct children.
+								const rootNode = tileDocument.createNode().setName(name).setMatrix(toGltfMat4(transform));
+								for (const node of sceneB.listChildren()) {
+									rootNode.addChild(node);
+								}
+
+								// Append Node to original Scene, and dispose the empty Scene.
+								sceneA.addChild(rootNode);
+								if (sceneB !== sceneA) {
+									sceneB.dispose();
+								}
 							}
 
-							glbIndex++;
 							j += 8 + glbSize;
+							continue;
 						} else {
 							j += 4;
 						}
@@ -466,6 +478,7 @@ async function assembleModel(inputPath: string, outputPath: string, tileIndex: n
 	} finally {
 		fs.rmSync(tempTilePath, { recursive: true, force: true });
 	}
+
 	fs.mkdirSync(path.join(outputPath, getFilePathFromTileIndex(tileIndex)), { recursive: true });
 	await tileDocument.transform(dedup(), instance(), flatten(), join(), weld(), resample(), sparse(), prune({ keepAttributes: true }), unpartition());
 	await new NodeIO().write(path.join(outputPath, getFilePathFromTileIndex(tileIndex), `${tileIndex}.gltf`), tileDocument);
@@ -474,6 +487,7 @@ async function assembleModel(inputPath: string, outputPath: string, tileIndex: n
 		`OBJECT_STATIC ${tileIndex}.gltf ${center[1]} ${center[0]} ${center[2]} 270 0 90`
 	);
 }
+
 
 export async function convertScenery(inputPath: string, outputPath: string, control?: ConversionControl): Promise<void> {
 	if (!fs.existsSync(inputPath)) {
