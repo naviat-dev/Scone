@@ -380,7 +380,7 @@ async function assembleModel(inputPath: string, outputPath: string, tileIndex: n
 								const outputUri = `${path.basename(uri, path.extname(uri))}.DDS`;
 								image.uri = outputUri;
 								const extras = (image.extras && typeof image.extras === 'object')
-									? image.extras as Record<string, unknown>
+									? image.extras
 									: {};
 								const absoluteTexturePath = resolveAbsoluteTexturePath(inputPath, modelRef.file, uri);
 								extras.absolutePath = absoluteTexturePath;
@@ -388,8 +388,9 @@ async function assembleModel(inputPath: string, outputPath: string, tileIndex: n
 
 								const outputTexturePath = path.join(tempTilePath, outputUri);
 								if (!fs.existsSync(outputTexturePath)) {
-									if (absoluteTexturePath.length > 0 && fs.existsSync(absoluteTexturePath)) {
-										fs.copyFileSync(absoluteTexturePath, outputTexturePath);
+									if (fs.existsSync(absoluteTexturePath)) {
+										convertToDDS(absoluteTexturePath, outputTexturePath);
+										// fs.copyFileSync(absoluteTexturePath, outputTexturePath);
 									} else {
 										console.warn(`Texture file not found: ${uri}`);
 										const fallbackTexturePath = path.join(process.cwd(), 'Assets', 'dummy_tex.dds');

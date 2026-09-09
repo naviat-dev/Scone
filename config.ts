@@ -7,7 +7,6 @@ export let config = {
 	storeDir: path.join(os.homedir(), '.scone'),
 	outputDir: path.join(os.homedir(), 'SconeOutput'),
 	gltfValidationPath: path.join('Tools', 'gltf-validator'),
-	kramPath: path.join('Tools', 'kram'),
 	maxRepairRetries: 3
 }
 
@@ -58,7 +57,6 @@ export function initializeRuntimeConfig() {
 			? 'macos'
 			: 'linux';
 	config.gltfValidationPath = path.join(resolveToolsExecutablePath(), 'gltf-validator', platformFolder, process.platform === 'win32' ? 'gltf_validator.exe' : 'gltf_validator');
-	config.kramPath = path.join(resolveToolsExecutablePath(), 'kram', platformFolder, process.platform === 'win32' ? 'kram.exe' : 'kram');
 }
 
 export async function saveConfig() {
