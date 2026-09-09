@@ -11,6 +11,8 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { Document, NodeIO, type mat4 as GltfMat4, Node, Scene } from '@gltf-transform/core';
 import { dedup, instance, flatten, join, weld, resample, prune, sparse, unpartition, mergeDocuments } from '@gltf-transform/functions';
+// @ts-expect-error gltf-validator does not provide TypeScript declarations.
+import validator from 'gltf-validator';
 
 const execFileAsync = promisify(execFile);
 
@@ -114,57 +116,6 @@ function parseValidatorErrorCount(report: unknown): number {
 
 	const numErrors = (report as { issues?: { numErrors?: number } })?.issues?.numErrors;
 	return typeof numErrors === 'number' ? numErrors : 0;
-}
-
-async function runGltfValidator(validatorExecutable: string, modelPath: string, reportPath: string): Promise<number> {
-	let stdoutText = '';
-	let stderrText = '';
-	let executionErrorMessage = '';
-
-	try {
-		const result = await execFileAsync(validatorExecutable, ['--no-validate-resources', '-a', modelPath], {
-			maxBuffer: 10 * 1024 * 1024,
-		});
-		stdoutText = `${result.stdout ?? ''}`;
-		stderrText = `${result.stderr ?? ''}`;
-	} catch (error) {
-		const execError = error as { stdout?: string | Buffer; stderr?: string | Buffer; message?: string };
-		stdoutText = `${execError.stdout ?? ''}`;
-		stderrText = `${execError.stderr ?? execError.message ?? ''}`;
-		executionErrorMessage = execError.message ?? '';
-	}
-
-	if (stderrText.trim().length > 0) {
-		console.error(`Validator stderr: ${stderrText}`);
-	}
-
-	const reportText = stdoutText.trim().length > 0
-		? stdoutText
-		: fs.existsSync(reportPath)
-			? fs.readFileSync(reportPath, 'utf-8')
-			: '{}';
-
-	if (stdoutText.trim().length === 0 && !fs.existsSync(reportPath) && executionErrorMessage.length > 0) {
-		throw new Error(`Failed to run glTF validator at ${validatorExecutable}: ${executionErrorMessage}`);
-	}
-
-	let report: unknown;
-	try {
-		report = JSON.parse(reportText) as unknown;
-	} catch {
-		if (fs.existsSync(reportPath)) {
-			report = JSON.parse(fs.readFileSync(reportPath, 'utf-8')) as unknown;
-		} else {
-			throw new Error(`glTF validator did not produce valid JSON output for ${modelPath}`);
-		}
-	}
-
-	fs.writeFileSync(reportPath, JSON.stringify(report, null, 2), 'utf-8');
-	return parseValidatorErrorCount(report);
-}
-
-async function runKram(kramExecutable: string, inputPath: string, outputPath: string) {
-	
 }
 
 function getFilesRecursive(dir: string, extension: string, caseSensitive: boolean): string[] {
@@ -390,7 +341,6 @@ async function assembleModel(inputPath: string, outputPath: string, tileIndex: n
 								if (!fs.existsSync(outputTexturePath)) {
 									if (fs.existsSync(absoluteTexturePath)) {
 										convertToDDS(absoluteTexturePath, outputTexturePath);
-										// fs.copyFileSync(absoluteTexturePath, outputTexturePath);
 									} else {
 										console.warn(`Texture file not found: ${uri}`);
 										const fallbackTexturePath = path.join(process.cwd(), 'Assets', 'dummy_tex.dds');
@@ -417,20 +367,24 @@ async function assembleModel(inputPath: string, outputPath: string, tileIndex: n
 							applyAsoboGeometryRepair(document);
 							await new NodeIO().write(tempGltfPath, document);
 
-							let errorCount = await runGltfValidator(config.gltfValidationPath, tempGltfPath, tempReportPath);
+							let validation: any = await validator.validateString(JSON.stringify(json), {
+								ignoredIssues: ['IO_ERROR', 'TEXTURE_INVALID_IMAGE_MIME_TYPE']
+							});
 							let tries = 0;
-							while (tries < config.maxRepairRetries && errorCount > 0) {
+							while (tries < config.maxRepairRetries && validation.issues.numErrors > 0) {
 								checkAbort(control);
 								tries++;
-								console.warn(`Attempt ${tries} to repair geometry for model ${name} (${modelRef.guid})`);
-								await repairDocument(document, tempGltfPath, tempReportPath);
+								console.warn(`Attempt ${tries} to fix ${validation.issues.numErrors} errors for model ${name} (${modelRef.guid})`);
+								await repairDocument(document, tempGltfPath, validation.issues.messages);
 								await new NodeIO().write(tempGltfPath, document);
-								errorCount = await runGltfValidator(config.gltfValidationPath, tempGltfPath, tempReportPath);
+								validation = await validator.validateString(fs.readFileSync(tempGltfPath, 'utf-8'), {
+									ignoredIssues: ['IO_ERROR', 'TEXTURE_INVALID_IMAGE_MIME_TYPE']
+								});
 							}
 
-							if (errorCount > 0) {
+							if (validation.issues.numErrors > 0) {
 								console.error(`Failed to repair geometry for model ${name} (${modelRef.guid}) after ${tries} attempts`);
-								const issues = JSON.parse(fs.readFileSync(tempReportPath, 'utf-8')).issues?.messages ?? [];
+								const issues = validation.issues.messages ?? [];
 								for (const error of issues) {
 									if (error.severity === 0) {
 										console.error(`${error.code} at ${error.pointer}: ${error.message}`);
@@ -643,17 +597,11 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 				};
 				const size = fileView.getUint32(address, true);
 				address += 4;
-				const runwayCt = fileView.getUint8(address);
 				address += 1;
-				const comCt = fileView.getUint8(address);
 				address += 1;
-				const startCt = fileView.getUint8(address);
 				address += 1;
-				const appCt = fileView.getUint8(address);
 				address += 1;
-				const legacyApronCt = fileView.getUint8(address);
 				address += 1;
-				const helipadCt = fileView.getUint8(address);
 				address += 1;
 				airport.longitude = (fileView.getUint32(address, true) * (360.0 / 805306368.0)) - 180.0;
 				address += 4;
@@ -673,17 +621,11 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 				address += 4;
 				airport.regIdent = convertIcaoBytesToString(fileView.getUint32(address, true));
 				address = subrecord[0] + bytesRead + 0x37; // Skip ahead to departure count
-				const departureCt = fileView.getUint8(address);
 				address = subrecord[0] + bytesRead + 0x39; // Skip ahead to arrival count
-				const arrivalCt = fileView.getUint8(address);
 				address = subrecord[0] + bytesRead + 0x3c; // Skip ahead to remaining useful records
-				const apronCt = fileView.getUint16(address, true);
 				address += 2;
-				const paintedLineCt = fileView.getUint16(address, true);
 				address += 2;
-				const paintedPolygonCt = fileView.getUint16(address, true);
 				address += 2;
-				const paintedHatchedAreaCt = fileView.getUint16(address, true);
 				address += 2;
 				let airportBytesRead = 0x44; // Start with 0x44 bytes we've already read
 
@@ -1390,7 +1332,6 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 			address += 0x0C;
 			const startSubsection = fileView.getUint32(address, true);
 			address += 4;
-			const recSize = fileView.getUint32(address, true);
 			address += 8;
 			if (recType === 0x002B) { // ModelData
 				mdlDataOffsets.push(startSubsection);
@@ -1457,7 +1398,6 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 	for (const [tileIndex, modelReferences] of modelReferencesByTile.entries()) {
 		checkAbort(control);
 		reportStatus(control, `Converting tile ${tileIndex}...`);
-		const animations = [];
 		const simObjectsForTile: SimObject[] = [];
 		let center: vec3 = [0, 0, 0];
 		for (const simObject of simObjects) {

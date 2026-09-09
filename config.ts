@@ -6,7 +6,6 @@ export let config = {
 	tempDir: path.join(os.tmpdir(), 'scone'),
 	storeDir: path.join(os.homedir(), '.scone'),
 	outputDir: path.join(os.homedir(), 'SconeOutput'),
-	gltfValidationPath: path.join('Tools', 'gltf-validator'),
 	maxRepairRetries: 3
 }
 
@@ -56,7 +55,6 @@ export function initializeRuntimeConfig() {
 		: process.platform === 'darwin'
 			? 'macos'
 			: 'linux';
-	config.gltfValidationPath = path.join(resolveToolsExecutablePath(), 'gltf-validator', platformFolder, process.platform === 'win32' ? 'gltf_validator.exe' : 'gltf_validator');
 }
 
 export async function saveConfig() {

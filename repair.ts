@@ -499,16 +499,11 @@ function normalizeMsftTextureSources(modelPath: string): number {
     return patchedTextureCount;
 }
 
-export async function repairDocument(document: Document, modelPath: string, issuesJsonPath: string): Promise<Document> {
+export async function repairDocument(document: Document, modelPath: string, issues: RepairIssue[]): Promise<Document> {
     if (!fs.existsSync(modelPath)) {
         throw new Error(`Model file does not exist: ${modelPath}`);
     }
 
-    if (!fs.existsSync(issuesJsonPath)) {
-        throw new Error(`Issues JSON file does not exist: ${issuesJsonPath}`);
-    }
-
-    const issues = JSON.parse(fs.readFileSync(issuesJsonPath, 'utf8'))["issues"]["messages"] as RepairIssue[];
     const patchedTextureCount = normalizeMsftTextureSources(modelPath);
     if (patchedTextureCount > 0) {
         console.log(`Patched ${patchedTextureCount} texture source references from MSFT_texture_dds.`);
