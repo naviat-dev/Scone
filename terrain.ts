@@ -46,6 +46,6 @@ export function getFilePathFromTileIndex(index: number): string {
 	const lonHemi = coord.lon >= 0 ? 'e' : 'w';
 	const latHemi = coord.lat >= 0 ? 'n' : 's';
 	return path.join(
-		`${lonHemi}${Math.abs(Math.floor(coord.lon / 10)) * 10}${latHemi}${Math.abs(Math.floor(coord.lat / 10)) * 10}`,
-		`${lonHemi}${Math.abs(Math.floor(coord.lon))}${latHemi}${Math.abs(Math.floor(coord.lat))}`);
+		`${lonHemi}${(Math.abs(Math.floor(coord.lon / 10)) * 10).toString().padStart(3, '0')}${latHemi}${(Math.abs(Math.floor(coord.lat / 10)) * 10).toString().padStart(2, '0')}`,
+		`${lonHemi}${Math.abs(Math.floor(coord.lon)).toString().padStart(3, '0')}${latHemi}${Math.abs(Math.floor(coord.lat)).toString().padStart(2, '0')}`);
 }
