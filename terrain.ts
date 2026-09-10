@@ -1,6 +1,11 @@
 import path from 'path';
+import fs from 'fs';
+import { findAltitudeMeters } from './terrain-elev.js';
+import { config } from './config.js';
 
 const latitudeIndex = [[89, 12], [86, 4], [83, 2], [76, 1], [62, 0.5], [22, 0.25], [0, 0.125]];
+const terrasyncUrl = 'https://terrasync.b-cdn.net/Terrain';
+const ftToMeters = 0.3048;
 
 function getTileWidth(input: number): number {
 	for (let i = 0; i < latitudeIndex.length; i++) {
@@ -36,9 +41,68 @@ export function getCoordFromTileIndex(index: number): { lat: number, lon: number
 	return { lat, lon };
 }
 
+async function request(url: string, options?: RequestInit): Promise<Response> {
+	let response = await fetch(url, options);
+	let tries: number = 1;
+	while (!response.ok && response.status !== 404 && tries < config.maxTileRetries) {
+		tries++;
+		await new Promise(resolve => setTimeout(resolve, 1000)); // Wait for 1 second before retrying
+		response = await fetch(url, options);
+	}
+	return response;
+}
+
 export async function getAltitude(lat: number, lon: number, version: number): Promise<number> {
-	const response = await fetch(`https://51-68-215-9.sslip.io/api/elevation?lat=${lat}&lon=${lon}`);
-	return (await response.json())['altitudeFt'];
+	let absoluteTilePath = '';
+	const index = getTileIndexFromCoord(lat, lon);
+	const tileFilePath = getFilePathFromTileIndex(index);
+	const tileUrlPath = getFilePathFromTileIndex(index).replace(path.sep, '/');
+	for (const dir of config.sceneryDirectories.concat([config.tempDir])) {
+		const candidatePath = path.join(dir, 'Terrain', tileFilePath, `${index}.stg`);
+		if (fs.existsSync(candidatePath)) {
+			absoluteTilePath = candidatePath;
+			break;
+		}
+	}
+	if (!absoluteTilePath) {
+		if (config.deadTiles.includes(index)) {
+			return 0;
+		}
+		const folderUrl = `${terrasyncUrl}/${tileUrlPath}`;
+		const stgUrl = `${folderUrl}/${index}.stg`;
+		let response = await request(stgUrl, { method: 'GET' });
+		if (response.ok) {
+			const buffer = Buffer.from(await response.arrayBuffer());
+			const terrainFiles = buffer.toString('utf-8').split('\n').map(line => line.split(' ')[1]).filter(name => (name ?? '').endsWith('.btg'));
+			fs.mkdirSync(path.join(config.tempDir, 'Terrain', tileFilePath), { recursive: true });
+			fs.writeFileSync(path.join(config.tempDir, 'Terrain', tileFilePath, `${index}.stg`), buffer);
+			for (const terrainFile of terrainFiles) {
+				const terrainUrl = `${folderUrl}/${terrainFile}.gz`;
+				response = await request(terrainUrl, { method: 'GET' });
+				if (response.ok) {
+					const terrainBuffer = Buffer.from(await response.arrayBuffer());
+					fs.mkdirSync(path.join(config.tempDir, 'Terrain', tileFilePath), { recursive: true });
+					fs.writeFileSync(path.join(config.tempDir, 'Terrain', tileFilePath, `${terrainFile}.gz`), terrainBuffer);
+				}
+				else {
+					throw new Error(`Failed to fetch terrain file: ${response.status} ${response.statusText}`);
+				}
+			}
+		} else if (response.status === 404) {
+			config.deadTiles.push(index);
+			return 0;
+		} else {
+			throw new Error(`Failed to fetch terrain tile: ${response.status} ${response.statusText}`);
+		}
+		absoluteTilePath = path.join(config.tempDir, 'Terrain', tileFilePath, `${index}.stg`);
+	}
+	for (const terrainFile of fs.readFileSync(absoluteTilePath).toString('utf-8').split('\n').map(line => line.split(' ')[1]).filter(name => (name ?? '').endsWith('.btg'))) {
+		const altitude = findAltitudeMeters(path.join(path.dirname(absoluteTilePath), `${terrainFile}.gz`), lat, lon, version);
+		if (altitude !== null) {
+			return altitude * ftToMeters;
+		}
+	}
+	return 0;
 }
 
 export function getFilePathFromTileIndex(index: number): string {

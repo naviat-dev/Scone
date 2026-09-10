@@ -6,7 +6,11 @@ export let config = {
 	tempDir: path.join(os.tmpdir(), 'scone'),
 	storeDir: path.join(os.homedir(), '.scone'),
 	outputDir: path.join(os.homedir(), 'SconeOutput'),
-	maxRepairRetries: 3
+	fgPath: '',
+	sceneryDirectories: [] as string[],
+	deadTiles: [] as number[],
+	maxRepairRetries: 3,
+	maxTileRetries: 3,
 }
 
 const MAX_REPAIR_RETRY_LIMIT = 100;

@@ -1,4 +1,4 @@
-import { getTileIndexFromCoord, getCoordFromTileIndex, getFilePathFromTileIndex } from './terrain.js';
+import { getTileIndexFromCoord, getCoordFromTileIndex, getFilePathFromTileIndex, getAltitude } from './terrain.js';
 import { LibraryObject, SimObject, Flags, Airport, Tower, Runway, RunwayStart, TaxiwayPoint, TaxiwayParking, TaxiwayPath, TaxiwayPathType, Apron, TaxiwaySign, PaintedLine, PaintedHatchedArea, ApronEdgeLights, Helipad, ProjectedMesh, ModelReference } from './structures.js'
 import { config } from './config.js';
 import { applyAsoboGeometryRepair, repairDocument } from './repair.js';
@@ -8,7 +8,7 @@ import * as path from 'path';
 import { create } from 'xmlbuilder2';
 import { vec3, quat } from 'gl-matrix';
 import { Document, NodeIO, Scene } from '@gltf-transform/core';
-import { dedup, instance, flatten, join, weld, resample, prune, sparse, unpartition, mergeDocuments } from '@gltf-transform/functions';
+import { dedup, flatten, join, weld, resample, prune, sparse, unpartition, mergeDocuments } from '@gltf-transform/functions';
 // @ts-expect-error gltf-validator does not provide TypeScript declarations.
 import validator from 'gltf-validator';
 
@@ -45,7 +45,7 @@ function getViewBytes(fileView: DataView, address: number, length: number): Uint
 	return new Uint8Array(fileView.buffer, fileView.byteOffset + address, length);
 }
 
-function buildLibraryObject(fileView: DataView, address: number): LibraryObject {
+async function buildLibraryObject(fileView: DataView, address: number): Promise<LibraryObject> {
 	const longitude = (fileView.getInt32(address + 4, true) * (360.0 / 805306368.0)) - 180.0;
 	const latitude = 90.0 - (fileView.getInt32(address + 8, true) * (180.0 / 536870912.0));
 	let altitude = fileView.getInt32(address + 12, true) / 1000;
@@ -58,10 +58,13 @@ function buildLibraryObject(fileView: DataView, address: number): LibraryObject 
 	const imageComplexity = fileView.getUint16(address + 24, true);
 	const guid = getGuidFromBytes(getViewBytes(fileView, address + 44, 16));
 	const scale = fileView.getFloat32(address + 60, true);
+	if (flags.includes(Flags.IsAboveAGL)) {
+		altitude += await getAltitude(longitude, latitude, 2);
+	}
 	return { position: [longitude, latitude, altitude], flags, orientation: [pitch, bank, heading], imageComplexity, guid, scale };
 }
 
-function buildSimObject(fileView: DataView, address: number): SimObject {
+async function buildSimObject(fileView: DataView, address: number): Promise<SimObject> {
 	const longitude = (fileView.getInt32(address + 4, true) * (360.0 / 805306368.0)) - 180.0;
 	const latitude = 90.0 - (fileView.getInt32(address + 8, true) * (180.0 / 536870912.0));
 	let altitude = fileView.getInt32(address + 12, true) / 1000;
@@ -77,6 +80,9 @@ function buildSimObject(fileView: DataView, address: number): SimObject {
 	const containerPathLength = fileView.getUint16(address + 50, true);
 	const containerTitle = new TextDecoder().decode(getViewBytes(fileView, address + 52, containerTitleLength));
 	const containerPath = new TextDecoder().decode(getViewBytes(fileView, address + 52 + containerTitleLength, containerPathLength));
+	if (flags.includes(Flags.IsAboveAGL)) {
+		altitude += await getAltitude(longitude, latitude, 2);
+	}
 	return { position: [longitude, latitude, altitude], flags, orientation: [pitch, bank, heading], imageComplexity, containerTitle, containerPath, scale };
 }
 
@@ -440,7 +446,7 @@ async function assembleModel(inputPath: string, outputPath: string, tileIndex: n
 
 	reportStatus(control, 'Writing to disk...');
 	fs.mkdirSync(path.join(outputPath, 'Objects', getFilePathFromTileIndex(tileIndex)), { recursive: true });
-	await tileDocument.transform(dedup(), instance(), join(), weld(), resample(), sparse(), prune({ keepAttributes: true }), unpartition());
+	await tileDocument.transform(dedup(), flatten(), join(), weld(), resample(), sparse(), prune({ keepAttributes: true }), unpartition());
 	await new NodeIO().write(path.join(outputPath, 'Objects', getFilePathFromTileIndex(tileIndex), `${tileIndex}.gltf`), tileDocument);
 	fs.writeFileSync(
 		path.join(outputPath, 'Objects', getFilePathFromTileIndex(tileIndex), `${tileIndex}.stg`),
@@ -463,8 +469,8 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 	const allBglFiles: string[] = getFilesRecursive(inputPath, '.bgl', false);
 
 	let totalModelCount: number = 0;
-
 	let totalLibraryObjects: number = 0;
+
 	for (const file of allBglFiles) {
 		checkAbort(control);
 		reportStatus(control, `Looking for placements in ${path.basename(file)}...`);
@@ -521,14 +527,14 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 				address += 2;
 				if (id === 0x0B) { // LibraryObject
 					address -= 4; // Reverse back to get all of the bytes
-					const libraryObject = buildLibraryObject(fileView, address);
+					const libraryObject = await buildLibraryObject(fileView, address);
 					if (!libraryObjects.has(libraryObject.guid)) {
 						libraryObjects.set(libraryObject.guid, []);
 					}
 					libraryObjects.get(libraryObject.guid)!.push(libraryObject);
 				} else if (id === 0x19) { //SimObject
 					address -= 4; // Reverse back to get all of the bytes
-					const simObject = buildSimObject(fileView, address);
+					const simObject = await buildSimObject(fileView, address);
 					if (!simObjects.has(simObject.containerTitle)) {
 						simObjects.set(simObject.containerTitle, []);
 					}
@@ -541,6 +547,7 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 					continue;
 				}
 				totalLibraryObjects++;
+				reportStatus(control, `Looking for placements in ${path.basename(file)}... found ${totalLibraryObjects}`);
 				bytesRead += size;
 			}
 		}
@@ -1133,7 +1140,7 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 							if (sceneryObjectLength1 > 0) {
 								const sceneryObjectBytes = getViewBytes(fileView, address, sceneryObjectLength1);
 								if (new DataView(sceneryObjectBytes.buffer, sceneryObjectBytes.byteOffset, sceneryObjectBytes.byteLength).getUint16(0, true) == 0x000b) {
-									const libObj: LibraryObject = buildLibraryObject(fileView, address);
+									const libObj: LibraryObject = await buildLibraryObject(fileView, address);
 									if (libraryObjects.has(libObj.guid)) {
 										libraryObjects.get(libObj.guid)!.push(libObj);
 									}
@@ -1142,7 +1149,7 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 									}
 								}
 								else if (new DataView(sceneryObjectBytes.buffer, sceneryObjectBytes.byteOffset, sceneryObjectBytes.byteLength).getUint16(0, true) == 0x0019) {
-									const simObj = buildSimObject(fileView, address);
+									const simObj = await buildSimObject(fileView, address);
 									if (simObjects.has(simObj.containerTitle)) {
 										simObjects.get(simObj.containerTitle)!.push(simObj);
 									}
@@ -1158,7 +1165,7 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 							if (sceneryObjectLength2 > 0) {
 								const sceneryObjectBytes = getViewBytes(fileView, address, sceneryObjectLength2);
 								if (new DataView(sceneryObjectBytes.buffer, sceneryObjectBytes.byteOffset, sceneryObjectBytes.byteLength).getUint16(0, true) == 0x000b) {
-									const libObj: LibraryObject = buildLibraryObject(fileView, address);
+									const libObj: LibraryObject = await buildLibraryObject(fileView, address);
 									if (libraryObjects.has(libObj.guid)) {
 										libraryObjects.get(libObj.guid)!.push(libObj);
 									}
@@ -1167,7 +1174,7 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 									}
 								}
 								else if (new DataView(sceneryObjectBytes.buffer, sceneryObjectBytes.byteOffset, sceneryObjectBytes.byteLength).getUint16(0, true) == 0x0019) {
-									const simObj = buildSimObject(fileView, address);
+									const simObj = await buildSimObject(fileView, address);
 									if (simObjects.has(simObj.containerTitle)) {
 										simObjects.get(simObj.containerTitle)!.push(simObj);
 									}
@@ -1283,7 +1290,7 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 							const subRecordSize = fileView.getUint16(address, true);
 							address += 2;
 							if (fileView.getInt16(address, true) == 0x000b) {
-								projectedMesh.libraryObject = buildLibraryObject(fileView, address);
+								projectedMesh.libraryObject = await buildLibraryObject(fileView, address);
 							}
 							address += subRecordSize;
 							airport.projectedMeshes.push(projectedMesh);
@@ -1377,6 +1384,8 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 						size: modelDataSize
 					});
 				}
+				totalModelCount++;
+				reportStatus(control, `Looking for models in ${path.basename(file)}... found ${totalModelCount}`);
 				address = subrecord[0] + startModelDataOffset + modelDataSize;
 				bytesRead += modelDataSize + 24;
 				objectsRead++;
