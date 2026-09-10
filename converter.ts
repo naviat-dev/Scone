@@ -6,15 +6,12 @@ import { convertToDDS } from './texconv.js'
 import * as fs from 'fs';
 import * as path from 'path';
 import { create } from 'xmlbuilder2';
-import { vec3, mat4, quat } from 'gl-matrix';
-import { execFile } from 'child_process';
-import { promisify } from 'util';
-import { Document, NodeIO, type mat4 as GltfMat4, Node, Scene } from '@gltf-transform/core';
+import { vec3, quat } from 'gl-matrix';
+import { Document, NodeIO, Scene } from '@gltf-transform/core';
 import { dedup, instance, flatten, join, weld, resample, prune, sparse, unpartition, mergeDocuments } from '@gltf-transform/functions';
 // @ts-expect-error gltf-validator does not provide TypeScript declarations.
 import validator from 'gltf-validator';
 
-const execFileAsync = promisify(execFile);
 
 export type ConversionAbortMode = 'save' | 'discard';
 
@@ -108,15 +105,6 @@ function readFourCC(buffer: Uint8Array, offset: number): string {
 	return Buffer.from(buffer.subarray(offset, offset + 4)).toString('ascii');
 }
 
-function parseValidatorErrorCount(report: unknown): number {
-	const messages = (report as { issues?: { messages?: Array<{ severity?: number }>; numErrors?: number } })?.issues?.messages;
-	if (Array.isArray(messages)) {
-		return messages.filter((message) => message?.severity === 0).length;
-	}
-
-	const numErrors = (report as { issues?: { numErrors?: number } })?.issues?.numErrors;
-	return typeof numErrors === 'number' ? numErrors : 0;
-}
 
 function getFilesRecursive(dir: string, extension: string, caseSensitive: boolean): string[] {
 	const result: string[] = [];
@@ -130,33 +118,6 @@ function getFilesRecursive(dir: string, extension: string, caseSensitive: boolea
 		}
 	}
 	return result;
-}
-
-function createPlacementTransform(center: vec3, position: vec3, orientation: vec3, scale: vec3): mat4 {
-	const deg2rad: number = Math.PI / 180.0;
-	const transform: mat4 = mat4.create();
-
-	const lonOffsetMeters = -(position[0] - center[0]) * 111320.0 * Math.cos(center[1] * deg2rad);
-	const latOffsetMeters = (position[1] - center[1]) * 110540.0;
-	const altOffsetMeters = position[2] - center[2];
-
-	mat4.fromRotationTranslationScale(
-		transform,
-		quat.fromEuler(quat.create(), orientation[0], orientation[1], orientation[2]),
-		[lonOffsetMeters, altOffsetMeters, latOffsetMeters],
-		scale
-	);
-
-	return transform;
-}
-
-function toGltfMat4(matrix: mat4): GltfMat4 {
-	return [
-		matrix[0], matrix[1], matrix[2], matrix[3],
-		matrix[4], matrix[5], matrix[6], matrix[7],
-		matrix[8], matrix[9], matrix[10], matrix[11],
-		matrix[12], matrix[13], matrix[14], matrix[15],
-	];
 }
 
 function resolveAbsoluteTexturePath(inputPath: string, file: string, textureUri: string): string {
@@ -191,7 +152,6 @@ async function assembleModel(inputPath: string, outputPath: string, tileIndex: n
 		for (const modelRef of modelReferences) {
 			const tempBinPath = path.join(tempTilePath, `temp-${modelRef.guid}.bin`);
 			const tempGltfPath = path.join(tempTilePath, `temp-${modelRef.guid}.gltf`);
-			const tempReportPath = path.join(tempTilePath, `temp-${modelRef.guid}.gltf.report.json`);
 			checkAbort(control);
 			reportStatus(control, `Processing model source ${path.basename(modelRef.file)}...`);
 
@@ -426,7 +386,7 @@ async function assembleModel(inputPath: string, outputPath: string, tileIndex: n
 								}
 
 								const scale = Number.isFinite(libObj.scale) ? libObj.scale : 1;
-								const transform: mat4 = createPlacementTransform(center, libObj.position, libObj.orientation, [scale, scale, scale]);
+								
 								const map = mergeDocuments(tileDocument, document);
 								const sourceScene = document.getRoot().listScenes()[0];
 								if (!sourceScene) {
@@ -443,7 +403,16 @@ async function assembleModel(inputPath: string, outputPath: string, tileIndex: n
 								}
 
 								// Create a Node, and append source Scene's direct children.
-								const rootNode = tileDocument.createNode().setName(name).setMatrix(toGltfMat4(transform));
+							
+								const lonOffsetMeters = -(libObj.position[0] - center[0]) * 111320.0 * Math.cos(center[1] * Math.PI / 180.0);
+								const latOffsetMeters = (libObj.position[1] - center[1]) * 110540.0;
+								const altOffsetMeters = libObj.position[2] - center[2];
+								const rotation: quat = quat.fromEuler(quat.create(), libObj.orientation[0], -libObj.orientation[2], libObj.orientation[1]);
+								const rootNode = tileDocument.createNode().setName(name)
+									.setTranslation([lonOffsetMeters, altOffsetMeters, latOffsetMeters])
+									.setRotation([rotation[0], rotation[1], rotation[2], rotation[3]])
+									.setScale([scale, scale, scale]);
+
 								for (const node of sceneB.listChildren()) {
 									rootNode.addChild(node);
 								}
@@ -471,7 +440,7 @@ async function assembleModel(inputPath: string, outputPath: string, tileIndex: n
 
 	reportStatus(control, 'Writing to disk...');
 	fs.mkdirSync(path.join(outputPath, 'Objects', getFilePathFromTileIndex(tileIndex)), { recursive: true });
-	await tileDocument.transform(dedup(), instance(), flatten(), join(), weld(), resample(), sparse(), prune({ keepAttributes: true }), unpartition());
+	await tileDocument.transform(dedup(), instance(), join(), weld(), resample(), sparse(), prune({ keepAttributes: true }), unpartition());
 	await new NodeIO().write(path.join(outputPath, 'Objects', getFilePathFromTileIndex(tileIndex), `${tileIndex}.gltf`), tileDocument);
 	fs.writeFileSync(
 		path.join(outputPath, 'Objects', getFilePathFromTileIndex(tileIndex), `${tileIndex}.stg`),
