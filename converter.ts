@@ -287,6 +287,11 @@ async function assembleModel(inputPath: string, outputPath: string, tileIndex: n
 							const meshes = Array.isArray(json.meshes) ? json.meshes : [];
 							const accessors = Array.isArray(json.accessors) ? json.accessors : [];
 							const bufferViews = Array.isArray(json.bufferViews) ? json.bufferViews : [];
+							const images = Array.isArray(json.images) ? json.images : [];
+							const textures = Array.isArray(json.textures) ? json.textures : [];
+							const nodes = Array.isArray(json.nodes) ? json.nodes : [];
+							const materials = Array.isArray(json.materials) ? json.materials : [];
+
 							if (bufferViews.length === 0 || accessors.length === 0 || meshes.length === 0) {
 								console.info(`GLB in model ${name} (${modelRef.guid}) has no mesh data; skipping.`);
 								// Advance j past this GLB record (type[4] + size[4] + payload[glbSize])
@@ -316,7 +321,7 @@ async function assembleModel(inputPath: string, outputPath: string, tileIndex: n
 							}
 							delete (json as { extensionsRequired?: unknown }).extensionsRequired;
 
-							const images = Array.isArray(json.images) ? json.images : [];
+							// Preprocess images to convert to DDS and update URIs
 							for (const image of images) {
 								if (!image || typeof image !== 'object') {
 									continue;
@@ -351,11 +356,32 @@ async function assembleModel(inputPath: string, outputPath: string, tileIndex: n
 								}
 							}
 
-							const textures = Array.isArray(json.textures) ? json.textures : [];
+							// Preprocess textures to handle MSFT_texture_dds extension
 							for (const texture of textures) {
 								if (texture.extensions && texture.extensions.MSFT_texture_dds) {
 									texture.source = texture.extensions.MSFT_texture_dds.source;
 									delete texture.extensions.MSFT_texture_dds;
+								}
+							}
+
+							// Preprocess nodes to handle non-uniform scaling, and remove invisible objects
+							for (const node of nodes) {
+								if (node.mesh && meshes[node.mesh]) {
+									for (const primitive of meshes[node.mesh].primitives) {
+										if (
+											primitive.material
+											&& materials[primitive.material]
+											&& materials[primitive.material].extensions
+											&& (materials[primitive.material].extensions.ASOBO_material_environment_occluder || materials[primitive.material].extensions.ASOBO_material_invisible)
+										) {
+											delete node.mesh;
+											break;
+										}
+									}
+								}
+								if (node.scale && Array.isArray(node.scale) && node.scale.length === 3) {
+									const scale = (node.scale[0] + node.scale[1] + node.scale[2]) / 3;
+									node.scale = [scale, scale, scale];
 								}
 							}
 
@@ -399,8 +425,8 @@ async function assembleModel(inputPath: string, outputPath: string, tileIndex: n
 									continue;
 								}
 
-								const uniformScale = Number.isFinite(libObj.scale) ? libObj.scale : 1;
-								const transform: mat4 = createPlacementTransform(center, libObj.position, libObj.orientation, [uniformScale, uniformScale, uniformScale]);
+								const scale = Number.isFinite(libObj.scale) ? libObj.scale : 1;
+								const transform: mat4 = createPlacementTransform(center, libObj.position, libObj.orientation, [scale, scale, scale]);
 								const map = mergeDocuments(tileDocument, document);
 								const sourceScene = document.getRoot().listScenes()[0];
 								if (!sourceScene) {
