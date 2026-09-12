@@ -293,8 +293,8 @@ async function assembleModel(inputPath: string, outputPath: string, tileIndex: n
 									continue;
 								}
 
-								let uri = typeof image.uri === 'string' ? image.uri : '';
-								uri = uri.replace(/\\/g, path.sep).replace(/\//g, path.sep);
+								let uri: string = typeof image.uri === 'string' ? image.uri : '';
+								uri = decodeURIComponent(uri.replace(/\\/g, path.sep).replace(/\//g, path.sep));
 								if (uri.length === 0) {
 									continue;
 								}

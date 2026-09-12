@@ -430,6 +430,71 @@ input[type="number"] {
 	gap: 10px;
 }
 
+.ordered-list {
+	display: grid;
+	gap: 8px;
+	max-height: 180px;
+	overflow-y: auto;
+	padding-right: 4px;
+}
+
+.ordered-list-item {
+	display: grid;
+	grid-template-columns: 1fr auto;
+	gap: 8px;
+	align-items: center;
+}
+
+.item-actions {
+	display: flex;
+	gap: 4px;
+	align-items: center;
+}
+
+.item-actions .btn {
+	padding: 6px 10px;
+	font-size: 0.8rem;
+}
+
+.add-scenery-row {
+	display: grid;
+	grid-template-columns: 1fr auto auto;
+	gap: 8px;
+	align-items: center;
+}
+
+.autodetect-row {
+	display: flex;
+	justify-content: flex-start;
+	margin-top: 4px;
+}
+
+.autodetect-dialog {
+	max-width: 460px;
+	text-align: center;
+	display: grid;
+	gap: 16px;
+	justify-items: center;
+}
+
+.autodetect-status {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	font-size: 0.92rem;
+	padding: 12px 14px;
+	background: var(--panel);
+	border: 1px solid var(--border-soft);
+	border-radius: 10px;
+	width: 100%;
+	text-align: left;
+}
+
+.autodetect-status p {
+	margin: 0;
+	word-break: break-word;
+}
+
 @keyframes spin {
 	to {
 		transform: rotate(360deg);

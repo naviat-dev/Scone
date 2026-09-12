@@ -5,10 +5,10 @@ import * as path from 'path';
 export let config = {
 	tempDir: path.join(os.tmpdir(), 'scone'),
 	storeDir: path.join(os.homedir(), '.scone'),
+	deadTiles: [] as number[],
 	outputDir: path.join(os.homedir(), 'SconeOutput'),
 	fgPath: '',
 	sceneryDirectories: [] as string[],
-	deadTiles: [] as number[],
 	maxRepairRetries: 3,
 	maxTileRetries: 3,
 }
@@ -39,6 +39,9 @@ function normalizeMaxRepairRetries(value: unknown): number {
 
 function sanitizeConfigValues(): void {
 	config.outputDir = normalizeOutputDir(config.outputDir);
+	config.sceneryDirectories = Array.isArray(config.sceneryDirectories)
+		? config.sceneryDirectories.filter((directory): directory is string => typeof directory === 'string' && directory.trim().length > 0).map((directory) => path.resolve(directory))
+		: [];
 	config.maxRepairRetries = normalizeMaxRepairRetries(config.maxRepairRetries);
 }
 

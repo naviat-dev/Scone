@@ -20,7 +20,16 @@ type CancelMode = 'save' | 'discard';
 
 type SettingsPayload = {
 	outputDir: string;
+	fgPath: string;
+	sceneryDirectories: string[];
 	maxRepairRetries: number;
+	maxTileRetries: number;
+};
+
+type AutodetectResult = {
+	sceneryDirectories: string[];
+	fgPath?: string;
+	aborted?: boolean;
 };
 
 type ThemePayload = {
@@ -33,11 +42,14 @@ type SconeApi = {
 	addTask: (task: { taskPath: string; taskName?: string; }) => Promise<Task>;
 	cancelTask: (taskId: string, mode: CancelMode) => Promise<Task>;
 	getSettings: () => Promise<SettingsPayload>;
-	saveSettings: (settings: { outputDir: string; maxRepairRetries: number }) => Promise<SettingsPayload>;
+	saveSettings: (settings: SettingsPayload) => Promise<SettingsPayload>;
 	pickDirectory: (defaultPath?: string) => Promise<string | null>;
 	getTheme: () => Promise<ThemePayload>;
+	autodetectScenery: () => Promise<AutodetectResult>;
+	abortAutodetect: () => Promise<{ success: boolean }>;
 	onTasksUpdated: (listener: (tasks: Task[]) => void) => () => void;
 	onThemeUpdated: (listener: (theme: ThemePayload) => void) => () => void;
+	onAutodetectProgress: (listener: (progress: { status: string }) => void) => () => void;
 };
 
 declare global {
@@ -82,13 +94,19 @@ function App(): React.JSX.Element {
 
 	const [folderPath, setFolderPath] = useState('');
 	const [taskName, setTaskName] = useState('');
-	const [settings, setSettings] = useState<SettingsPayload>({ outputDir: '', maxRepairRetries: 3 });
+	const [settings, setSettings] = useState<SettingsPayload>({ outputDir: '', fgPath: '', sceneryDirectories: [], maxRepairRetries: 3, maxTileRetries: 3 });
 	const [outputDirectory, setOutputDirectory] = useState('');
+	const [flightGearExecutablePath, setFlightGearExecutablePath] = useState('');
+	const [sceneryDirectories, setSceneryDirectories] = useState<string[]>([]);
+	const [newSceneryDirectory, setNewSceneryDirectory] = useState('');
 	const [maxRepairRetriesInput, setMaxRepairRetriesInput] = useState('3');
+	const [maxTileRetriesInput, setMaxTileRetriesInput] = useState('3');
 	const [errorText, setErrorText] = useState<string | null>(null);
 	const [infoText, setInfoText] = useState<string | null>(null);
 	const [isSavingSettings, setIsSavingSettings] = useState(false);
 	const [isAddingTask, setIsAddingTask] = useState(false);
+	const [isAutodetecting, setIsAutodetecting] = useState(false);
+	const [autodetectStatus, setAutodetectStatus] = useState('');
 
 	useEffect(() => {
 		const api = window.sconeApi;
@@ -114,7 +132,10 @@ function App(): React.JSX.Element {
 				setTasks(loadedTasks);
 				setSettings(loadedSettings);
 				setOutputDirectory(loadedSettings.outputDir);
+				setFlightGearExecutablePath(loadedSettings.fgPath);
+				setSceneryDirectories(loadedSettings.sceneryDirectories);
 				setMaxRepairRetriesInput(String(loadedSettings.maxRepairRetries));
+				setMaxTileRetriesInput(String(loadedSettings.maxTileRetries));
 				applyTheme(theme);
 			} catch (error) {
 				if (!disposed) {
@@ -137,10 +158,17 @@ function App(): React.JSX.Element {
 			}
 		});
 
+		const unsubscribeAutodetect = api.onAutodetectProgress((progress) => {
+			if (!disposed && progress?.status) {
+				setAutodetectStatus(progress.status);
+			}
+		});
+
 		return () => {
 			disposed = true;
 			unsubscribeTasks();
 			unsubscribeTheme();
+			unsubscribeAutodetect();
 		};
 	}, []);
 
@@ -229,14 +257,23 @@ function App(): React.JSX.Element {
 			return;
 		}
 
+		const sceneryPaths = sceneryDirectories
+			.map((directory) => directory.trim())
+			.filter((directory) => directory.length > 0);
+
 		setIsSavingSettings(true);
 		try {
 			const saved = await api.saveSettings({
 				outputDir: trimmed,
+				fgPath: flightGearExecutablePath.trim(),
+				sceneryDirectories: sceneryPaths,
 				maxRepairRetries,
+				maxTileRetries: Number.parseInt(maxTileRetriesInput, 10),
 			});
 			setSettings(saved);
 			setOutputDirectory(saved.outputDir);
+			setFlightGearExecutablePath(saved.fgPath);
+			setSceneryDirectories(saved.sceneryDirectories);
 			setMaxRepairRetriesInput(String(saved.maxRepairRetries));
 			setShowSettings(false);
 			setInfoText('Settings saved.');
@@ -244,6 +281,99 @@ function App(): React.JSX.Element {
 			setErrorText(normalizeError(error));
 		} finally {
 			setIsSavingSettings(false);
+		}
+	};
+
+	const handleAddSceneryDirectory = () => {
+		const directory = newSceneryDirectory.trim();
+		if (directory) {
+			if (!sceneryDirectories.includes(directory)) {
+				setSceneryDirectories((current) => [...current, directory]);
+			}
+			setNewSceneryDirectory('');
+		}
+	};
+
+	const handleBrowseAddSceneryDirectory = async () => {
+		const api = window.sconeApi;
+		if (!api) {
+			setErrorText('Renderer bridge is unavailable.');
+			return;
+		}
+
+		try {
+			const selected = await api.pickDirectory();
+			if (selected) {
+				if (!sceneryDirectories.includes(selected)) {
+					setSceneryDirectories((current) => [...current, selected]);
+				}
+			}
+		} catch (error) {
+			setErrorText(normalizeError(error));
+		}
+	};
+
+	const handleAutodetect = async () => {
+		const api = window.sconeApi;
+		if (!api) {
+			setErrorText('Renderer bridge is unavailable.');
+			return;
+		}
+
+		setIsAutodetecting(true);
+		setAutodetectStatus('Starting FlightGear auto-detection...');
+		setErrorText(null);
+		setInfoText(null);
+
+		try {
+			const result = await api.autodetectScenery();
+			if (result.aborted) {
+				setInfoText('Auto-detection was aborted.');
+				return;
+			}
+
+			let addedCount = 0;
+			if (Array.isArray(result.sceneryDirectories)) {
+				setSceneryDirectories((current) => {
+					const updated = [...current];
+					for (const detected of result.sceneryDirectories) {
+						if (!updated.includes(detected)) {
+							updated.push(detected);
+							addedCount++;
+						}
+					}
+					return updated;
+				});
+			}
+
+			if (result.fgPath && !flightGearExecutablePath.trim()) {
+				setFlightGearExecutablePath(result.fgPath);
+			}
+
+			if (result.sceneryDirectories && result.sceneryDirectories.length > 0) {
+				setInfoText(`Auto-detect found ${result.sceneryDirectories.length} scenery director${result.sceneryDirectories.length === 1 ? 'y' : 'ies'}.`);
+			} else {
+				setInfoText('Auto-detect completed. No additional scenery directories found.');
+			}
+		} catch (error) {
+			setErrorText(normalizeError(error));
+		} finally {
+			setIsAutodetecting(false);
+			setAutodetectStatus('');
+		}
+	};
+
+	const handleAbortAutodetect = async () => {
+		const api = window.sconeApi;
+		if (!api) {
+			return;
+		}
+
+		setAutodetectStatus('Aborting detection...');
+		try {
+			await api.abortAutodetect();
+		} catch (error) {
+			setErrorText(normalizeError(error));
 		}
 	};
 
@@ -401,7 +531,7 @@ function App(): React.JSX.Element {
 					<form className="dialog" onSubmit={handleSaveSettings}>
 						<h3>Settings</h3>
 
-						<label className="field">
+						<div className="field">
 							<span>Output Directory</span>
 							<div className="field-row">
 								<input
@@ -415,7 +545,105 @@ function App(): React.JSX.Element {
 									Browse
 								</button>
 							</div>
-						</label>
+						</div>
+
+						<div className="field">
+							<span>FlightGear Executable Path</span>
+							<div className="field-row">
+								<input
+									type="text"
+									value={flightGearExecutablePath}
+									onChange={(event) => setFlightGearExecutablePath(event.target.value)}
+									placeholder="Select FlightGear executable (fgfs)..."
+								/>
+								<button className="btn btn-secondary" type="button" onClick={() => browseForDirectory(setFlightGearExecutablePath, flightGearExecutablePath || settings.fgPath)}>
+									Browse
+								</button>
+							</div>
+						</div>
+
+						<div className="field">
+							<span>Local Scenery Paths</span>
+							<p className="muted">Priority is ordered top-to-bottom (first path has the highest priority).</p>
+							
+							{sceneryDirectories.length > 0 ? (
+								<div className="ordered-list">
+									{sceneryDirectories.map((directory, index) => (
+										<div className="ordered-list-item" key={`${index}-${directory}`}>
+											<input
+												type="text"
+												value={directory}
+												onChange={(event) => setSceneryDirectories((current) => current.map((item, itemIndex) => itemIndex === index ? event.target.value : item))}
+												aria-label={`Scenery path ${index + 1}`}
+											/>
+											<div className="item-actions">
+												<button
+													className="btn btn-secondary"
+													type="button"
+													onClick={() => setSceneryDirectories((current) => index > 0 ? current.map((item, itemIndex) => itemIndex === index - 1 ? current[index] : itemIndex === index ? current[index - 1] : item) : current)}
+													disabled={index === 0}
+													aria-label="Move path up"
+													title="Move up (increase priority)"
+												>
+													▲
+												</button>
+												<button
+													className="btn btn-secondary"
+													type="button"
+													onClick={() => setSceneryDirectories((current) => index < current.length - 1 ? current.map((item, itemIndex) => itemIndex === index ? current[index + 1] : itemIndex === index + 1 ? current[index] : item) : current)}
+													disabled={index === sceneryDirectories.length - 1}
+													aria-label="Move path down"
+													title="Move down (decrease priority)"
+												>
+													▼
+												</button>
+												<button
+													className="btn btn-danger"
+													type="button"
+													onClick={() => setSceneryDirectories((current) => current.filter((_, itemIndex) => itemIndex !== index))}
+													aria-label="Remove path"
+													title="Remove path"
+												>
+													Remove
+												</button>
+											</div>
+										</div>
+									))}
+								</div>
+							) : null}
+
+							<div className="add-scenery-row">
+								<input
+									type="text"
+									value={newSceneryDirectory}
+									onChange={(event) => setNewSceneryDirectory(event.target.value)}
+									onKeyDown={(event) => {
+										if (event.key === 'Enter') {
+											event.preventDefault();
+											handleAddSceneryDirectory();
+										}
+									}}
+									placeholder="Add a local scenery path..."
+								/>
+								<button className="btn btn-secondary" type="button" onClick={handleBrowseAddSceneryDirectory}>
+									Browse...
+								</button>
+								<button className="btn btn-secondary" type="button" onClick={handleAddSceneryDirectory}>
+									Add
+								</button>
+							</div>
+
+							<div className="autodetect-row">
+								<button
+									className="btn btn-secondary"
+									type="button"
+									onClick={handleAutodetect}
+									disabled={isAutodetecting}
+								>
+									Auto-Detect Scenery &amp; FlightGear Paths
+								</button>
+							</div>
+						</div>
 
 						<label className="field">
 							<span>Maximum Repair Retries</span>
@@ -425,6 +653,18 @@ function App(): React.JSX.Element {
 								step={1}
 								value={maxRepairRetriesInput}
 								onChange={(event) => setMaxRepairRetriesInput(event.target.value)}
+								required
+							/>
+						</label>
+
+						<label className="field">
+							<span>Maximum Tile Download Retries</span>
+							<input
+								type="number"
+								min={0}
+								step={1}
+								value={maxTileRetriesInput}
+								onChange={(event) => setMaxTileRetriesInput(event.target.value)}
 								required
 							/>
 						</label>
@@ -440,6 +680,28 @@ function App(): React.JSX.Element {
 							</button>
 						</div>
 					</form>
+				</div>
+			) : null}
+
+			{isAutodetecting ? (
+				<div className="overlay" role="dialog" aria-modal="true" aria-label="Auto-detecting Scenery">
+					<div className="dialog autodetect-dialog">
+						<h3>Auto-detecting FlightGear &amp; Scenery</h3>
+						<div className="autodetect-status">
+							<span className="spinner is-active" aria-hidden="true" />
+							<p>{autodetectStatus || 'Scanning directories for FlightGear scenery...'}</p>
+						</div>
+						<p className="muted">This may take a minute while scanning configuration files and local disks.</p>
+						<div className="dialog-actions">
+							<button
+								className="btn btn-danger"
+								type="button"
+								onClick={handleAbortAutodetect}
+							>
+								Abort Detection
+							</button>
+						</div>
+					</div>
 				</div>
 			) : null}
 		</main>

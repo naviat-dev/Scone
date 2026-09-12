@@ -5,6 +5,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { config, initializeRuntimeConfig, loadConfig, saveConfig } from './config.js';
+import { autodetectSceneryDirectories } from './fg.js';
 
 type CancelMode = 'save' | 'discard';
 type TaskPhase = 'queued' | 'running' | 'cancelling' | 'completed' | 'failed' | 'cancelled';
@@ -33,6 +34,7 @@ type TaskDto = Omit<ConversionTask, 'worker'> & { isRunning: boolean };
 
 const tasks = new Map<string, ConversionTask>();
 let activeTaskId: string | null = null;
+let autodetectAbortController: AbortController | null = null;
 
 const preloadPath = fileURLToPath(new URL('./preload.cjs', import.meta.url));
 
@@ -352,10 +354,13 @@ function registerIpcHandlers(): void {
 
 	ipcMain.handle('settings:get', () => ({
 		outputDir: config.outputDir,
+		fgPath: config.fgPath,
+		sceneryDirectories: config.sceneryDirectories,
 		maxRepairRetries: config.maxRepairRetries,
+		maxTileRetries: config.maxTileRetries,
 	}));
 
-	ipcMain.handle('settings:save', async (_event, payload: { outputDir: string; maxRepairRetries: number }) => {
+	ipcMain.handle('settings:save', async (_event, payload: { outputDir: string; fgPath: string; sceneryDirectories: string[]; maxRepairRetries: number; maxTileRetries: number }) => {
 		const outputDir = payload.outputDir?.trim();
 		if (!outputDir) {
 			throw new Error('Output directory cannot be empty.');
@@ -368,18 +373,55 @@ function registerIpcHandlers(): void {
 		const resolved = path.resolve(outputDir);
 		fs.mkdirSync(resolved, { recursive: true });
 		config.outputDir = resolved;
+		config.fgPath = payload.fgPath?.trim() ?? '';
+		config.sceneryDirectories = Array.isArray(payload.sceneryDirectories)
+			? payload.sceneryDirectories.map((directory) => directory.trim()).filter((directory) => directory.length > 0).map((directory) => path.resolve(directory))
+			: [];
 		config.maxRepairRetries = Math.min(payload.maxRepairRetries, 100);
+		if (!Number.isInteger(payload.maxTileRetries) || payload.maxTileRetries < 0) {
+			throw new Error('Maximum tile download retries must be a non-negative whole number.');
+		}
+		config.maxTileRetries = Math.min(payload.maxTileRetries, 100);
 		await saveConfig();
 
 		return {
 			outputDir: config.outputDir,
+			fgPath: config.fgPath,
+			sceneryDirectories: config.sceneryDirectories,
 			maxRepairRetries: config.maxRepairRetries,
+			maxTileRetries: config.maxTileRetries,
 		};
 	});
 
 	ipcMain.handle('dialog:pick-directory', (event, payload?: { defaultPath?: string }) =>
 		pickDirectory(event, payload?.defaultPath)
 	);
+
+	ipcMain.handle('fg:autodetect', async (event) => {
+		if (autodetectAbortController) {
+			autodetectAbortController.abort();
+		}
+		const controller = new AbortController();
+		autodetectAbortController = controller;
+
+		try {
+			const result = await autodetectSceneryDirectories();
+			return result;
+		} finally {
+			if (autodetectAbortController === controller) {
+				autodetectAbortController = null;
+			}
+		}
+	});
+
+	ipcMain.handle('fg:autodetect-abort', () => {
+		if (autodetectAbortController) {
+			autodetectAbortController.abort();
+			autodetectAbortController = null;
+			return { success: true };
+		}
+		return { success: false };
+	});
 
 	ipcMain.handle('ui:get-theme', () => getThemePayload());
 }
