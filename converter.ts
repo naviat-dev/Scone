@@ -64,7 +64,7 @@ async function buildLibraryObject(fileView: DataView, address: number): Promise<
 	return { position: [longitude, latitude, altitude], flags, orientation: [pitch, bank, heading], imageComplexity, guid, scale };
 }
 
-async function buildSimObject(fileView: DataView, address: number): Promise<SimObject> {
+async function buildSimObject(fileView: DataView, address: number, path: string, inputPath: string): Promise<SimObject> {
 	const longitude = (fileView.getInt32(address + 4, true) * (360.0 / 805306368.0)) - 180.0;
 	const latitude = 90.0 - (fileView.getInt32(address + 8, true) * (180.0 / 536870912.0));
 	let altitude = fileView.getInt32(address + 12, true) / 1000;
@@ -83,7 +83,21 @@ async function buildSimObject(fileView: DataView, address: number): Promise<SimO
 	if (flags.includes(Flags.IsAboveAGL)) {
 		altitude += await getAltitude(latitude, longitude, 2);
 	}
-	return { position: [longitude, latitude, altitude], flags, orientation: [pitch, bank, heading], imageComplexity, containerTitle, containerPath, scale };
+	// Attempt to resolve the absolute path of the sim.cfg file
+	const matches: string[] = getFilesRecursive(inputPath, '.cfg', false).filter(file => fs.readFileSync(file, 'utf-8').split(/\r?\n/).some(line => line.trim() === `title=${containerTitle}`));
+	let mostLikelyMatchScore = -1;
+	let mostLikelyMatch: string = '';
+	for (const match of matches) {
+		let i: number = 0;
+		while (i < match.length && i < inputPath.length && match[i] === inputPath[i]) {
+			i++;
+		}
+		if (i > mostLikelyMatchScore) {
+			mostLikelyMatchScore = i;
+			mostLikelyMatch = match;
+		}
+	}
+	return { position: [longitude, latitude, altitude], flags, orientation: [pitch, bank, heading], imageComplexity, containerTitle, containerPath: mostLikelyMatch || containerPath, scale };
 }
 
 function convertIcaoBytesToString(icaoBytes: number): string {
@@ -149,294 +163,315 @@ function resolveAbsoluteTexturePath(inputPath: string, file: string, textureUri:
 	return mostLikelyMatch;
 }
 
-async function assembleModel(inputPath: string, outputPath: string, tileIndex: number, modelReferences: ModelReference[], center: vec3, libraryObjects: Map<string, LibraryObject[]>, control?: ConversionControl) {
+async function assembleModel(inputPath: string, outputPath: string, tileIndex: number, modelReferences: any[], center: vec3, libraryObjects: Map<string, LibraryObject[]>, control?: ConversionControl) {
 	const tempTilePath = path.join(config.tempDir, `tile_${tileIndex}_${Date.now()}`);
 	fs.mkdirSync(tempTilePath, { recursive: true });
 	const tileDocument: Document = new Document();
 
 	try {
-		for (const modelRef of modelReferences) {
-			const tempBinPath = path.join(tempTilePath, `temp-${modelRef.guid}.bin`);
-			const tempGltfPath = path.join(tempTilePath, `temp-${modelRef.guid}.gltf`);
-			checkAbort(control);
-			reportStatus(control, `Processing model source ${path.basename(modelRef.file)}...`);
-
-			const libraryObjectsForModel = libraryObjects.get(modelRef.guid) || [];
-			const modelFileBuffer = fs.readFileSync(modelRef.file);
-			if (modelRef.offset < 0 || modelRef.offset + modelRef.size > modelFileBuffer.byteLength) {
-				console.warn(`Model reference out of bounds for ${modelRef.file}: offset=0x${modelRef.offset.toString(16)} size=${modelRef.size}`);
-				continue;
-			}
-
-			const fileBuffer = modelFileBuffer.subarray(modelRef.offset, modelRef.offset + modelRef.size);
-			const fileView: DataView = new DataView(fileBuffer.buffer, fileBuffer.byteOffset, fileBuffer.byteLength);
-			console.debug(`Model reference: ${modelRef.file} at offset 0x${modelRef.offset.toString(16)} size ${modelRef.size} guid ${modelRef.guid}`);
-
-			let name = '';
-			const chunkID: string = readFourCC(fileBuffer, 0);
-			if (chunkID !== 'RIFF') {
-				continue;
-			}
-
-			for (let i = 8; i + 8 <= fileBuffer.byteLength; i += 4) {
-				const chunk = readFourCC(fileBuffer, i);
-				let glbIndex = 0; // for unique filenames per GLB in this chunk
-				if (chunk === 'GXML') {
-					const size: number = fileView.getUint32(i + 4, true);
-					if (i + 8 + size > fileBuffer.byteLength) {
-						console.warn(`Invalid GXML chunk size ${size} for model ${modelRef.guid}`);
-						break;
-					}
-
-					const gxmlContent = Buffer.from(fileBuffer.subarray(i + 8, i + 8 + size)).toString('utf-8');
-					try {
-						create(gxmlContent);
-						const match = /<ModelInfo[^>]*name="([^"]+)"/i.exec(gxmlContent);
-						name = match?.[1]?.replace(/\.gltf$/i, '').replace(/ /g, '_') ?? 'Unnamed_Model';
-					} catch (error) {
-						console.error(`Failed to process GXML chunk at offset 0x${i.toString(16)} in file: ${modelRef.file}`, error);
-					}
-					i += size;
-				} else if (chunk === 'GLBD') {
-					if (glbIndex >= 1) {
-						console.info(`More than one LOD present for ${name}; skipping remaining GLB in chunk.`);
-						glbIndex = 0;
-						// The highest LOD is the first GLB; break after processing it
-						break;
-					}
-
-					reportStatus(control, `Converting ${name || modelRef.guid}...`);
-					console.info(`Processing GLBD chunk for model ${name} (${modelRef.guid}) in ${modelRef.file}`);
-					const size: number = fileView.getUint32(i + 4, true);
-					// Scan GLBD payload and skip past each GLB block once processed
-					for (let j = i + 8; j < i + 8 + size;) {
-						checkAbort(control);
-						// Ensure there are at least 8 bytes for type + size
-						if (j + 8 > fileBuffer.byteLength) {
+		for (let modelRef of modelReferences) {
+			let json: Record<string, unknown> = {};
+			let binary: Buffer<ArrayBuffer> = Buffer.alloc(0);
+			let name: string = '';
+			let guid: string = '';
+			if (modelRef.guid !== undefined && modelRef.file !== undefined && modelRef.offset !== undefined && modelRef.size !== undefined) {
+				modelRef = modelRef as ModelReference;
+				guid = modelRef.guid;
+				const modelFileBuffer = fs.readFileSync(modelRef.file);
+				if (modelRef.offset < 0 || modelRef.offset + modelRef.size > modelFileBuffer.byteLength) {
+					console.warn(`Model reference out of bounds for ${modelRef.file}: offset=0x${modelRef.offset.toString(16)} size=${modelRef.size}`);
+					continue;
+				}
+				const fileBuffer = modelFileBuffer.subarray(modelRef.offset, modelRef.offset + modelRef.size);
+				const fileView: DataView = new DataView(fileBuffer.buffer, fileBuffer.byteOffset, fileBuffer.byteLength);
+				console.debug(`Model reference: ${modelRef.file} at offset 0x${modelRef.offset.toString(16)} size ${modelRef.size} guid ${modelRef.guid}`);
+				const chunkID: string = readFourCC(fileBuffer, 0);
+				if (chunkID !== 'RIFF') {
+					continue;
+				}
+				for (let i = 8; i + 8 <= fileBuffer.byteLength; i += 4) {
+					const chunk = readFourCC(fileBuffer, i);
+					let glbIndex = 0; // for unique filenames per GLB in this chunk
+					if (chunk === 'GXML') {
+						const size: number = fileView.getUint32(i + 4, true);
+						if (i + 8 + size > fileBuffer.byteLength) {
+							console.warn(`Invalid GXML chunk size ${size} for model ${modelRef.guid}`);
 							break;
 						}
 
-						const sig: string = readFourCC(fileBuffer, j);
-						if (sig === 'GLB\0') {
-							const glbSize: number = fileView.getUint32(j + 4, true);
-							if (j + 8 + glbSize > fileBuffer.byteLength) {
-								console.warn(`Invalid GLB payload size ${glbSize} for model ${modelRef.guid}`);
+						const gxmlContent = Buffer.from(fileBuffer.subarray(i + 8, i + 8 + size)).toString('utf-8');
+						try {
+							create(gxmlContent);
+							const match = /<ModelInfo[^>]*name="([^"]+)"/i.exec(gxmlContent);
+							name = match?.[1]?.replace(/\.gltf$/i, '').replace(/ /g, '_') ?? 'Unnamed_Model';
+						} catch (error) {
+							console.error(`Failed to process GXML chunk at offset 0x${i.toString(16)} in file: ${modelRef.file}`, error);
+						}
+						i += size;
+					} else if (chunk === 'GLBD') {
+						if (glbIndex >= 1) {
+							console.info(`More than one LOD present for ${name}; skipping remaining GLB in chunk.`);
+							glbIndex = 0;
+							// The highest LOD is the first GLB; break after processing it
+							break;
+						}
+
+						reportStatus(control, `Converting ${name || modelRef.guid}...`);
+						console.info(`Processing GLBD chunk for model ${name} (${modelRef.guid}) in ${modelRef.file}`);
+						const size: number = fileView.getUint32(i + 4, true);
+						// Scan GLBD payload and skip past each GLB block once processed
+						for (let j = i + 8; j < i + 8 + size;) {
+							checkAbort(control);
+							// Ensure there are at least 8 bytes for type + size
+							if (j + 8 > fileBuffer.byteLength) {
 								break;
 							}
 
-							const glbBytes = fileBuffer.subarray(j + 8, j + 8 + glbSize);
-							const glbView = new DataView(glbBytes.buffer, glbBytes.byteOffset, glbBytes.byteLength);
-
-							if (glbBytes.byteLength < 0x14) {
-								j += 8 + glbSize;
-								continue;
-							}
-
-							// Fill the end of the JSON chunk with spaces, and replace non-printable characters with spaces.
-							const jsonLength: number = glbView.getUint32(0x0C, true);
-							const jsonStart = 0x14;
-							const jsonEnd = jsonStart + jsonLength;
-							if (jsonEnd > glbBytes.byteLength) {
-								console.warn(`GLB JSON chunk exceeds payload bounds for model ${modelRef.guid}`);
-								j += 8 + glbSize;
-								continue;
-							}
-
-							const jsonBytes = glbBytes.subarray(jsonStart, jsonEnd);
-							for (let k = 0; k < jsonBytes.length; k++) {
-								if (jsonBytes[k] < 32 || jsonBytes[k] > 126) {
-									jsonBytes[k] = 32; // replace non-printable characters with space
+							const sig: string = readFourCC(fileBuffer, j);
+							if (sig === 'GLB\0') {
+								const glbSize: number = fileView.getUint32(j + 4, true);
+								if (j + 8 + glbSize > fileBuffer.byteLength) {
+									console.warn(`Invalid GLB payload size ${glbSize} for model ${modelRef.guid}`);
+									break;
 								}
-							}
 
-							const json: Record<string, unknown> = JSON.parse(Buffer.from(jsonBytes).toString('utf-8').trim());
-							const meshes = Array.isArray(json.meshes) ? json.meshes : [];
-							const accessors = Array.isArray(json.accessors) ? json.accessors : [];
-							const bufferViews = Array.isArray(json.bufferViews) ? json.bufferViews : [];
-							const images = Array.isArray(json.images) ? json.images : [];
-							const textures = Array.isArray(json.textures) ? json.textures : [];
-							const nodes = Array.isArray(json.nodes) ? json.nodes : [];
-							const materials = Array.isArray(json.materials) ? json.materials : [];
+								const glbBytes = fileBuffer.subarray(j + 8, j + 8 + glbSize);
+								const glbView = new DataView(glbBytes.buffer, glbBytes.byteOffset, glbBytes.byteLength);
 
-							if (bufferViews.length === 0 || accessors.length === 0 || meshes.length === 0) {
-								console.info(`GLB in model ${name} (${modelRef.guid}) has no mesh data; skipping.`);
-								// Advance j past this GLB record (type[4] + size[4] + payload[glbSize])
-								j += 8 + glbSize;
-								continue;
-							}
-
-							const binChunkHeader = jsonEnd;
-							if (binChunkHeader + 8 > glbBytes.byteLength) {
-								console.warn(`GLB missing BIN chunk for model ${modelRef.guid}`);
-								j += 8 + glbSize;
-								continue;
-							}
-
-							const binChunkLength = glbView.getUint32(binChunkHeader, true);
-							const binStart = binChunkHeader + 8;
-							const binEnd = binStart + binChunkLength;
-							if (binEnd > glbBytes.byteLength) {
-								console.warn(`GLB BIN chunk exceeds payload bounds for model ${modelRef.guid}`);
-								j += 8 + glbSize;
-								continue;
-							}
-
-							const glbBinBytes = glbBytes.subarray(binStart, binEnd);
-							if (Array.isArray(json.buffers) && json.buffers.length > 0 && typeof json.buffers[0] === 'object' && json.buffers[0] !== null) {
-								(json.buffers[0] as Record<string, unknown>).uri = `temp-${modelRef.guid}.bin`;
-							}
-							delete (json as { extensionsRequired?: unknown }).extensionsRequired;
-
-							// Preprocess images to convert to DDS and update URIs
-							for (const image of images) {
-								if (!image || typeof image !== 'object') {
+								if (glbBytes.byteLength < 0x14) {
+									j += 8 + glbSize;
 									continue;
 								}
 
-								let uri: string = typeof image.uri === 'string' ? image.uri : '';
-								uri = decodeURIComponent(uri.replace(/\\/g, path.sep).replace(/\//g, path.sep));
-								if (uri.length === 0) {
+								// Fill the end of the JSON chunk with spaces, and replace non-printable characters with spaces.
+								const jsonLength: number = glbView.getUint32(0x0C, true);
+								const jsonStart = 0x14;
+								const jsonEnd = jsonStart + jsonLength;
+								if (jsonEnd > glbBytes.byteLength) {
+									console.warn(`GLB JSON chunk exceeds payload bounds for model ${modelRef.guid}`);
+									j += 8 + glbSize;
 									continue;
 								}
 
-								const outputUri = `${path.basename(uri, path.extname(uri))}.DDS`;
-								image.uri = outputUri;
-								const extras = (image.extras && typeof image.extras === 'object')
-									? image.extras
-									: {};
-								const absoluteTexturePath = resolveAbsoluteTexturePath(inputPath, modelRef.file, uri);
-								extras.absolutePath = absoluteTexturePath;
-								image.extras = extras;
+								const binChunkHeader = jsonEnd;
+								if (binChunkHeader + 8 > glbBytes.byteLength) {
+									console.warn(`GLB missing BIN chunk for model ${modelRef.guid}`);
+									j += 8 + glbSize;
+									continue;
+								}
 
-								const outputTexturePath = path.join(tempTilePath, outputUri);
-								if (!fs.existsSync(outputTexturePath)) {
-									if (fs.existsSync(absoluteTexturePath)) {
-										convertToDDS(absoluteTexturePath, outputTexturePath);
-									} else {
-										console.warn(`Texture file not found: ${uri}`);
-										const fallbackTexturePath = path.join(process.cwd(), 'Assets', 'dummy_tex.dds');
-										if (fs.existsSync(fallbackTexturePath)) {
-											fs.copyFileSync(fallbackTexturePath, outputTexturePath);
-										}
+								const jsonBytes = glbBytes.subarray(jsonStart, jsonEnd);
+								for (let k = 0; k < jsonBytes.length; k++) {
+									if (jsonBytes[k] < 32 || jsonBytes[k] > 126) {
+										jsonBytes[k] = 32; // replace non-printable characters with space
 									}
 								}
-							}
 
-							// Preprocess textures to handle MSFT_texture_dds extension
-							for (const texture of textures) {
-								if (texture.extensions && texture.extensions.MSFT_texture_dds) {
-									texture.source = texture.extensions.MSFT_texture_dds.source;
-									delete texture.extensions.MSFT_texture_dds;
+								const binChunkLength = glbView.getUint32(binChunkHeader, true);
+								const binStart = binChunkHeader + 8;
+								const binEnd = binStart + binChunkLength;
+								if (binEnd > glbBytes.byteLength) {
+									console.warn(`GLB BIN chunk exceeds payload bounds for model ${modelRef.guid}`);
+									j += 8 + glbSize;
+									continue;
 								}
-							}
 
-							// Preprocess nodes to handle non-uniform scaling, and remove invisible objects
-							for (const node of nodes) {
-								if (node.mesh && meshes[node.mesh]) {
-									for (const primitive of meshes[node.mesh].primitives) {
-										if (
-											primitive.material
-											&& materials[primitive.material]
-											&& materials[primitive.material].extensions
-											&& (materials[primitive.material].extensions.ASOBO_material_environment_occluder || materials[primitive.material].extensions.ASOBO_material_invisible)
-										) {
-											delete node.mesh;
-											break;
-										}
-									}
-								}
-								if (node.scale && Array.isArray(node.scale) && node.scale.length === 3) {
-									const scale = (node.scale[0] + node.scale[1] + node.scale[2]) / 3;
-									node.scale = [scale, scale, scale];
-								}
-							}
-
-							fs.writeFileSync(tempGltfPath, JSON.stringify(json), 'utf-8');
-							fs.writeFileSync(tempBinPath, glbBinBytes);
-
-							let document: Document = await new NodeIO().read(tempGltfPath);
-							// Repair Asobo-specific geometry issues, then re-export for validation
-							applyAsoboGeometryRepair(document);
-							await new NodeIO().write(tempGltfPath, document);
-
-							let validation: any = await validator.validateString(JSON.stringify(json), {
-								ignoredIssues: ['IO_ERROR', 'TEXTURE_INVALID_IMAGE_MIME_TYPE']
-							});
-							let tries = 0;
-							while (tries < config.maxRepairRetries && validation.issues.numErrors > 0) {
-								checkAbort(control);
-								tries++;
-								console.warn(`Attempt ${tries} to fix ${validation.issues.numErrors} errors for model ${name} (${modelRef.guid})`);
-								await repairDocument(document, tempGltfPath, validation.issues.messages);
-								await new NodeIO().write(tempGltfPath, document);
-								validation = await validator.validateString(fs.readFileSync(tempGltfPath, 'utf-8'), {
-									ignoredIssues: ['IO_ERROR', 'TEXTURE_INVALID_IMAGE_MIME_TYPE']
-								});
-							}
-
-							if (validation.issues.numErrors > 0) {
-								console.error(`Failed to repair geometry for model ${name} (${modelRef.guid}) after ${tries} attempts`);
-								const issues = validation.issues.messages ?? [];
-								for (const error of issues) {
-									if (error.severity === 0) {
-										console.error(`${error.code} at ${error.pointer}: ${error.message}`);
-									}
-								}
+								json = JSON.parse(Buffer.from(jsonBytes).toString('utf-8').trim());
+								binary = glbBytes.subarray(binStart, binEnd);
 								j += 8 + glbSize;
-								continue;
+								break;
+							} else {
+								j += 4;
 							}
+						}
+						glbIndex++;
+						i += size;
+					}
+				}
+			} else if (modelRef.position !== undefined && modelRef.flags !== undefined && modelRef.orientation !== undefined && modelRef.imageComplexity !== undefined && modelRef.containerTitle !== undefined && modelRef.containerPath !== undefined && modelRef.scale !== undefined) {
+				modelRef = modelRef as SimObject;
+				name = modelRef.containerTitle;
+				const containerFolder: string = path.dirname(modelRef.containerPath);
+				const containerText: string = fs.readFileSync(modelRef.containerPath, 'utf-8');
+				const simObjRegex = new RegExp(`title=${modelRef.containerTitle}\\nmodel=(.*)\\ntexture=(.*)`, 'i');
+				const simObjMatch = simObjRegex.exec(containerText);
+				if (!simObjMatch) {
+					console.warn(`Unable to find model/texture for sim object ${modelRef.containerTitle} in ${modelRef.containerPath}`);
+					continue;
+				}
+				const modelIndex = simObjMatch[1].trim();
+				const textureIndex = simObjMatch[2].trim();
+				const xmlName = fs.readFileSync(path.join(containerFolder, `model${modelIndex}`, 'model.CFG'), 'utf-8').split('\n').filter(line => line.startsWith('normal=') && line.endsWith('.xml'))[0].split('=')[1].trim();
+				const xmlDoc = fs.readFileSync(path.join(containerFolder, `model${modelIndex}`, xmlName), 'utf-8');
+			} else {
+				console.warn(`Model ${guid} is missing required properties.`);
+			}
 
-							for (const libObj of libraryObjectsForModel) {
-								if (getTileIndexFromCoord(libObj.position[1], libObj.position[0]) !== tileIndex) {
-									continue;
-								}
+			const tempBinPath = path.join(tempTilePath, `temp-${guid}.bin`);
+			const tempGltfPath = path.join(tempTilePath, `temp-${guid}.gltf`);
+			checkAbort(control);
+			reportStatus(control, `Processing model source ${name}...`);
 
-								const scale = Number.isFinite(libObj.scale) ? libObj.scale : 1;
-								
-								const map = mergeDocuments(tileDocument, document);
-								const sourceScene = document.getRoot().listScenes()[0];
-								if (!sourceScene) {
-									continue;
-								}
+			const libraryObjectsForModel = libraryObjects.get(guid) || [];
 
-								// Find original Scene.
-								const sceneA = tileDocument.getRoot().listScenes()[0] ?? tileDocument.createScene();
+			const meshes = Array.isArray(json.meshes) ? json.meshes : [];
+			const accessors = Array.isArray(json.accessors) ? json.accessors : [];
+			const bufferViews = Array.isArray(json.bufferViews) ? json.bufferViews : [];
+			const images = Array.isArray(json.images) ? json.images : [];
+			const textures = Array.isArray(json.textures) ? json.textures : [];
+			const nodes = Array.isArray(json.nodes) ? json.nodes : [];
+			const materials = Array.isArray(json.materials) ? json.materials : [];
 
-								// Find counterpart of the source Scene in the target Document.
-								const sceneB = map.get(sourceScene);
-								if (!(sceneB instanceof Scene)) {
-									continue;
-								}
+			if (bufferViews.length === 0 || accessors.length === 0 || meshes.length === 0) {
+				console.info(`GLB in model ${name} (${guid}) has no mesh data; skipping.`);
+				// Advance j past this GLB record (type[4] + size[4] + payload[glbSize])
+				continue;
+			}
 
-								// Create a Node, and append source Scene's direct children.
-							
-								const lonOffsetMeters = -(libObj.position[0] - center[0]) * 111320.0 * Math.cos(center[1] * Math.PI / 180.0);
-								const latOffsetMeters = (libObj.position[1] - center[1]) * 110540.0;
-								const altOffsetMeters = libObj.position[2] - center[2];
-								const rotation: quat = quat.fromEuler(quat.create(), libObj.orientation[0], -libObj.orientation[2], libObj.orientation[1]);
-								const rootNode = tileDocument.createNode().setName(name)
-									.setTranslation([lonOffsetMeters, altOffsetMeters, latOffsetMeters])
-									.setRotation([rotation[0], rotation[1], rotation[2], rotation[3]])
-									.setScale([scale, scale, scale]);
+			if (Array.isArray(json.buffers) && json.buffers.length > 0 && typeof json.buffers[0] === 'object' && json.buffers[0] !== null) {
+				(json.buffers[0] as Record<string, unknown>).uri = `temp-${guid}.bin`;
+			}
+			delete (json as { extensionsRequired?: unknown }).extensionsRequired;
 
-								for (const node of sceneB.listChildren()) {
-									rootNode.addChild(node);
-								}
+			// Preprocess images to convert to DDS and update URIs
+			for (const image of images) {
+				if (!image || typeof image !== 'object') {
+					continue;
+				}
 
-								// Append Node to original Scene, and dispose the empty Scene.
-								sceneA.addChild(rootNode);
-								if (sceneB !== sceneA) {
-									sceneB.dispose();
-								}
-							}
+				let uri: string = typeof image.uri === 'string' ? image.uri : '';
+				uri = decodeURIComponent(uri.replace(/\\/g, path.sep).replace(/\//g, path.sep));
+				if (uri.length === 0) {
+					continue;
+				}
 
-							j += 8 + glbSize;
-							continue;
-						} else {
-							j += 4;
+				const outputUri = `${path.basename(uri, path.extname(uri))}.DDS`;
+				image.uri = outputUri;
+				const extras = (image.extras && typeof image.extras === 'object')
+					? image.extras
+					: {};
+				const absoluteTexturePath = resolveAbsoluteTexturePath(inputPath, modelRef.file, uri);
+				extras.absolutePath = absoluteTexturePath;
+				image.extras = extras;
+
+				const outputTexturePath = path.join(tempTilePath, outputUri);
+				if (!fs.existsSync(outputTexturePath)) {
+					if (fs.existsSync(absoluteTexturePath)) {
+						convertToDDS(absoluteTexturePath, outputTexturePath);
+					} else {
+						console.warn(`Texture file not found: ${uri}`);
+						const fallbackTexturePath = path.join(process.cwd(), 'Assets', 'dummy_tex.dds');
+						if (fs.existsSync(fallbackTexturePath)) {
+							fs.copyFileSync(fallbackTexturePath, outputTexturePath);
 						}
 					}
-					i += size;
+				}
+			}
+
+			// Preprocess textures to handle MSFT_texture_dds extension
+			for (const texture of textures) {
+				if (texture.extensions && texture.extensions.MSFT_texture_dds) {
+					texture.source = texture.extensions.MSFT_texture_dds.source;
+					delete texture.extensions.MSFT_texture_dds;
+				}
+			}
+
+			// Preprocess nodes to handle non-uniform scaling, and remove invisible objects
+			for (const node of nodes) {
+				if (node.mesh && meshes[node.mesh]) {
+					for (const primitive of meshes[node.mesh].primitives) {
+						if (
+							primitive.material
+							&& materials[primitive.material]
+							&& materials[primitive.material].extensions
+							&& (materials[primitive.material].extensions.ASOBO_material_environment_occluder || materials[primitive.material].extensions.ASOBO_material_invisible)
+						) {
+							delete node.mesh;
+							break;
+						}
+					}
+				}
+				if (node.scale && Array.isArray(node.scale) && node.scale.length === 3) {
+					const scale = (node.scale[0] + node.scale[1] + node.scale[2]) / 3;
+					node.scale = [scale, scale, scale];
+				}
+			}
+
+			fs.writeFileSync(tempGltfPath, JSON.stringify(json), 'utf-8');
+			fs.writeFileSync(tempBinPath, binary);
+
+			let document: Document = await new NodeIO().read(tempGltfPath);
+			// Repair Asobo-specific geometry issues, then re-export for validation
+			applyAsoboGeometryRepair(document);
+			await new NodeIO().write(tempGltfPath, document);
+
+			let validation: any = await validator.validateString(JSON.stringify(json), {
+				ignoredIssues: ['IO_ERROR', 'TEXTURE_INVALID_IMAGE_MIME_TYPE']
+			});
+			let tries = 0;
+			while (tries < config.maxRepairRetries && validation.issues.numErrors > 0) {
+				checkAbort(control);
+				tries++;
+				console.warn(`Attempt ${tries} to fix ${validation.issues.numErrors} errors for model ${name} (${modelRef.guid})`);
+				await repairDocument(document, tempGltfPath, validation.issues.messages);
+				await new NodeIO().write(tempGltfPath, document);
+				validation = await validator.validateString(fs.readFileSync(tempGltfPath, 'utf-8'), {
+					ignoredIssues: ['IO_ERROR', 'TEXTURE_INVALID_IMAGE_MIME_TYPE']
+				});
+			}
+
+			if (validation.issues.numErrors > 0) {
+				console.error(`Failed to repair geometry for model ${name} (${modelRef.guid}) after ${tries} attempts`);
+				const issues = validation.issues.messages ?? [];
+				for (const error of issues) {
+					if (error.severity === 0) {
+						console.error(`${error.code} at ${error.pointer}: ${error.message}`);
+					}
+				}
+				continue;
+			}
+
+			for (const libObj of libraryObjectsForModel) {
+				if (getTileIndexFromCoord(libObj.position[1], libObj.position[0]) !== tileIndex) {
+					continue;
+				}
+
+				const scale = Number.isFinite(libObj.scale) ? libObj.scale : 1;
+
+				const map = mergeDocuments(tileDocument, document);
+				const sourceScene = document.getRoot().listScenes()[0];
+				if (!sourceScene) {
+					continue;
+				}
+
+				// Find original Scene.
+				const sceneA = tileDocument.getRoot().listScenes()[0] ?? tileDocument.createScene();
+
+				// Find counterpart of the source Scene in the target Document.
+				const sceneB = map.get(sourceScene);
+				if (!(sceneB instanceof Scene)) {
+					continue;
+				}
+
+				// Create a Node, and append source Scene's direct children.
+
+				const lonOffsetMeters = -(libObj.position[0] - center[0]) * 111320.0 * Math.cos(center[1] * Math.PI / 180.0);
+				const latOffsetMeters = (libObj.position[1] - center[1]) * 110540.0;
+				const altOffsetMeters = libObj.position[2] - center[2];
+				const rotation: quat = quat.fromEuler(quat.create(), libObj.orientation[0], -libObj.orientation[2], libObj.orientation[1]);
+				const rootNode = tileDocument.createNode().setName(name)
+					.setTranslation([lonOffsetMeters, altOffsetMeters, latOffsetMeters])
+					.setRotation([rotation[0], rotation[1], rotation[2], rotation[3]])
+					.setScale([scale, scale, scale]);
+
+				for (const node of sceneB.listChildren()) {
+					rootNode.addChild(node);
+				}
+
+				// Append Node to original Scene, and dispose the empty Scene.
+				sceneA.addChild(rootNode);
+				if (sceneB !== sceneA) {
+					sceneB.dispose();
 				}
 			}
 		}
@@ -534,7 +569,7 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 					libraryObjects.get(libraryObject.guid)!.push(libraryObject);
 				} else if (id === 0x19) { //SimObject
 					address -= 4; // Reverse back to get all of the bytes
-					const simObject = await buildSimObject(fileView, address);
+					const simObject = await buildSimObject(fileView, address, file, inputPath);
 					if (!simObjects.has(simObject.containerTitle)) {
 						simObjects.set(simObject.containerTitle, []);
 					}
@@ -1149,7 +1184,7 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 									}
 								}
 								else if (new DataView(sceneryObjectBytes.buffer, sceneryObjectBytes.byteOffset, sceneryObjectBytes.byteLength).getUint16(0, true) == 0x0019) {
-									const simObj = await buildSimObject(fileView, address);
+									const simObj = await buildSimObject(fileView, address, file, inputPath);
 									if (simObjects.has(simObj.containerTitle)) {
 										simObjects.get(simObj.containerTitle)!.push(simObj);
 									}
@@ -1174,7 +1209,7 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 									}
 								}
 								else if (new DataView(sceneryObjectBytes.buffer, sceneryObjectBytes.byteOffset, sceneryObjectBytes.byteLength).getUint16(0, true) == 0x0019) {
-									const simObj = await buildSimObject(fileView, address);
+									const simObj = await buildSimObject(fileView, address, file, inputPath);
 									if (simObjects.has(simObj.containerTitle)) {
 										simObjects.get(simObj.containerTitle)!.push(simObj);
 									}
@@ -1440,6 +1475,6 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 			center = [coord.lon, coord.lat, 0];
 		}
 
-		await assembleModel(inputPath, outputPath, tileIndex, modelRefs, center, libraryObjects, control);
+		await assembleModel(inputPath, outputPath, tileIndex, [...modelRefs, ...simObjectsForTile], center, libraryObjects, control);
 	}
 }
