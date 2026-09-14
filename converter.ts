@@ -320,7 +320,7 @@ async function assembleModel(inputPath: string, outputPath: string, tileIndex: n
 					continue;
 				}
 				const xmlName = xmlNames[0].split('=')[1].trim();
-				const xmlPath = path.join(containerFolder, `model${modelIndex}`, xmlName);
+				const xmlPath = path.resolve(path.join(containerFolder, `model${modelIndex}`, xmlName));
 				if (!fs.existsSync(xmlPath)) {
 					console.warn(`XML file does not exist for model ${modelRef.containerTitle}: ${xmlPath}`);
 					continue;

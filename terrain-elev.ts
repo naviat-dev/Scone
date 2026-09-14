@@ -273,10 +273,20 @@ function sampleAltitudeMeters(model: TileModel, lat: number, lon: number): numbe
 	return null;
 }
 
+// Parsing a tile is expensive (disk read + gunzip + triangulation), and many placements share
+// the same tile, so cache parsed meshes to avoid redoing that work for every single placement.
+const tileModelCache = new Map<string, TileModel>();
+
 function loadBtgMesh(filePath: string): TileModel {
+	const cached = tileModelCache.get(filePath);
+	if (cached) {
+		return cached;
+	}
 	const file = fs.readFileSync(filePath);
 	const buffer = file[0] === 0x1f && file[1] === 0x8b ? zlib.gunzipSync(file) : file;
-	return buildTileModel(parseBtg(buffer));
+	const model = buildTileModel(parseBtg(buffer));
+	tileModelCache.set(filePath, model);
+	return model;
 }
 
 export function findAltitudeMeters(filePath: string, lat: number, lon: number, version: number): number | null {
