@@ -51,11 +51,11 @@ jobs:
           - os: macos
             platform: mac
             arch: x64
-            runner: macos-13
+            runner: macos-26
           - os: macos
             platform: mac
             arch: arm64
-            runner: macos-14
+            runner: macos-26
 
     steps:
       - name: Checkout repository
