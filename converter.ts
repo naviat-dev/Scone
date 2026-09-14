@@ -45,7 +45,7 @@ function getViewBytes(fileView: DataView, address: number, length: number): Uint
 	return new Uint8Array(fileView.buffer, fileView.byteOffset + address, length);
 }
 
-async function buildLibraryObject(fileView: DataView, address: number): Promise<LibraryObject> {
+function buildLibraryObject(fileView: DataView, address: number): LibraryObject {
 	const longitude = (fileView.getInt32(address + 4, true) * (360.0 / 805306368.0)) - 180.0;
 	const latitude = 90.0 - (fileView.getInt32(address + 8, true) * (180.0 / 536870912.0));
 	let altitude = fileView.getInt32(address + 12, true) / 1000;
@@ -58,13 +58,10 @@ async function buildLibraryObject(fileView: DataView, address: number): Promise<
 	const imageComplexity = fileView.getUint16(address + 24, true);
 	const guid = getGuidFromBytes(getViewBytes(fileView, address + 44, 16));
 	const scale = fileView.getFloat32(address + 60, true);
-	if (flags.includes(Flags.IsAboveAGL)) {
-		altitude += await getAltitude(latitude, longitude, 2);
-	}
 	return { position: [longitude, latitude, altitude], flags, orientation: [pitch, bank, heading], imageComplexity, guid, scale };
 }
 
-async function buildSimObject(fileView: DataView, address: number, path: string, inputPath: string): Promise<SimObject> {
+function buildSimObject(fileView: DataView, address: number, path: string, inputPath: string, configPathsByTitle: Map<string, string[]>): SimObject {
 	const longitude = (fileView.getInt32(address + 4, true) * (360.0 / 805306368.0)) - 180.0;
 	const latitude = 90.0 - (fileView.getInt32(address + 8, true) * (180.0 / 536870912.0));
 	let altitude = fileView.getInt32(address + 12, true) / 1000;
@@ -80,11 +77,8 @@ async function buildSimObject(fileView: DataView, address: number, path: string,
 	const containerPathLength = fileView.getUint16(address + 50, true);
 	const containerTitle = new TextDecoder().decode(getViewBytes(fileView, address + 52, containerTitleLength));
 	const containerPath = new TextDecoder().decode(getViewBytes(fileView, address + 52 + containerTitleLength, containerPathLength));
-	if (flags.includes(Flags.IsAboveAGL)) {
-		altitude += await getAltitude(latitude, longitude, 2);
-	}
 	// Attempt to resolve the absolute path of the sim.cfg file
-	const matches: string[] = getFilesRecursive(inputPath, '.cfg', false).filter(file => fs.readFileSync(file, 'utf-8').split(/\r?\n/).some(line => line.trim() === `title=${containerTitle}`));
+	const matches = configPathsByTitle.get(containerTitle) ?? [];
 	let mostLikelyMatchScore = -1;
 	let mostLikelyMatch: string = '';
 	for (const match of matches) {
@@ -502,6 +496,17 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 	const guidsWithModels: Set<string> = new Set();
 	const modelReferencesByTile: Map<number, ModelReference[]> = new Map();
 	const allBglFiles: string[] = getFilesRecursive(inputPath, '.bgl', false);
+	const configPathsByTitle = new Map<string, string[]>();
+	for (const file of getFilesRecursive(inputPath, '.cfg', false)) {
+		for (const line of fs.readFileSync(file, 'utf-8').split(/\r?\n/)) {
+			const match = /^title=(.*)$/.exec(line.trim());
+			if (match) {
+				const paths = configPathsByTitle.get(match[1]) ?? [];
+				paths.push(file);
+				configPathsByTitle.set(match[1], paths);
+			}
+		}
+	}
 
 	let totalModelCount: number = 0;
 	let totalLibraryObjects: number = 0;
@@ -562,14 +567,14 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 				address += 2;
 				if (id === 0x0B) { // LibraryObject
 					address -= 4; // Reverse back to get all of the bytes
-					const libraryObject = await buildLibraryObject(fileView, address);
+					const libraryObject = buildLibraryObject(fileView, address);
 					if (!libraryObjects.has(libraryObject.guid)) {
 						libraryObjects.set(libraryObject.guid, []);
 					}
 					libraryObjects.get(libraryObject.guid)!.push(libraryObject);
 				} else if (id === 0x19) { //SimObject
 					address -= 4; // Reverse back to get all of the bytes
-					const simObject = await buildSimObject(fileView, address, file, inputPath);
+					const simObject = buildSimObject(fileView, address, file, inputPath, configPathsByTitle);
 					if (!simObjects.has(simObject.containerTitle)) {
 						simObjects.set(simObject.containerTitle, []);
 					}
@@ -1175,7 +1180,7 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 							if (sceneryObjectLength1 > 0) {
 								const sceneryObjectBytes = getViewBytes(fileView, address, sceneryObjectLength1);
 								if (new DataView(sceneryObjectBytes.buffer, sceneryObjectBytes.byteOffset, sceneryObjectBytes.byteLength).getUint16(0, true) == 0x000b) {
-									const libObj: LibraryObject = await buildLibraryObject(fileView, address);
+									const libObj: LibraryObject = buildLibraryObject(fileView, address);
 									if (libraryObjects.has(libObj.guid)) {
 										libraryObjects.get(libObj.guid)!.push(libObj);
 									}
@@ -1184,7 +1189,7 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 									}
 								}
 								else if (new DataView(sceneryObjectBytes.buffer, sceneryObjectBytes.byteOffset, sceneryObjectBytes.byteLength).getUint16(0, true) == 0x0019) {
-									const simObj = await buildSimObject(fileView, address, file, inputPath);
+									const simObj = buildSimObject(fileView, address, file, inputPath, configPathsByTitle);
 									if (simObjects.has(simObj.containerTitle)) {
 										simObjects.get(simObj.containerTitle)!.push(simObj);
 									}
@@ -1200,7 +1205,7 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 							if (sceneryObjectLength2 > 0) {
 								const sceneryObjectBytes = getViewBytes(fileView, address, sceneryObjectLength2);
 								if (new DataView(sceneryObjectBytes.buffer, sceneryObjectBytes.byteOffset, sceneryObjectBytes.byteLength).getUint16(0, true) == 0x000b) {
-									const libObj: LibraryObject = await buildLibraryObject(fileView, address);
+									const libObj: LibraryObject = buildLibraryObject(fileView, address);
 									if (libraryObjects.has(libObj.guid)) {
 										libraryObjects.get(libObj.guid)!.push(libObj);
 									}
@@ -1209,7 +1214,7 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 									}
 								}
 								else if (new DataView(sceneryObjectBytes.buffer, sceneryObjectBytes.byteOffset, sceneryObjectBytes.byteLength).getUint16(0, true) == 0x0019) {
-									const simObj = await buildSimObject(fileView, address, file, inputPath);
+									const simObj = buildSimObject(fileView, address, file, inputPath, configPathsByTitle);
 									if (simObjects.has(simObj.containerTitle)) {
 										simObjects.get(simObj.containerTitle)!.push(simObj);
 									}
@@ -1325,7 +1330,7 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 							const subRecordSize = fileView.getUint16(address, true);
 							address += 2;
 							if (fileView.getInt16(address, true) == 0x000b) {
-								projectedMesh.libraryObject = await buildLibraryObject(fileView, address);
+								projectedMesh.libraryObject = buildLibraryObject(fileView, address);
 							}
 							address += subRecordSize;
 							airport.projectedMeshes.push(projectedMesh);
@@ -1343,6 +1348,20 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 			}
 		}
 	}
+
+	// Assign altitudes to LibraryObjects and SimObjects concurrently
+	const totalPlacementCount = [...libraryObjects.values(), ...simObjects.values()].flat().length;
+	let placementsProcessed = 0
+	reportStatus(control, `Assigning altitudes to ${totalPlacementCount} placements...`);
+	await Promise.all(
+		[...libraryObjects.values(), ...simObjects.values()].flat().map(async (placement) => {
+			if (placement.flags.includes(Flags.IsAboveAGL)) {
+				placement.position[2] += await getAltitude(placement.position[1], placement.position[0], 2);
+				placementsProcessed++;
+				reportStatus(control, `Assigning altitudes to ${totalPlacementCount - placementsProcessed} placements... (${placementsProcessed} processed)`);
+			}
+		})
+	);
 
 	// Look for models after placements have been gathered
 	for (const file of allBglFiles) {
