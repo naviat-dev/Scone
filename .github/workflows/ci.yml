@@ -85,9 +85,9 @@ jobs:
         run: |
           set -euo pipefail
           shopt -s nullglob
-          files=(dist/*)
+          files=(release/*)
           if ((${#files[@]} == 0)); then
-            echo "No packaged application found in dist" >&2
+            echo "No packaged application found in release" >&2
             exit 1
           fi
           printf 'Packaged application output:\n%s\n' "${files[@]}"
@@ -96,7 +96,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: electron-${{ matrix.os }}-${{ matrix.arch }}
-          path: dist/
+          path: release/
           if-no-files-found: error
           retention-days: 14
 

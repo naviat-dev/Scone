@@ -247,7 +247,7 @@ function barycentric(
 	const dot20 = pointX * edge0X + pointY * edge0Y;
 	const dot21 = pointX * edge1X + pointY * edge1Y;
 	const denominator = dot00 * dot11 - dot01 * dot01;
-	if (denominator === 0) return null;
+	if (Math.abs(denominator) < Number.EPSILON) return null;
 
 	const v = (dot11 * dot20 - dot01 * dot21) / denominator;
 	const w = (dot00 * dot21 - dot01 * dot20) / denominator;
@@ -270,17 +270,7 @@ function sampleAltitudeMeters(model: TileModel, lat: number, lon: number): numbe
 		}
 	}
 
-	let nearest: Vertex | null = null;
-	let nearestDistance = Infinity;
-	for (const vertex of model.vertices) {
-		const distance = (lon - vertex.lon) ** 2 + (lat - vertex.lat) ** 2;
-		if (distance < nearestDistance) {
-			nearest = vertex;
-			nearestDistance = distance;
-		}
-	}
-
-	return nearest?.alt ?? null;
+	return null;
 }
 
 function loadBtgMesh(filePath: string): TileModel {

@@ -5,7 +5,6 @@ import { config } from './config.js';
 
 const latitudeIndex = [[89, 12], [86, 4], [83, 2], [76, 1], [62, 0.5], [22, 0.25], [0, 0.125]];
 const terrasyncUrl = 'https://terrasync.b-cdn.net/Terrain';
-const ftToMeters = 0.3048;
 
 function getTileWidth(input: number): number {
 	for (let i = 0; i < latitudeIndex.length; i++) {
@@ -99,7 +98,7 @@ export async function getAltitude(lat: number, lon: number, version: number): Pr
 	for (const terrainFile of fs.readFileSync(absoluteTilePath).toString('utf-8').split('\n').map(line => line.split(' ')[1]).filter(name => (name ?? '').endsWith('.btg'))) {
 		const altitude = findAltitudeMeters(path.join(path.dirname(absoluteTilePath), `${terrainFile}.gz`), lat, lon, version);
 		if (altitude !== null) {
-			return altitude * ftToMeters;
+			return altitude;
 		}
 	}
 	return 0;

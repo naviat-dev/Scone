@@ -59,7 +59,7 @@ async function buildLibraryObject(fileView: DataView, address: number): Promise<
 	const guid = getGuidFromBytes(getViewBytes(fileView, address + 44, 16));
 	const scale = fileView.getFloat32(address + 60, true);
 	if (flags.includes(Flags.IsAboveAGL)) {
-		altitude += await getAltitude(longitude, latitude, 2);
+		altitude += await getAltitude(latitude, longitude, 2);
 	}
 	return { position: [longitude, latitude, altitude], flags, orientation: [pitch, bank, heading], imageComplexity, guid, scale };
 }
@@ -81,7 +81,7 @@ async function buildSimObject(fileView: DataView, address: number): Promise<SimO
 	const containerTitle = new TextDecoder().decode(getViewBytes(fileView, address + 52, containerTitleLength));
 	const containerPath = new TextDecoder().decode(getViewBytes(fileView, address + 52 + containerTitleLength, containerPathLength));
 	if (flags.includes(Flags.IsAboveAGL)) {
-		altitude += await getAltitude(longitude, latitude, 2);
+		altitude += await getAltitude(latitude, longitude, 2);
 	}
 	return { position: [longitude, latitude, altitude], flags, orientation: [pitch, bank, heading], imageComplexity, containerTitle, containerPath, scale };
 }

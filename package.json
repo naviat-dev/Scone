@@ -20,7 +20,7 @@
     "build:renderer": "esbuild renderer.tsx --bundle --platform=browser --format=esm --sourcemap --outfile=dist/renderer.js",
     "build:tools": "node scripts/copy-gltf-validator.cjs",
     "start": "npm run build && node dist/start.js",
-    "package": "electron-builder --publish never",
+    "package": "npm run build && electron-builder --publish never",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "devDependencies": {
@@ -34,6 +34,9 @@
     "typescript": "^5.9.3"
   },
   "build": {
+    "directories": {
+      "output": "release"
+    },
     "linux": {
       "target": [
         "AppImage"
