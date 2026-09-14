@@ -9,6 +9,7 @@ import { create } from 'xmlbuilder2';
 import { vec3, quat } from 'gl-matrix';
 import { Document, NodeIO, Scene } from '@gltf-transform/core';
 import { dedup, flatten, join, weld, resample, prune, sparse, unpartition, mergeDocuments } from '@gltf-transform/functions';
+import { DOMParser, XMLSerializer } from "@xmldom/xmldom";
 // @ts-expect-error gltf-validator does not provide TypeScript declarations.
 import validator from 'gltf-validator';
 
@@ -168,6 +169,8 @@ async function assembleModel(inputPath: string, outputPath: string, tileIndex: n
 			let binary: Buffer<ArrayBuffer> = Buffer.alloc(0);
 			let name: string = '';
 			let guid: string = '';
+			const libraryObjectsForModel: (LibraryObject | SimObject)[] = [];
+
 			if (modelRef.guid !== undefined && modelRef.file !== undefined && modelRef.offset !== undefined && modelRef.size !== undefined) {
 				modelRef = modelRef as ModelReference;
 				guid = modelRef.guid;
@@ -282,21 +285,105 @@ async function assembleModel(inputPath: string, outputPath: string, tileIndex: n
 						i += size;
 					}
 				}
+				libraryObjectsForModel.push(...libraryObjects.get(guid) || []);
 			} else if (modelRef.position !== undefined && modelRef.flags !== undefined && modelRef.orientation !== undefined && modelRef.imageComplexity !== undefined && modelRef.containerTitle !== undefined && modelRef.containerPath !== undefined && modelRef.scale !== undefined) {
 				modelRef = modelRef as SimObject;
 				name = modelRef.containerTitle;
+				if (!fs.existsSync(modelRef.containerPath)) {
+					console.warn(`Container path does not exist for model ${modelRef.containerTitle}: ${modelRef.containerPath}`);
+					continue;
+				}
 				const containerFolder: string = path.dirname(modelRef.containerPath);
 				const containerText: string = fs.readFileSync(modelRef.containerPath, 'utf-8');
-				const simObjRegex = new RegExp(`title=${modelRef.containerTitle}\\nmodel=(.*)\\ntexture=(.*)`, 'i');
-				const simObjMatch = simObjRegex.exec(containerText);
+				const simObjRegex: RegExp = new RegExp(`title=${modelRef.containerTitle}(?:\r\n|\r|\n)model=(.*)(?:\r\n|\r|\n)texture=(.*)`, 'i');
+				const simObjMatch: RegExpExecArray | null = simObjRegex.exec(containerText);
 				if (!simObjMatch) {
 					console.warn(`Unable to find model/texture for sim object ${modelRef.containerTitle} in ${modelRef.containerPath}`);
 					continue;
 				}
-				const modelIndex = simObjMatch[1].trim();
-				const textureIndex = simObjMatch[2].trim();
-				const xmlName = fs.readFileSync(path.join(containerFolder, `model${modelIndex}`, 'model.CFG'), 'utf-8').split('\n').filter(line => line.startsWith('normal=') && line.endsWith('.xml'))[0].split('=')[1].trim();
-				const xmlDoc = fs.readFileSync(path.join(containerFolder, `model${modelIndex}`, xmlName), 'utf-8');
+				let modelIndex: string = simObjMatch[1].trim();
+				if (modelIndex !== '') {
+					modelIndex = `.${modelIndex}`
+				}
+				let textureIndex: string = simObjMatch[2].trim();
+				if (textureIndex !== '') {
+					textureIndex = `.${textureIndex}`
+				}
+				const modelCfgPath: string = path.join(containerFolder, `model${modelIndex}`, 'model.CFG');
+				if (!fs.existsSync(modelCfgPath)) {
+					console.warn(`Model CFG does not exist for model ${modelRef.containerTitle}: ${modelCfgPath}`);
+					continue;
+				}
+				const xmlNames = fs.readFileSync(modelCfgPath, 'utf-8').split('\n').filter(line => line.trim().startsWith('normal=') && line.trim().endsWith('.xml'));
+				if (xmlNames.length === 0) {
+					console.warn(`No XML name found in model CFG for model ${modelRef.containerTitle}: ${modelCfgPath}`);
+					continue;
+				}
+				const xmlName = xmlNames[0].split('=')[1].trim();
+				const xmlPath = path.join(containerFolder, `model${modelIndex}`, xmlName);
+				if (!fs.existsSync(xmlPath)) {
+					console.warn(`XML file does not exist for model ${modelRef.containerTitle}: ${xmlPath}`);
+					continue;
+				}
+				let xmlDoc = null;
+				try {
+					xmlDoc = new DOMParser().parseFromString(fs.readFileSync(xmlPath, 'utf-8').trim(), 'application/xml');
+				} catch (error) {
+					console.warn(`Failed to parse XML for model ${modelRef.containerTitle}: ${xmlPath}`);
+					continue;
+				}
+				const lods = xmlDoc.getElementsByTagName('LODS')[0].getElementsByTagName('LOD')
+				let maxLod: number = -1;
+				let gltfPath: string = '';
+				for (const lod of lods) {
+					const lodLevel = parseInt(lod.getAttribute('MinSize') || '0', 10);
+					if (lodLevel > maxLod) {
+						maxLod = lodLevel;
+						gltfPath = lod.getAttribute('ModelFile') || '';
+					}
+				}
+				const gltfJsonPath: string = path.join(containerFolder, `model${modelIndex}`, gltfPath);
+				if (!fs.existsSync(gltfJsonPath) || gltfPath === '') {
+					console.warn(`GLTF JSON file does not exist for model ${modelRef.containerTitle}: ${gltfJsonPath}`);
+					continue;
+				}
+				json = JSON.parse(fs.readFileSync(gltfJsonPath, 'utf-8'));
+				const binaryBufferName: string = (json.buffers as Array<{ uri: string }>)[0].uri;
+				const binaryBufferPath: string = path.join(containerFolder, `model${modelIndex}`, binaryBufferName);
+				if (!fs.existsSync(binaryBufferPath) || binaryBufferName === '') {
+					console.warn(`Binary buffer file does not exist for model ${modelRef.containerTitle}: ${binaryBufferPath}`);
+					continue;
+				}
+				binary = fs.readFileSync(binaryBufferPath);
+				for (const image of (json.images || []) as Array<any>) {
+					// Look for the texture files in either possible texture directory
+					if (!image || typeof image !== 'object') {
+						continue;
+					}
+
+					let uri: string = typeof image.uri === 'string' ? image.uri : '';
+					uri = decodeURIComponent(uri.replace(/\\/g, path.sep).replace(/\//g, path.sep));
+					if (uri.length === 0) {
+						continue;
+					}
+
+					const possibleTexturePaths = [
+						path.join(containerFolder, 'texture', uri),
+						path.join(containerFolder, `texture${textureIndex}`, uri)
+					];
+
+					if (fs.existsSync(possibleTexturePaths[0])) {
+						image.extras = { absolutePath: possibleTexturePaths[0] };
+						continue;
+					} else if (fs.existsSync(possibleTexturePaths[1])) {
+						image.extras = { absolutePath: possibleTexturePaths[1] };
+						image.uri = `${image.uri}${textureIndex}`
+						continue;
+					}
+				}
+				// This seems wasteful as we'll end up processing SimObjects over and over again
+				// Currently though, it makes things like different liveries much simpler to handle.
+				libraryObjectsForModel.push(modelRef);
 			} else {
 				console.warn(`Model ${guid} is missing required properties.`);
 			}
@@ -305,8 +392,6 @@ async function assembleModel(inputPath: string, outputPath: string, tileIndex: n
 			const tempGltfPath = path.join(tempTilePath, `temp-${guid}.gltf`);
 			checkAbort(control);
 			reportStatus(control, `Processing model source ${name}...`);
-
-			const libraryObjectsForModel = libraryObjects.get(guid) || [];
 
 			const meshes = Array.isArray(json.meshes) ? json.meshes : [];
 			const accessors = Array.isArray(json.accessors) ? json.accessors : [];
@@ -341,6 +426,13 @@ async function assembleModel(inputPath: string, outputPath: string, tileIndex: n
 
 				const outputUri = `${path.basename(uri, path.extname(uri))}.DDS`;
 				image.uri = outputUri;
+				const outputTexturePath = path.join(tempTilePath, outputUri);
+				if (fs.existsSync(image.extras.absolutePath)) {
+					// This is a SimObject whose custom textures have already been assigned earlier
+					convertToDDS(image.extras.absolutePath, outputTexturePath);
+					continue;
+				}
+
 				const extras = (image.extras && typeof image.extras === 'object')
 					? image.extras
 					: {};
@@ -348,7 +440,6 @@ async function assembleModel(inputPath: string, outputPath: string, tileIndex: n
 				extras.absolutePath = absoluteTexturePath;
 				image.extras = extras;
 
-				const outputTexturePath = path.join(tempTilePath, outputUri);
 				if (!fs.existsSync(outputTexturePath)) {
 					if (fs.existsSync(absoluteTexturePath)) {
 						convertToDDS(absoluteTexturePath, outputTexturePath);
@@ -410,7 +501,7 @@ async function assembleModel(inputPath: string, outputPath: string, tileIndex: n
 				await repairDocument(document, tempGltfPath, validation.issues.messages);
 				await new NodeIO().write(tempGltfPath, document);
 				validation = await validator.validateString(fs.readFileSync(tempGltfPath, 'utf-8'), {
-					ignoredIssues: ['IO_ERROR', 'TEXTURE_INVALID_IMAGE_MIME_TYPE']
+					ignoredIssues: ['IO_ERROR', 'TEXTURE_INVALID_IMAGE_MIME_TYPE', 'UNSATISFIED_DEPENDENCY']
 				});
 			}
 
@@ -475,7 +566,7 @@ async function assembleModel(inputPath: string, outputPath: string, tileIndex: n
 
 	reportStatus(control, 'Writing to disk...');
 	fs.mkdirSync(path.join(outputPath, 'Objects', getFilePathFromTileIndex(tileIndex)), { recursive: true });
-	await tileDocument.transform(dedup(), flatten(), join(), weld(), resample(), sparse(), prune({ keepAttributes: true }), unpartition());
+	await tileDocument.transform(dedup(), flatten(), /* join(), */ weld(), resample(), sparse(), prune({ keepAttributes: true }), unpartition());
 	await new NodeIO().write(path.join(outputPath, 'Objects', getFilePathFromTileIndex(tileIndex), `${tileIndex}.gltf`), tileDocument);
 	fs.writeFileSync(
 		path.join(outputPath, 'Objects', getFilePathFromTileIndex(tileIndex), `${tileIndex}.stg`),

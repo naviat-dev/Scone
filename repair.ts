@@ -632,7 +632,7 @@ export async function repairDocument(document: Document, modelPath: string, issu
     restoreTexCoordsFromOriginalModel(document, sourceUvContext);
 
     // Run structural cleanup after issue-specific and ASOBO repairs.
-    await document.transform(weld(), dedup(), prune({ keepAttributes: true }), unpartition());
+    await document.transform(weld(), dedup(), prune({ keepAttributes: true }));
     // Clean up all scenes except for the default scene
     const root = document.getRoot();
     const defaultScene = root.getDefaultScene();
