@@ -320,7 +320,7 @@ async function assembleModel(inputPath: string, outputPath: string, tileIndex: n
 					continue;
 				}
 				const xmlName = xmlNames[0].split('=')[1].trim();
-				const xmlPath = path.resolve(path.join(containerFolder, `model${modelIndex}`, xmlName));
+				const xmlPath = path.resolve(path.join(containerFolder, `model${modelIndex}`, xmlName).replace(/\\/g, path.sep).replace(/\//g, path.sep));
 				if (!fs.existsSync(xmlPath)) {
 					console.warn(`XML file does not exist for model ${modelRef.containerTitle}: ${xmlPath}`);
 					continue;
@@ -342,14 +342,14 @@ async function assembleModel(inputPath: string, outputPath: string, tileIndex: n
 						gltfPath = lod.getAttribute('ModelFile') || '';
 					}
 				}
-				const gltfJsonPath: string = path.join(containerFolder, `model${modelIndex}`, gltfPath);
+				const gltfJsonPath: string = path.resolve(path.join(path.dirname(xmlPath), gltfPath));
 				if (!fs.existsSync(gltfJsonPath) || gltfPath === '') {
 					console.warn(`GLTF JSON file does not exist for model ${modelRef.containerTitle}: ${gltfJsonPath}`);
 					continue;
 				}
 				json = JSON.parse(fs.readFileSync(gltfJsonPath, 'utf-8'));
 				const binaryBufferName: string = (json.buffers as Array<{ uri: string }>)[0].uri;
-				const binaryBufferPath: string = path.join(containerFolder, `model${modelIndex}`, binaryBufferName);
+				const binaryBufferPath: string = path.resolve(path.join(path.dirname(gltfJsonPath), binaryBufferName));
 				if (!fs.existsSync(binaryBufferPath) || binaryBufferName === '') {
 					console.warn(`Binary buffer file does not exist for model ${modelRef.containerTitle}: ${binaryBufferPath}`);
 					continue;
