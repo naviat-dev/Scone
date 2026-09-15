@@ -332,10 +332,23 @@ async function assembleModel(inputPath: string, outputPath: string, tileIndex: n
 					console.warn(`Failed to parse XML for model ${modelRef.containerTitle}: ${xmlPath}`);
 					continue;
 				}
-				const lods = xmlDoc.getElementsByTagName('LODS')[0].getElementsByTagName('LOD')
+				const lodsRoot = xmlDoc.getElementsByTagName('LODS')[0];
+				if (!lodsRoot) {
+					console.warn(`No LODS section found for model ${modelRef.containerTitle}: ${xmlPath}`);
+					continue;
+				}
+				const lods = lodsRoot.getElementsByTagName('LOD');
+				if (!lods || lods.length === 0) {
+					console.warn(`No LOD entries found for model ${modelRef.containerTitle}: ${xmlPath}`);
+					continue;
+				}
 				let maxLod: number = -1;
 				let gltfPath: string = '';
-				for (const lod of lods) {
+				for (let lodIndex = 0; lodIndex < lods.length; lodIndex++) {
+					const lod = lods.item(lodIndex);
+					if (!lod) {
+						continue;
+					}
 					const lodLevel = parseInt(lod.getAttribute('MinSize') || '0', 10);
 					if (lodLevel > maxLod) {
 						maxLod = lodLevel;
