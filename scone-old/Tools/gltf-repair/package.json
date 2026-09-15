@@ -1,0 +1,32 @@
+{
+  "name": "gltfrepair",
+  "version": "1.0.0",
+  "description": "",
+  "type": "module",
+  "bin": {
+    "gltf-repair": "dist/index.js"
+  },
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "tsx src/index.ts",
+    "build": "tsc",
+    "build:pkg-entry": "esbuild src/index.ts --bundle --platform=node --target=node18 --format=cjs --alias:ndarray-pixels=./scripts/stubs/ndarray-pixels.cjs --outfile=dist/pkg-entry.cjs",
+    "package-binary": "node ./scripts/package-binary.mjs"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@gltf-transform/core": "^4.4.2",
+    "@gltf-transform/extensions": "^4.4.2",
+    "@gltf-transform/functions": "^4.4.2"
+  },
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "esbuild": "^0.28.2",
+    "pkg": "^5.8.1",
+    "tsx": "^4.23.12",
+    "typescript": "^7.0.2"
+  }
+}

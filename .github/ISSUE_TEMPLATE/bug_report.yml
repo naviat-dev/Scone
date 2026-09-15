@@ -22,27 +22,24 @@ body:
       label: Steps to Reproduce
       description: Describe all the steps we need to take to show the behavior that you have observed. Also, include what you expected to happen and what did actually happen.
       placeholder: |
-        1. Create a File > New App
-        2. Add a `Button` like so: `<Button Text="this is a bug" />`
-        3. Click the added button and observe the bug 🐞
+        1. Run `npm run start`.
+        2. Open the affected Electron window or workflow.
+        3. Observe the problem.
 
-        Expected outcome: a bug was added
-        Actual outcome: a ladybug appeared
+        Expected outcome: describe what should happen.
+        Actual outcome: describe what happened.
     validations:
       required: true
   - type: dropdown
     id: platform-with-bug
     attributes:
       label: Platform with bug
-      description: What Platform is this bug affecting?
+      description: Which operating system and CPU architecture show the problem?
       options:
-        - Core
-        - Android
-        - iOS
         - Windows
-        - Skia
-        - WebAssembly
-        - Other
+        - macOS
+        - Linux
+        - All platforms
     validations:
       required: true
 
@@ -50,20 +47,27 @@ body:
     id: platforms-affected
     attributes:
       label: Affected platforms
-      description: Select all or any platform that you see this issue on. This helps us determine if it's something platform-specific or in the core. If you were only able to test on 1 platform, please check the last option to inform us about that.
+      description: Select every operating system affected by the issue.
       multiple: true
       options:
-        - Android
-        - iOS
-        - MacOS
         - Windows
-        - GTK
-        - Linux Framebuffer
-        - WPF
-        - Skia Desktop
-        - WebAssembly
+        - macOS
+        - Linux
         - Other
-        - I was *not* able test on other platforms
+        - I tested only one platform
+    validations:
+      required: true
+
+  - type: dropdown
+    id: architecture
+    attributes:
+      label: CPU architecture
+      description: Which CPU architecture is affected?
+      options:
+        - x64
+        - arm64
+        - Both x64 and arm64
+        - Unknown
     validations:
       required: true
 
