@@ -7,7 +7,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { create } from 'xmlbuilder2';
 import { vec3, quat } from 'gl-matrix';
-import { Document, NodeIO, Scene } from '@gltf-transform/core';
+import { Document, NodeIO, PropertyType, Scene } from '@gltf-transform/core';
 import { dedup, flatten, join, weld, resample, prune, sparse, unpartition, mergeDocuments } from '@gltf-transform/functions';
 import { DOMParser, XMLSerializer } from "@xmldom/xmldom";
 // @ts-expect-error gltf-validator does not provide TypeScript declarations.
@@ -120,7 +120,6 @@ function readFourCC(buffer: Uint8Array, offset: number): string {
 	return Buffer.from(buffer.subarray(offset, offset + 4)).toString('ascii');
 }
 
-
 function getFilesRecursive(dir: string, extension: string, caseSensitive: boolean): string[] {
 	const result: string[] = [];
 	const files = fs.readdirSync(dir);
@@ -156,6 +155,31 @@ function resolveAbsoluteTexturePath(inputPath: string, file: string, textureUri:
 		}
 	}
 	return mostLikelyMatch;
+}
+
+function findCaseInsensitive(inputPath: string): string | null {
+    const absolutePath = path.resolve(inputPath);
+    const parsed = path.parse(absolutePath);
+
+    let current = parsed.root;
+
+    for (const part of absolutePath.slice(parsed.root.length).split(path.sep).filter(Boolean)) {
+        if (!fs.existsSync(current)) {
+            return null;
+        }
+
+        const match = fs.readdirSync(current).find(
+            entry => entry.toLowerCase() === part.toLowerCase()
+        );
+
+        if (!match) {
+            return null;
+        }
+
+        current = path.join(current, match);
+    }
+
+    return current;
 }
 
 async function assembleModel(inputPath: string, outputPath: string, tileIndex: number, modelReferences: any[], center: vec3, libraryObjects: Map<string, LibraryObject[]>, control?: ConversionControl) {
@@ -378,20 +402,16 @@ async function assembleModel(inputPath: string, outputPath: string, tileIndex: n
 					uri = decodeURIComponent(uri.replace(/\\/g, path.sep).replace(/\//g, path.sep));
 					if (uri.length === 0) {
 						continue;
+					} else if (uri.startsWith(`TEXTURE${path.sep}`)) {
+						uri = uri.replace(`TEXTURE${path.sep}`, '');
+					} else if (uri.startsWith(`texture${path.sep}`)) {
+						uri = uri.replace(`texture${path.sep}`, '');
 					}
 
-					const possibleTexturePaths = [
-						path.join(containerFolder, 'texture', uri),
-						path.join(containerFolder, `texture${textureIndex}`, uri)
-					];
-
-					if (fs.existsSync(possibleTexturePaths[0])) {
-						image.extras = { absolutePath: possibleTexturePaths[0] };
-						continue;
-					} else if (fs.existsSync(possibleTexturePaths[1])) {
-						image.extras = { absolutePath: possibleTexturePaths[1] };
-						image.uri = `${image.uri}${textureIndex}`
-						continue;
+					const actualTexturePath = findCaseInsensitive(path.resolve(path.join(containerFolder, `texture${textureIndex}`, uri)));
+					if (fs.existsSync(actualTexturePath || '')) {
+						image.extras = { absolutePath: actualTexturePath };
+						image.uri = `${path.basename(image.uri, path.extname(image.uri))}${textureIndex}${path.extname(image.uri)}`;
 					}
 				}
 				// This seems wasteful as we'll end up processing SimObjects over and over again
@@ -455,7 +475,10 @@ async function assembleModel(inputPath: string, outputPath: string, tileIndex: n
 
 				if (!fs.existsSync(outputTexturePath)) {
 					if (fs.existsSync(absoluteTexturePath)) {
-						convertToDDS(absoluteTexturePath, outputTexturePath);
+						// Using the actual texture files here takes tons of RAM
+						// Copy the dummy texture first, keep the absolute path for later conversion
+						// TODO: Make an actually distinct dummy texture for each missing texture to avoid conflicts
+						fs.copyFileSync(path.join(process.cwd(), 'Assets', 'dummy_tex.dds'), outputTexturePath);
 					} else {
 						console.warn(`Texture file not found: ${uri}`);
 						const fallbackTexturePath = path.join(process.cwd(), 'Assets', 'dummy_tex.dds');
@@ -503,8 +526,9 @@ async function assembleModel(inputPath: string, outputPath: string, tileIndex: n
 			applyAsoboGeometryRepair(document);
 			await new NodeIO().write(tempGltfPath, document);
 
+			const ignoredIssues = ['IO_ERROR', 'TEXTURE_INVALID_IMAGE_MIME_TYPE', 'UNSATISFIED_DEPENDENCY'];
 			let validation: any = await validator.validateString(JSON.stringify(json), {
-				ignoredIssues: ['IO_ERROR', 'TEXTURE_INVALID_IMAGE_MIME_TYPE']
+				ignoredIssues: ignoredIssues
 			});
 			let tries = 0;
 			while (tries < config.maxRepairRetries && validation.issues.numErrors > 0) {
@@ -514,7 +538,7 @@ async function assembleModel(inputPath: string, outputPath: string, tileIndex: n
 				await repairDocument(document, tempGltfPath, validation.issues.messages);
 				await new NodeIO().write(tempGltfPath, document);
 				validation = await validator.validateString(fs.readFileSync(tempGltfPath, 'utf-8'), {
-					ignoredIssues: ['IO_ERROR', 'TEXTURE_INVALID_IMAGE_MIME_TYPE', 'UNSATISFIED_DEPENDENCY']
+					ignoredIssues: ignoredIssues
 				});
 			}
 
@@ -578,11 +602,33 @@ async function assembleModel(inputPath: string, outputPath: string, tileIndex: n
 	}
 
 	reportStatus(control, 'Writing to disk...');
-	fs.mkdirSync(path.join(outputPath, 'Objects', getFilePathFromTileIndex(tileIndex)), { recursive: true });
-	await tileDocument.transform(dedup(), flatten(), /* join(), */ weld(), resample(), sparse(), prune({ keepAttributes: true }), unpartition());
-	await new NodeIO().write(path.join(outputPath, 'Objects', getFilePathFromTileIndex(tileIndex), `${tileIndex}.gltf`), tileDocument);
+	const tileOutputPath = path.join(outputPath, 'Objects', getFilePathFromTileIndex(tileIndex)); 
+	fs.mkdirSync(tileOutputPath, { recursive: true });
+	// Skin dedup compares joint Nodes recursively; deeply-nested jetway/skeleton hierarchies can overflow the call stack, so skip it.
+	await tileDocument.transform(dedup({ propertyTypes: [PropertyType.ACCESSOR, PropertyType.MESH, PropertyType.TEXTURE, PropertyType.MATERIAL] }), flatten(), weld(), resample(), sparse(), prune({ keepAttributes: true }), unpartition());
+	await new NodeIO().write(path.join(tileOutputPath, `${tileIndex}.gltf`), tileDocument);
+	// Reread JSON and copy texture files
+	const jsonPath = path.join(tileOutputPath, `${tileIndex}.gltf`);
+	const json = JSON.parse(fs.readFileSync(jsonPath, 'utf-8'));
+	if (json.images) {
+		for (const image of json.images) {
+			if (image.extras.absolutePath && image.uri) {
+				const texturePath = path.join(tileOutputPath, image.uri);
+				if (fs.existsSync(texturePath)) {
+					fs.unlinkSync(texturePath);
+					convertToDDS(image.extras.absolutePath, texturePath);
+				}
+			}
+		}
+	}
+	fs.renameSync(
+		path.join(tileOutputPath, json.buffers[0].uri),
+		path.join(tileOutputPath, `${tileIndex}.bin`)
+	);
+	json.buffers[0].uri = `${tileIndex}.bin`;
+	fs.writeFileSync(jsonPath, JSON.stringify(json, null, 4));
 	fs.writeFileSync(
-		path.join(outputPath, 'Objects', getFilePathFromTileIndex(tileIndex), `${tileIndex}.stg`),
+		path.join(tileOutputPath, `${tileIndex}.stg`),
 		`OBJECT_STATIC ${tileIndex}.gltf ${center[0]} ${center[1]} ${center[2]} 270 0 90`
 	);
 }
