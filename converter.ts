@@ -530,6 +530,7 @@ async function assembleModel(inputPath: string, outputPath: string, tileIndex: n
 			let document: Document = await new NodeIO().read(tempGltfPath);
 			// Repair Asobo-specific geometry issues, then re-export for validation
 			applyAsoboGeometryRepair(document);
+			await new NodeIO().write(tempGltfPath, document);
 
 			const ignoredIssues = ['IO_ERROR', 'TEXTURE_INVALID_IMAGE_MIME_TYPE', 'UNSATISFIED_DEPENDENCY'];
 			let validation: any = await validator.validateString(JSON.stringify(json), {
@@ -541,6 +542,7 @@ async function assembleModel(inputPath: string, outputPath: string, tileIndex: n
 				tries++;
 				console.warn(`Attempt ${tries} to fix ${validation.issues.numErrors} errors for model ${name} (${modelRef.guid})`);
 				await repairDocument(document, tempGltfPath, validation.issues.messages);
+				await new NodeIO().write(tempGltfPath, document);
 				validation = await validator.validateString(fs.readFileSync(tempGltfPath, 'utf-8'), {
 					ignoredIssues: ignoredIssues
 				});
@@ -620,6 +622,7 @@ async function assembleModel(inputPath: string, outputPath: string, tileIndex: n
 			accessor.setBuffer(root.listBuffers()[0] ?? tileDocument.createBuffer());
 		}
 	}
+	await new NodeIO().write(path.join(tileOutputPath, `${tileIndex}.gltf`), tileDocument);
 	// Reread JSON and copy texture files
 	const jsonPath = path.join(tileOutputPath, `${tileIndex}.gltf`);
 	const json = JSON.parse(fs.readFileSync(jsonPath, 'utf-8'));
