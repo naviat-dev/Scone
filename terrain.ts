@@ -5,7 +5,6 @@ import { config } from './config.js';
 
 const latitudeIndex = [[89, 12], [86, 4], [83, 2], [76, 1], [62, 0.5], [22, 0.25], [0, 0.125]];
 const terrasyncUrl = 'https://terrasync.b-cdn.net/Terrain';
-const queuedRequests: Set<number> = new Set();
 
 function getTileWidth(input: number): number {
 	for (let i = 0; i < latitudeIndex.length; i++) {
@@ -55,10 +54,6 @@ async function request(url: string, options?: RequestInit): Promise<Response> {
 export async function getAltitude(lat: number, lon: number, version: number): Promise<number> {
 	let absoluteTilePath = '';
 	const index = getTileIndexFromCoord(lat, lon);
-	// If the request is already queued, wait until it is processed
-	while (queuedRequests.has(index)) {
-		await new Promise(resolve => setTimeout(resolve, 1000));
-	}
 	const tileFilePath = getFilePathFromTileIndex(index);
 	const tileUrlPath = getFilePathFromTileIndex(index).replace(path.sep, '/');
 	for (const dir of config.sceneryDirectories.concat([config.tempDir])) {
@@ -72,7 +67,6 @@ export async function getAltitude(lat: number, lon: number, version: number): Pr
 		if (config.deadTiles.includes(index)) {
 			return 0;
 		}
-		queuedRequests.add(index);
 		const folderUrl = `${terrasyncUrl}/${tileUrlPath}`;
 		const stgUrl = `${folderUrl}/${index}.stg`;
 		let response = await request(stgUrl, { method: 'GET' });
@@ -99,7 +93,6 @@ export async function getAltitude(lat: number, lon: number, version: number): Pr
 		} else {
 			throw new Error(`Failed to fetch terrain tile: ${response.status} ${response.statusText}`);
 		}
-		queuedRequests.delete(index);
 		absoluteTilePath = path.join(config.tempDir, 'Terrain', tileFilePath, `${index}.stg`);
 	}
 	for (const terrainFile of fs.readFileSync(absoluteTilePath).toString('utf-8').split('\n').map(line => line.split(' ')[1]).filter(name => (name ?? '').endsWith('.btg'))) {
