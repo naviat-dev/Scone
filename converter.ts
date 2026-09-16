@@ -414,10 +414,15 @@ async function assembleModel(inputPath: string, outputPath: string, tileIndex: n
 						uri = uri.replace(`texture${path.sep}`, '');
 					}
 
-					const actualTexturePath = findCaseInsensitive(path.resolve(path.join(containerFolder, `texture${textureIndex}`, uri)));
-					if (fs.existsSync(actualTexturePath || '')) {
-						image.extras = { absolutePath: actualTexturePath };
+					const texturePathCandidates = [findCaseInsensitive(path.resolve(path.join(containerFolder, `texture${textureIndex}`, uri))), findCaseInsensitive(path.resolve(path.join(containerFolder, `texture`, uri)))];
+					if (fs.existsSync(texturePathCandidates[0] || '')) {
+						image.extras = { absolutePath: texturePathCandidates[0] };
 						image.uri = `${path.basename(image.uri, path.extname(image.uri))}${textureIndex}${path.extname(image.uri)}`;
+					} else if (fs.existsSync(texturePathCandidates[1] || '')) {
+						image.extras = { absolutePath: texturePathCandidates[1] };
+						image.uri = `${path.basename(image.uri, path.extname(image.uri))}${textureIndex}${path.extname(image.uri)}`;
+					} else {
+						console.warn(`Texture file does not exist for model ${modelRef.containerTitle}: ${uri}`);
 					}
 				}
 				// This seems wasteful as we'll end up processing SimObjects over and over again
@@ -466,7 +471,7 @@ async function assembleModel(inputPath: string, outputPath: string, tileIndex: n
 				const outputUri = `${path.basename(uri, path.extname(uri))}.DDS`;
 				image.uri = outputUri;
 				const outputTexturePath = path.join(tempTilePath, outputUri);
-				if (fs.existsSync(image.extras.absolutePath)) {
+				if (image.extras && fs.existsSync(image.extras.absolutePath || '')) {
 					// This is a SimObject whose custom textures have already been assigned earlier
 					convertToDDS(image.extras.absolutePath, outputTexturePath);
 					continue;
