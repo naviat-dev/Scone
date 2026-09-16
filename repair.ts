@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { Document } from '@gltf-transform/core';
-import { dedup, instance, flatten, join, weld, resample, prune, sparse, unpartition} from '@gltf-transform/functions';
+import { dedup, instance, flatten, join, weld, resample, prune, unpartition} from '@gltf-transform/functions';
 
 interface RepairIssue {
     code: string;
@@ -653,6 +653,6 @@ export async function optimizeDocument(document: Document, modelPath: string): P
     restoreTexCoordsFromOriginalModel(document, sourceUvContext);
 
     // Apply optimization transforms.
-    await document.transform(dedup(), instance(), flatten(), join(), weld(), resample(), sparse(), prune({ keepAttributes: true }), unpartition());
+    await document.transform(dedup(), instance(), flatten(), join(), weld(), resample(), prune({ keepAttributes: true }), unpartition());
     return document;
 }

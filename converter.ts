@@ -2,13 +2,14 @@ import { getTileIndexFromCoord, getCoordFromTileIndex, getFilePathFromTileIndex,
 import { LibraryObject, SimObject, Flags, Airport, Tower, Runway, RunwayStart, TaxiwayPoint, TaxiwayParking, TaxiwayPath, TaxiwayPathType, Apron, TaxiwaySign, PaintedLine, PaintedHatchedArea, ApronEdgeLights, Helipad, ProjectedMesh, ModelReference } from './structures.js'
 import { config } from './config.js';
 import { applyAsoboGeometryRepair, repairDocument } from './repair.js';
+import { writeFlightGearGltf } from './gltf-export.js';
 import { convertToDDS } from './texconv.js'
 import * as fs from 'fs';
 import * as path from 'path';
 import { create } from 'xmlbuilder2';
 import { vec3, quat } from 'gl-matrix';
 import { Document, NodeIO, PropertyType, Scene } from '@gltf-transform/core';
-import { dedup, flatten, join, weld, resample, prune, sparse, unpartition, mergeDocuments } from '@gltf-transform/functions';
+import { dedup, flatten, join, weld, resample, prune, unpartition, mergeDocuments } from '@gltf-transform/functions';
 import { DOMParser, XMLSerializer } from "@xmldom/xmldom";
 // @ts-expect-error gltf-validator does not provide TypeScript declarations.
 import validator from 'gltf-validator';
@@ -524,7 +525,7 @@ async function assembleModel(inputPath: string, outputPath: string, tileIndex: n
 			let document: Document = await new NodeIO().read(tempGltfPath);
 			// Repair Asobo-specific geometry issues, then re-export for validation
 			applyAsoboGeometryRepair(document);
-			await new NodeIO().write(tempGltfPath, document);
+			await writeFlightGearGltf(tempGltfPath, document);
 
 			const ignoredIssues = ['IO_ERROR', 'TEXTURE_INVALID_IMAGE_MIME_TYPE', 'UNSATISFIED_DEPENDENCY'];
 			let validation: any = await validator.validateString(JSON.stringify(json), {
@@ -536,7 +537,7 @@ async function assembleModel(inputPath: string, outputPath: string, tileIndex: n
 				tries++;
 				console.warn(`Attempt ${tries} to fix ${validation.issues.numErrors} errors for model ${name} (${modelRef.guid})`);
 				await repairDocument(document, tempGltfPath, validation.issues.messages);
-				await new NodeIO().write(tempGltfPath, document);
+				await writeFlightGearGltf(tempGltfPath, document);
 				validation = await validator.validateString(fs.readFileSync(tempGltfPath, 'utf-8'), {
 					ignoredIssues: ignoredIssues
 				});
@@ -605,8 +606,8 @@ async function assembleModel(inputPath: string, outputPath: string, tileIndex: n
 	const tileOutputPath = path.join(outputPath, 'Objects', getFilePathFromTileIndex(tileIndex)); 
 	fs.mkdirSync(tileOutputPath, { recursive: true });
 	// Skin dedup compares joint Nodes recursively; deeply-nested jetway/skeleton hierarchies can overflow the call stack, so skip it.
-	await tileDocument.transform(dedup({ propertyTypes: [PropertyType.ACCESSOR, PropertyType.MESH, PropertyType.TEXTURE, PropertyType.MATERIAL] }), flatten(), weld(), resample(), sparse(), prune({ keepAttributes: true }), unpartition());
-	await new NodeIO().write(path.join(tileOutputPath, `${tileIndex}.gltf`), tileDocument);
+	await tileDocument.transform(dedup({ propertyTypes: [PropertyType.ACCESSOR, PropertyType.MESH, PropertyType.TEXTURE, PropertyType.MATERIAL] }), flatten(), weld(), resample(), prune({ keepAttributes: true }), unpartition());
+	await writeFlightGearGltf(path.join(tileOutputPath, `${tileIndex}.gltf`), tileDocument);
 	// Reread JSON and copy texture files
 	const jsonPath = path.join(tileOutputPath, `${tileIndex}.gltf`);
 	const json = JSON.parse(fs.readFileSync(jsonPath, 'utf-8'));
