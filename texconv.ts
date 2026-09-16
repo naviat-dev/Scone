@@ -238,10 +238,12 @@ function decodeBc5Snorm(data: Buffer, width: number, height: number): Buffer {
 					continue;
 				}
 
+				const redValue = redPalette[readBc4Index(data, blockOffset, pixel)];
+				const greenValue = greenPalette[readBc4Index(data, blockOffset + 8, pixel)];
 				const outputOffset = (y * width + x) * 4;
-				output[outputOffset] = 128;
-				output[outputOffset + 1] = greenPalette[readBc4Index(data, blockOffset + 8, pixel)];
-				output[outputOffset + 2] = redPalette[readBc4Index(data, blockOffset, pixel)];
+				output[outputOffset] = reconstructBc5BlueChannel(redValue, greenValue);
+				output[outputOffset + 1] = greenValue;
+				output[outputOffset + 2] = redValue;
 				output[outputOffset + 3] = 255;
 			}
 			blockOffset += 16;
@@ -265,6 +267,15 @@ function createSnormPalette(endpoint0: number, endpoint1: number): number[] {
 		palette.push(-127, 127);
 	}
 	return palette.map((value) => Math.round((value + 127) * 255 / 254));
+}
+
+// BC5 only stores X/Y; reconstruct the (always non-negative) Z component per the standard derivation
+// used by DirectXTex/Microsoft, then encode it unsigned so a flat normal decodes to ~(128,128,255).
+function reconstructBc5BlueChannel(redByte: number, greenByte: number): number {
+	const x = redByte / 127.5 - 1;
+	const y = greenByte / 127.5 - 1;
+	const z = Math.sqrt(Math.max(0, 1 - x * x - y * y));
+	return Math.round(z * 255);
 }
 
 function readBc4Index(data: Buffer, blockOffset: number, pixel: number): number {
