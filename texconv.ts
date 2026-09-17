@@ -175,8 +175,11 @@ function convertDds(inputPath: string, outputPath: string): void {
 	const mipCount = input.readUInt32LE(28) || 1;
 	const fourCc = input.toString('ascii', 84, 88);
 	const hasDx10Header = fourCc === 'DX10';
+	if (hasDx10Header && input.length < DDS_HEADER_SIZE) {
+		throw new Error(`Not a valid DDS file: ${inputPath}`);
+	}
 	const isBc5Snorm = fourCc === 'BC5S'
-		|| (hasDx10Header && input.length >= DDS_HEADER_SIZE && input.readUInt32LE(128) === DXGI_FORMAT_BC5_SNORM);
+		|| (hasDx10Header && input.readUInt32LE(128) === DXGI_FORMAT_BC5_SNORM);
 	if (!isBc5Snorm) {
 		copyFileAtomically(inputPath, outputPath);
 		return;
