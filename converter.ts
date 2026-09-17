@@ -617,7 +617,42 @@ async function assembleModel(inputPath: string, outputPath: string, tileIndex: n
 	const tileOutputPath = path.join(outputPath, 'Objects', getFilePathFromTileIndex(tileIndex)); 
 	fs.mkdirSync(tileOutputPath, { recursive: true });
 	// Skin dedup compares joint Nodes recursively; deeply-nested jetway/skeleton hierarchies can overflow the call stack, so skip it.
-	await tileDocument.transform(dedup({ propertyTypes: [PropertyType.ACCESSOR, PropertyType.MESH, PropertyType.TEXTURE, PropertyType.MATERIAL] }), flatten(), weld(), resample(), prune({ keepAttributes: true }), unpartition());
+	reportStatus(control, 'Running dedup...');
+	try{
+		await tileDocument.transform(dedup({ propertyTypes: [PropertyType.ACCESSOR, PropertyType.MESH, PropertyType.TEXTURE, PropertyType.MATERIAL] }));
+	} catch (error) {
+		console.error(`Dedup failed: ${error}`);
+	}
+	reportStatus(control, 'Running weld...');
+	try{
+		await tileDocument.transform(weld());
+	} catch (error) {
+		console.error(`Weld failed: ${error}`);
+	}
+	reportStatus(control, 'Running flatten...');
+	try{
+		await tileDocument.transform(flatten());
+	} catch (error) {
+		console.error(`Flatten failed: ${error}`);
+	}
+	reportStatus(control, 'Running resample...');
+	try{
+		await tileDocument.transform(resample());
+	} catch (error) {
+		console.error(`Resample failed: ${error}`);
+	}
+	reportStatus(control, 'Running prune...');
+	try{
+		await tileDocument.transform(prune({ keepAttributes: true }));
+	} catch (error) {
+		console.error(`Prune failed: ${error}`);
+	}
+	reportStatus(control, 'Running unpartition...');
+	try{
+		await tileDocument.transform(unpartition());
+	} catch (error) {
+		console.error(`Unpartition failed: ${error}`);
+	}
 	const root = tileDocument.getRoot();
 	for (const accessor of root.listAccessors()) {
 		// NodeIO expands implicit zeros and sparse overrides when reading. Disable
