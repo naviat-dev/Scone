@@ -538,7 +538,7 @@ async function assembleModel(inputPath: string, outputPath: string, tileIndex: n
 			await new NodeIO().write(tempGltfPath, document);
 
 			const ignoredIssues = ['IO_ERROR', 'TEXTURE_INVALID_IMAGE_MIME_TYPE', 'UNSATISFIED_DEPENDENCY'];
-			let validation: any = await validator.validateString(JSON.stringify(json), {
+			let validation: any = await validator.validateString(fs.readFileSync(tempGltfPath, 'utf-8'), {
 				ignoredIssues: ignoredIssues
 			});
 			let tries = 0;
