@@ -73,20 +73,20 @@ export async function getAltitude(lat: number, lon: number, version: number): Pr
 		if (response.ok) {
 			const buffer = Buffer.from(await response.arrayBuffer());
 			const terrainFiles = buffer.toString('utf-8').split('\n').map(line => line.split(' ')[1]).filter(name => (name ?? '').endsWith('.btg'));
-			fs.mkdirSync(path.join(config.tempDir, 'Terrain', tileFilePath), { recursive: true });
-			fs.writeFileSync(path.join(config.tempDir, 'Terrain', tileFilePath, `${index}.stg`), buffer);
+			const terrainDirectory = path.join(config.tempDir, 'Terrain', tileFilePath);
+			fs.mkdirSync(terrainDirectory, { recursive: true });
 			for (const terrainFile of terrainFiles) {
 				const terrainUrl = `${folderUrl}/${terrainFile}.gz`;
 				response = await request(terrainUrl, { method: 'GET' });
 				if (response.ok) {
 					const terrainBuffer = Buffer.from(await response.arrayBuffer());
-					fs.mkdirSync(path.join(config.tempDir, 'Terrain', tileFilePath), { recursive: true });
-					fs.writeFileSync(path.join(config.tempDir, 'Terrain', tileFilePath, `${terrainFile}.gz`), terrainBuffer);
+					fs.writeFileSync(path.join(terrainDirectory, `${terrainFile}.gz`), terrainBuffer);
 				}
 				else {
 					throw new Error(`Failed to fetch terrain file: ${response.status} ${response.statusText}`);
 				}
 			}
+			fs.writeFileSync(path.join(terrainDirectory, `${index}.stg`), buffer);
 		} else if (response.status === 404) {
 			config.deadTiles.push(index);
 			return 0;
