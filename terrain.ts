@@ -95,13 +95,14 @@ export async function getAltitude(lat: number, lon: number, version: number): Pr
 		}
 		absoluteTilePath = path.join(config.tempDir, 'Terrain', tileFilePath, `${index}.stg`);
 	}
+	let elevation: number | null = null;
 	for (const terrainFile of fs.readFileSync(absoluteTilePath).toString('utf-8').split('\n').map(line => line.split(' ')[1]).filter(name => (name ?? '').endsWith('.btg'))) {
 		const altitude = findAltitudeMeters(path.join(path.dirname(absoluteTilePath), `${terrainFile}.gz`), lat, lon, version);
-		if (altitude !== null) {
-			return altitude;
+		if (altitude !== null && Number.isFinite(altitude)) {
+			elevation = elevation === null ? altitude : Math.max(elevation, altitude);
 		}
 	}
-	return 0;
+	return elevation ?? 0;
 }
 
 export function getFilePathFromTileIndex(index: number): string {
