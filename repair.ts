@@ -359,11 +359,19 @@ export function applyAsoboGeometryRepair(document: Document) {
             const normalAccessor = primitive.getAttribute('NORMAL');
             const normalArray = normalAccessor?.getArray();
             if (normalAccessor && normalArray) {
-                const flippedNormals = new Float32Array(normalArray.length);
-                for (let i = 0; i < normalArray.length; i++) {
-                    flippedNormals[i] = -normalArray[i];
+                // MSFS winding needs reversing, but its normals already point outward.
+                // Unpack XYZ (packed normals may be VEC4) and export unit-length vectors.
+                const normalCount = normalAccessor.getCount();
+                const normalizedNormals = new Float32Array(normalCount * 3);
+                const normal: number[] = [];
+                for (let i = 0; i < normalCount; i++) {
+                    normalAccessor.getElement(i, normal);
+                    const length = Math.hypot(normal[0], normal[1], normal[2]) || 1;
+                    normalizedNormals[i * 3] = normal[0] / length;
+                    normalizedNormals[i * 3 + 1] = normal[1] / length;
+                    normalizedNormals[i * 3 + 2] = normal[2] / length;
                 }
-                const repairedNormals = document.createAccessor().setType(normalAccessor.getType()).setArray(flippedNormals);
+                const repairedNormals = document.createAccessor().setType('VEC3').setArray(normalizedNormals);
                 primitive.setAttribute('NORMAL', repairedNormals);
             }
 
