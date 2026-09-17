@@ -275,6 +275,7 @@ function App(): React.JSX.Element {
 			setFlightGearExecutablePath(saved.fgPath);
 			setSceneryDirectories(saved.sceneryDirectories);
 			setMaxRepairRetriesInput(String(saved.maxRepairRetries));
+			setMaxTileRetriesInput(String(saved.maxTileRetries));
 			setShowSettings(false);
 			setInfoText('Settings saved.');
 		} catch (error) {
