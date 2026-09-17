@@ -510,10 +510,10 @@ async function assembleModel(inputPath: string, outputPath: string, tileIndex: n
 
 			// Preprocess nodes to handle non-uniform scaling, and remove invisible objects
 			for (const node of nodes) {
-				if (node.mesh && meshes[node.mesh]) {
+				if (node.mesh != null && meshes[node.mesh]) {
 					for (const primitive of meshes[node.mesh].primitives) {
 						if (
-							primitive.material
+							primitive.material != null
 							&& materials[primitive.material]
 							&& materials[primitive.material].extensions
 							&& (materials[primitive.material].extensions.ASOBO_material_environment_occluder || materials[primitive.material].extensions.ASOBO_material_invisible)
