@@ -1,3 +1,4 @@
+import { dummyTexturePath } from './assets.js';
 import { getTileIndexFromCoord, getCoordFromTileIndex, getFilePathFromTileIndex, getAltitude } from './terrain.js';
 import { LibraryObject, SimObject, Flags, Airport, Tower, Runway, RunwayStart, TaxiwayPoint, TaxiwayParking, TaxiwayPath, TaxiwayPathType, Apron, TaxiwaySign, PaintedLine, PaintedHatchedArea, ApronEdgeLights, Helipad, ProjectedMesh, ModelReference } from './structures.js'
 import { config } from './config.js';
@@ -489,10 +490,10 @@ async function assembleModel(inputPath: string, outputPath: string, tileIndex: n
 						// Using the actual texture files here takes tons of RAM
 						// Copy the dummy texture first, keep the absolute path for later conversion
 						// TODO: Make an actually distinct dummy texture for each missing texture to avoid conflicts
-						fs.copyFileSync(path.join(process.cwd(), 'Assets', 'dummy_tex.dds'), outputTexturePath);
+						fs.copyFileSync(dummyTexturePath, outputTexturePath);
 					} else {
 						console.warn(`Texture file not found: ${uri}`);
-						const fallbackTexturePath = path.join(process.cwd(), 'Assets', 'dummy_tex.dds');
+						const fallbackTexturePath = dummyTexturePath;
 						if (fs.existsSync(fallbackTexturePath)) {
 							fs.copyFileSync(fallbackTexturePath, outputTexturePath);
 						}
