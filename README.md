@@ -16,17 +16,16 @@ Scone turns Microsoft Flight Simulator (MSFS) scenery packages into addons that 
 
 ## 3. Launch Scone & Configure Output
 
-1. Start the app (`dotnet run --project Scone/Scone.csproj` or double-click the packaged binary).
-2. Click **Settings** (top-right) and set your preferred output folder. This becomes the base path for every conversion job.
-3. Close the settings dialog; the main dashboard lists active conversions.
+1. Start the app (`npm start` in this repository root).
+2. Click **Settings** in the left sidebar and select your preferred output folder. This becomes the default for new conversion jobs.
+3. Return to **Current Conversions** to view active work.
 
 ## 4. Create a Conversion Task
 
-1. Hit the **+** floating button.
-2. **Scenery Folder Path** – browse to the root folder you prepared.
-3. **Task Name** – optional; defaults to the folder name.
-4. **Output Format** – toggle **glTF** or **AC3D**.
-5. Click **Add Task** to queue it.
+1. Click **Start a new conversion…**.
+2. The panel expands inline (no modal) with **Input scenery folder** and **Output folder** fields.
+3. **Output folder** is auto-filled from saved config, but you can change it per task.
+4. Click **Start Conversion** to queue it.
 
 Tasks appear as cards showing status, current step, and cancellation options.
 

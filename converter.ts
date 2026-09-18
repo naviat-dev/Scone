@@ -824,11 +824,7 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 		placements: [],
 		status: 'Initializing'
 	};
-	conversions[id].progressItems.push({
-		size: 1,
-		state: 'running'
-	});
-	const progressItems = [];
+	const progressItems = conversions[id].progressItems;
 	if (!fs.existsSync(inputPath)) {
 		throw new Error(`Input path does not exist: ${inputPath}`);
 	}
@@ -906,11 +902,11 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 			let bytesRead = 0;
 			while (bytesRead < subrecord[1]) {
 				address = subrecord[0] + bytesRead;
-				const id = fileView.getUint16(address, true);
+				const subrecordId = fileView.getUint16(address, true);
 				address += 2;
 				const size = fileView.getUint16(address, true);
 				address += 2;
-				if (id === 0x0B) { // LibraryObject
+				if (subrecordId === 0x0B) { // LibraryObject
 					address -= 4; // Reverse back to get all of the bytes
 					const libObj = await buildLibraryObject(fileView, address);
 					if (!libraryObjects.has(libObj.guid)) {
@@ -918,7 +914,7 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 					}
 					libraryObjects.get(libObj.guid)!.push(libObj);
 					conversions[id].placements.push(libObj);
-				} else if (id === 0x19) { //SimObject
+				} else if (subrecordId === 0x19) { //SimObject
 					address -= 4; // Reverse back to get all of the bytes
 					const simObj = await buildSimObject(fileView, address, file, configPathsByTitle);
 					if (!simObjects.has(simObj.containerTitle)) {
@@ -931,7 +927,7 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 						state: 'pending'
 					});
 				} else {
-					console.warn(`Unexpected subrecord type at offset 0x${(subrecord[0] + bytesRead).toString(16)}: 0x${id.toString(16)}, skipping ${size} bytes`);
+					console.warn(`Unexpected subrecord type at offset 0x${(subrecord[0] + bytesRead).toString(16)}: 0x${subrecordId.toString(16)}, skipping ${size} bytes`);
 					bytesRead += size;
 					// AI says this should be bytesRead instead of size
 					address = subrecord[0] + size;
@@ -954,11 +950,11 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 			let bytesRead = 0;
 			while (bytesRead < subrecord[1]) {
 				address = subrecord[0] + bytesRead;
-				const id = fileView.getUint16(address, true);
+				const subrecordId = fileView.getUint16(address, true);
 				address += 2;
-				if (id !== 0x0056) { // Airport subrecord type
+				if (subrecordId !== 0x0056) { // Airport subrecord type
 					const skip = fileView.getUint32(address, true);
-					console.warn(`Unexpected airport subrecord type at offset 0x${(subrecord[0] + bytesRead).toString(16)}: 0x${id.toString(16)}, skipping ${skip} bytes`);
+					console.warn(`Unexpected airport subrecord type at offset 0x${(subrecord[0] + bytesRead).toString(16)}: 0x${subrecordId.toString(16)}, skipping ${skip} bytes`);
 					bytesRead += skip;
 					continue;
 				}
