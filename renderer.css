@@ -550,11 +550,6 @@ html {
 	gap: 0rem;
   }
   
-  #ikbvu {
-	flex-direction: row;
-	display: block;
-  }
-  
   .card-copy {
 	display: flex;
 	flex-direction: column;

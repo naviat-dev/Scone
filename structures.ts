@@ -10,23 +10,28 @@ export enum Flags {
 	NoZTest,
 }
 
-export interface LibraryObject {
+export interface PlacementObject {
 	position: vec3; // longitude, latitude, altitude
 	flags: Flags[];
 	orientation: vec3; // pitch, bank, heading
 	imageComplexity: number;
-	guid: string;
 	scale: number;
 }
 
-export interface SimObject {
-	position: vec3; // longitude, latitude, altitude
-	flags: Flags[];
-	orientation: vec3; // pitch, bank, heading
-	imageComplexity: number;
+export interface LibraryObject extends PlacementObject {
+	guid: string;
+}
+
+export interface SimObject extends PlacementObject {
 	containerTitle: string;
+	// This is a normal property in the binary, but I do special things with it
 	containerPath: string;
-	scale: number;
+	// These are not normal properties in the binary, but are here for progress indication
+	model: string;
+	texture: string;
+	xmlPath: string;
+	gltfPath: string;
+	binPath: string;
 }
 
 export interface ModelReference {
