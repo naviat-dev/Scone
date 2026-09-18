@@ -1,21 +1,192 @@
 <!DOCTYPE html>
 <html lang="en">
-	<head>
-		<meta charset="UTF-8" />
-		<meta
-			http-equiv="Content-Security-Policy"
-			content="default-src 'self'; script-src 'self'"
-		/>
-		<meta
-			http-equiv="X-Content-Security-Policy"
-			content="default-src 'self'; script-src 'self'"
-		/>
-		<meta name="viewport" content="width=device-width, initial-scale=1" />
-		<title>Scone</title>
-		<link rel="stylesheet" href="./renderer.css" />
-	</head>
-	<body>
-		<div id="root"></div>
-	</body>
-	<script type="module" src="./dist/renderer.js"></script>
+
+<head>
+	<title>Basic Dashboard Layout</title>
+	<meta charset="UTF-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+	<meta name="robots" content="index,follow">
+	<meta name="generator" content="GrapesJS Studio">
+	<link rel="preconnect" href="https://fonts.googleapis.com" />
+	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="" />
+	<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700;900&amp;display=swap" rel="stylesheet" id="ik00a" />
+	<link rel="stylesheet" href="renderer.css" />
+</head>
+
+<body class="gjs-t-body font-body page-body">
+	<div id="ieukh" class="app-shell">
+		<header id="ixzhi" class="title-bar">
+			<div class="max-w-screen-2xl title-bar-container" id="iwt66">
+				<div id="imvf1" class="title-bar-content">
+					<div id="irv8l" class="title-group">
+						<img id="iyz3hj" src="https://cdn.grapesjs.com/workspaces/cmu5zd89k99kiiw4erkc8v5hw/assets/157274e2-f067-4507-bb49-72bd2be50294__logo.png" />
+						<h1 id="ijw4g" class="gjs-t-h1 font-heading page-title">Scone</h1>
+					</div>
+					<div id="ifosb" class="title-actions"></div>
+				</div>
+			</div>
+		</header>
+		<main id="i8n5d" class="main-layout">
+			<div id="i8ffr" class="max-w-screen-2xl main-container">
+				<div id="idy11" class="dashboard-grid">
+					<aside id="ice1q" class="sidebar">
+						<div id="ibqwr" class="gjs-t-border sidebar-panel">
+							<nav id="i7cxa" class="sidebar-navigation">
+								<a href="#" id="i8r9e" class="gjs-t-link sidebar-link">
+									<span id="i5r01" class="sidebar-link-label">
+										<img src="https://api.iconify.design/lucide-home.svg?color=475569" alt="" id="i30yl" class="sidebar-link-icon" />
+										<span id="i1y6j">Current Conversions</span>
+									</span>
+									<span id="ihnjn" class="sidebar-link-count">999</span>
+								</a>
+								<a href="#" id="ij1vq" class="gjs-t-link sidebar-link">
+									<span id="i8eek" class="sidebar-link-label">
+										<img src="https://api.iconify.design/lucide-folder-open.svg?color=64748b" alt="" id="itihc" class="sidebar-link-icon" />
+										<span id="i4zxw">Finished Conversions</span>
+									</span>
+									<span id="ijell" class="sidebar-link-count">999</span>
+								</a>
+								<a href="#" id="ivzhs" class="gjs-t-link sidebar-link">
+									<span id="iip5j" class="sidebar-link-label">
+										<img src="https://api.iconify.design/lucide-settings.svg?color=64748b" alt="" id="im5al" class="sidebar-link-icon" />
+										<span id="ijxi3">Settings</span>
+									</span>
+								</a>
+							</nav>
+						</div>
+					</aside>
+					<section id="il79t" class="main-window">
+						<div id="ikbvu" class="card-list">
+							<article id="ihdpp" class="gjs-t-border list-item-card">
+								<div data-type-icon class="gjs-icon" id="iwx0k">
+									<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" id="i2gb6n">
+										<path fill="currentColor" d="M19 11h-6V5a1 1 0 0 0-2 0v6H5a1 1 0 0 0 0 2h6v6a1 1 0 0 0 2 0v-6h6a1 1 0 0 0 0-2" id="ibkneg"></path>
+									</svg>
+								</div>
+								<h3 id="izorpj" class="font-heading card-title">Start a new conversion…</h3>
+							</article>
+						</div>
+						<div id="ibqbkn" class="card-list">
+							<article id="i05oau" class="gjs-t-border list-item-card">
+								<div id="io823-2" class="card-content">
+									<div id="ig4u6f" class="card-copy">
+										<div id="irhg0o" class="card-title-row">
+											<span id="ibm1tz" class="card-badge">Progression</span>
+										</div>
+										<h3 id="izorpj-2" class="font-heading card-title">Title</h3>
+										<p id="i3t07g" class="card-description">Current status</p>
+										<div data-js="weighted-progress-bar" role="img" aria-label="Weighted segmented progress bar" id="isoejl" class="weighted-progress-bar"></div>
+									</div>
+									<a href="#" id="ivkl08" aria-label="Open task details" class="card-action action-rail">
+										<div data-type-icon="" id="imu3qf" class="gjs-icon">
+											<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" id="i525lj">
+												<path fill="currentColor" d="M10 19a1 1 0 0 1-.64-.23a1 1 0 0 1-.13-1.41L13.71 12L9.39 6.63a1 1 0 0 1 .15-1.41a1 1 0 0 1 1.46.15l4.83 6a1 1 0 0 1 0 1.27l-5 6A1 1 0 0 1 10 19" id="itz8t3"></path>
+											</svg>
+										</div>
+									</a>
+								</div>
+							</article>
+						</div>
+						<script data-scope="weighted-progress" id="ilpsk">
+							(function () {
+								const bar = document.querySelector('[data-js="weighted-progress-bar"]');
+								if (!bar) return;
+
+								const chunks = [{
+									label: "Load",
+									weight: 0.1,
+									state: "success"
+								},
+								{
+									label: "Convert",
+									weight: 2.9,
+									state: "success"
+								},
+								{
+									label: "Convert",
+									weight: 2.5,
+									state: "success"
+								},
+								{
+									label: "Convert",
+									weight: 6.5,
+									state: "success"
+								},
+								{
+									label: "Process",
+									weight: 78,
+									state: "running"
+								},
+								{
+									label: "Export",
+									weight: 10,
+									state: "pending"
+								}
+								];
+
+								const stateText = {
+									pending: "Pending",
+									running: "Running",
+									success: "Done",
+									failed: "Failed"
+								};
+
+								function clampWeight(value) {
+									const number = Number(value);
+									if (!isFinite(number) || number < 0) return 0;
+									return number;
+								}
+
+								function abbreviate(label) {
+									const clean = String(label || "").trim();
+									if (clean.length <= 4) return clean;
+									const words = clean.split(/\s+/).filter(Boolean);
+									if (words.length > 1) return words.map(word => word.charAt(0).toUpperCase()).join("");
+									return clean.slice(0, 3);
+								}
+
+								function buildSegment(chunk, totalWeight) {
+									const safeWeight = clampWeight(chunk.weight);
+									const segment = document.createElement('div');
+									const widthPercent = totalWeight > 0 ? (safeWeight / totalWeight) * 100 : 0;
+									const label = String(chunk.label || "Chunk");
+									const state = ["pending", "running", "success", "failed"].includes(chunk.state) ? chunk.state : "pending";
+
+									segment.className = 'weighted-progress-segment ' + state;
+									segment.setAttribute('data-gjs-name', 'Progress Segment');
+									segment.setAttribute('tabindex', '0');
+									segment.style.flexGrow = String(safeWeight || 0.0001);
+									segment.style.flexShrink = '1';
+									segment.style.flexBasis = '0';
+									segment.setAttribute('title', label + ' — ' + safeWeight + '% — ' + stateText[state]);
+									segment.setAttribute('aria-label', label + ', ' + safeWeight + ' percent, ' + stateText[state]);
+
+									if (widthPercent < 16) segment.classList.add('tight');
+									if (widthPercent < 10) segment.classList.add('micro');
+									if (widthPercent < 6) segment.classList.add('nano');
+
+									return segment;
+								}
+
+								function renderProgress(list) {
+									bar.innerHTML = '';
+									const totalWeight = list.reduce((sum, item) => sum + clampWeight(item.weight), 0) || 100;
+									const normalizedLabel = list.map(item => (item.label || 'Chunk') + ' ' + clampWeight(item.weight) + '% ' + (item.state || 'pending')).join(', ');
+									bar.setAttribute('aria-label', 'Weighted segmented progress: ' + normalizedLabel);
+
+									list.forEach(item => {
+										bar.appendChild(buildSegment(item, totalWeight));
+									});
+								}
+
+								renderProgress(chunks);
+							})();
+						</script>
+					</section>
+				</div>
+			</div>
+		</main>
+	</div>
+</body>
+
 </html>
