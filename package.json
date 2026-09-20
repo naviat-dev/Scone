@@ -19,22 +19,41 @@
     "build:main": "tsc -p tsconfig.json",
     "build:renderer": "esbuild renderer.ts --bundle --platform=browser --format=esm --sourcemap --outfile=dist/renderer.js",
     "build:tools": "node scripts/copy-gltf-validator.cjs",
+    "build:runtime": "node scripts/copy-node-runtime.cjs",
     "start": "npm run build && node dist/start.js",
-    "package": "npm run build && electron-builder --publish never",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "package": "npm run build && npm run build:runtime && electron-builder --publish never",
+    "test": "npm run build:main && node --test dist/conversion-runtime.test.js"
   },
   "devDependencies": {
     "@types/node": "^24.13.3",
     "electron": "^44.0.0",
     "electron-builder": "^26.15.3",
     "esbuild": "^0.28.2",
+    "node": "24.16.0",
     "ts-node": "^10.9.2",
     "typescript": "^5.9.3"
   },
   "build": {
+    "afterPack": "./scripts/verify-packaged-runtime.cjs",
+    "asarUnpack": [
+      "package.json",
+      "Assets/**/*",
+      "dist/**/*",
+      "node_modules/**/*"
+    ],
     "directories": {
       "output": "release"
     },
+    "files": [
+      "**/*",
+      "!.runtime{,/**/*}"
+    ],
+    "extraResources": [
+      {
+        "from": ".runtime",
+        "to": "runtime"
+      }
+    ],
     "linux": {
       "target": [
         "AppImage"
@@ -53,5 +72,10 @@
     "pngjs": "^7.0.0",
     "xmlbuilder2": "^4.0.3",
     "xmldom": "^0.6.0"
+  },
+  "allowScripts": {
+    "node@24.16.0": true,
+    "esbuild@0.28.2": true,
+    "electron-winstaller@5.4.0": true
   }
 }

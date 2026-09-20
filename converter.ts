@@ -6,6 +6,7 @@ import { applyAsoboGeometryRepair, repairDocument } from './repair.js';
 import { convertToDDS } from './texconv.js'
 import * as fs from 'fs';
 import * as path from 'path';
+import { totalmem } from 'node:os';
 import { create } from 'xmlbuilder2';
 import { vec3, quat } from 'gl-matrix';
 import { Document, NodeIO, PropertyType, Scene } from '@gltf-transform/core';
@@ -50,6 +51,42 @@ interface ConversionInformation {
 
 export const conversions: Record<string, ConversionInformation> = {};
 
+const MEBIBYTE = 1024 * 1024;
+const GIBIBYTE = 1024 * MEBIBYTE;
+const MEMORY_CHECK_INTERVAL = 64;
+let memoryCheckCount = 0;
+let heapUsedAfterLastCollection = 0;
+let rssAfterLastCollection = 0;
+
+function collectConversionGarbageIfNeeded(force = false): void {
+	if (typeof global.gc !== 'function') {
+		return;
+	}
+	if (!force && ++memoryCheckCount < MEMORY_CHECK_INTERVAL) {
+		return;
+	}
+	memoryCheckCount = 0;
+
+	const before = process.memoryUsage();
+	const heapGrowth = before.heapUsed - heapUsedAfterLastCollection;
+	const rssGrowth = before.rss - rssAfterLastCollection;
+	if (!force && (
+		(before.heapUsed < GIBIBYTE && before.rss < totalmem() / 4)
+		|| (heapGrowth < 256 * MEBIBYTE && rssGrowth < 512 * MEBIBYTE)
+	)) {
+		return;
+	}
+
+	global.gc();
+	const after = process.memoryUsage();
+	heapUsedAfterLastCollection = after.heapUsed;
+	rssAfterLastCollection = after.rss;
+	const reclaimedMiB = Math.max(0, before.heapUsed - after.heapUsed) / MEBIBYTE;
+	if (reclaimedMiB >= 256) {
+		console.info(`Memory maintenance reclaimed ${Math.round(reclaimedMiB)} MiB from the JavaScript heap.`);
+	}
+}
+
 function getConversion(id: string): ConversionInformation {
 	const conversion = conversions[id];
 	if (!conversion) {
@@ -61,6 +98,7 @@ function getConversion(id: string): ConversionInformation {
 function reportStatus(id: string, control: ConversionControl | undefined, status: string): void {
 	getConversion(id).status = status;
 	control?.onStatus?.(status);
+	collectConversionGarbageIfNeeded();
 }
 
 function reportProgress(id: string, control: ConversionControl | undefined): void {
@@ -890,7 +928,6 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 
 	const libraryObjects: Map<string, LibraryObject[]> = new Map();
 	const simObjects: Map<string, SimObject[]> = new Map();
-	const airports: Airport[] = [];
 	const guidsWithModels: Set<string> = new Set();
 	const modelReferencesByTile: Map<number, ModelReference[]> = new Map();
 	reportStatus(id, control, 'Scanning scenery files...');
@@ -1273,7 +1310,6 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 								}
 								runwayBytesRead += runwayRecordSize;
 							}
-							airport.runways.push(runway);
 							break;
 						case 0x0011: // Start
 							let runwayStart: RunwayStart = {
@@ -1298,7 +1334,6 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 							address += 4;
 							runwayStart.heading = fileView.getFloat32(address, true) * (360.0 / 65536.0);
 							address += 4;
-							airport.runwayStarts.push(runwayStart);
 							break;
 						case 0x001a: // TaxiwayPoint
 							const taxiwayPointCount = fileView.getUint16(address, true);
@@ -1315,7 +1350,6 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 								address += 4;
 								taxiwayPoint.latitude = 90.0 - (fileView.getUint32(address, true) * (180.0 / 536870912.0));
 								address += 4;
-								airport.taxiwayPoints.push(taxiwayPoint);
 							}
 							break;
 						case 0x00e7: // TaxiwayParking
@@ -1360,7 +1394,6 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 								address += 4;
 								taxiwayParking.numberHeading = fileView.getFloat32(address, true) * (360.0 / 65536.0);
 								address += 4;
-								airport.taxiwayParkings.push(taxiwayParking);
 							}
 							break;
 						case 0x00d4: // TaxiwayPath
@@ -1460,14 +1493,12 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 										address += 38;
 									}
 								}
-								airport.taxiwayPaths.push(taxiwayPath);
 							}
 							break;
 						case 0x001d: // TaxiName
 							const taxiNameCount = fileView.getUint16(address, true);
 							address += 2;
 							for (let j = 0; j < taxiNameCount; j++) {
-								airport.taxiNames.push(new TextDecoder().decode(getViewBytes(fileView, address, 8)));
 								address += 8;
 							}
 							break;
@@ -1512,7 +1543,6 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 								]);
 								address += 6;
 							}
-							airport.aprons.push(apron);
 							break;
 						case 0x00d9: // TaxiwaySign
 							address += 2; // Skip record size, it's always the same
@@ -1525,7 +1555,6 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 								label: new TextDecoder().decode(getViewBytes(fileView, address + 14, 0x3e)),
 							};
 							address += 14 + 0x3e;
-							airport.taxiwaySigns.push(taxiwaySign);
 							break;
 						case 0x00cf: // PaintedLine
 							const paintedLine: PaintedLine = {
@@ -1546,7 +1575,6 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 								]);
 								address += 8;
 							}
-							airport.paintedLines.push(paintedLine);
 							break;
 						case 0x00d8: // PaintedHatchedArea
 							const paintedHatchedArea: PaintedHatchedArea = {
@@ -1570,14 +1598,8 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 								]);
 								address += 8;
 							}
-							airport.paintedHatchedAreas.push(paintedHatchedArea);
 							break;
 						case 0x00de: // Jetway
-							airport.jetways.push({
-								parkingNumber: fileView.getUint16(address, true),
-								gateName: fileView.getUint16(address + 2, true),
-								suffix: fileView.getUint16(address + 4, true),
-							});
 							address += 8; // Skip unknown field
 							const sceneryObjectLength1 = fileView.getUint16(address, true);
 							address += 2;
@@ -1643,17 +1665,7 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 							}
 							break;
 						case 0x0057: // LightSupport
-							address += 2; // Skip unknown field
-							airport.lightSupports.push({
-								latitude: 90.0 - (fileView.getUint32(address, true) * (180.0 / 536870912.0)),
-								longitude: (fileView.getUint32(address + 4, true) * (360.0 / 805306368.0)) - 180.0,
-								altitude: fileView.getInt32(address + 8, true) / 1000.0,
-								altitude2: fileView.getInt32(address + 12, true) / 1000.0,
-								heading: fileView.getFloat32(address + 16, true) * (360.0 / 65536.0),
-								width: fileView.getFloat32(address + 20, true),
-								length: fileView.getFloat32(address + 24, true),
-							});
-							address += 28; // Move past the entire LightSupport structure
+							address += 30; // Skip the unknown field and LightSupport structure.
 							break;
 						case 0x0024: // Approach
 							// This has taken far too long to implement properly, so we'll skip it for now.
@@ -1688,7 +1700,6 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 								]);
 								address += 8;
 							}
-							airport.apronEdgeLights.push(apronEdgeLights);
 							break;
 						case 0x0026: // Helipad
 							const helipad: Helipad = {
@@ -1729,7 +1740,6 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 							address += 4;
 							helipad.heading = fileView.getFloat32(address, true) * (360.0 / 65536.0);
 							address += 4;
-							airport.helipads.push(helipad);
 							break;
 						case 0x00e8: // ProjectedMesh
 							const projectedMesh: ProjectedMesh = {
@@ -1747,7 +1757,6 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 								projectedMesh.libraryObject = await buildLibraryObject(fileView, address);
 							}
 							address += subRecordSize;
-							airport.projectedMeshes.push(projectedMesh);
 							break;
 						default:
 							console.warn(`Unexpected airport record type at offset 0x${(subrecord[0] + bytesRead + airportBytesRead).toString(16)}: 0x${recordId.toString(16).padStart(4, '0')}, skipping ${recordSize} bytes`);
@@ -1756,9 +1765,10 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 							break;
 					}
 					airportBytesRead += recordSize;
+					collectConversionGarbageIfNeeded();
 				}
-				airports.push(airport);
 				bytesRead += size;
+				collectConversionGarbageIfNeeded(true);
 			}
 		}
 	}
@@ -1904,5 +1914,6 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 		}
 
 		await assembleModel(id, inputPath, outputPath, tileIndex, [...modelRefs, ...simObjectsForTile], center, libraryObjects, control);
+		collectConversionGarbageIfNeeded(true);
 	}
 }

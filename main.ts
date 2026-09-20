@@ -1,10 +1,15 @@
 import { app, BrowserWindow, dialog, ipcMain, type IpcMainInvokeEvent, type OpenDialogOptions } from 'electron';
-import { Worker } from 'node:worker_threads';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { config, initializeRuntimeConfig, loadConfig, saveConfig } from './config.js';
+import {
+	getConversionHeapLimitMiB,
+	getConversionProcessArguments,
+	resolveConversionRuntime,
+} from './conversion-runtime.js';
 import type {
 	CancelMode,
 	ConversionProgressItem,
@@ -17,7 +22,7 @@ import type {
 } from './task-types.js';
 
 type ConversionTask = Omit<ConversionTaskDto, 'isRunning'> & {
-	worker?: Worker;
+	worker?: ChildProcess;
 };
 
 const tasks = new Map<string, ConversionTask>();
@@ -73,7 +78,7 @@ function createWindow(): BrowserWindow {
 		},
 	});
 
-	void win.loadFile('index.html');
+	void win.loadFile(path.join(app.getAppPath(), 'index.html'));
 	return win;
 }
 
@@ -86,10 +91,18 @@ function normalizeProgressItems(progressItems: ConversionProgressItem[]): Conver
 		}));
 }
 
-function terminateWorker(worker: Worker): void {
-	void worker.terminate().catch((error: unknown) => {
-		console.warn('Unable to terminate conversion worker cleanly.', error);
-	});
+function terminateConversionProcess(worker: ChildProcess): void {
+	if (worker.exitCode !== null || worker.signalCode !== null) {
+		return;
+	}
+
+	try {
+		if (!worker.kill()) {
+			console.warn(`Unable to terminate conversion process ${worker.pid ?? 'with no PID'}.`);
+		}
+	} catch (error) {
+		console.warn('Unable to terminate conversion process cleanly.', error);
+	}
 }
 
 function finalizeTask(
@@ -118,7 +131,7 @@ function finalizeTask(
 
 	if (worker) {
 		worker.removeAllListeners();
-		terminateWorker(worker);
+		terminateConversionProcess(worker);
 	}
 
 	broadcastTasks();
@@ -184,10 +197,29 @@ async function startNextTask(): Promise<void> {
 		outputPath: nextTask.outputPath,
 	};
 
-	let worker: Worker;
+	let worker: ChildProcess;
 	try {
-		worker = new Worker(new URL('./conversion-worker.js', import.meta.url), {
-			workerData: workerInput,
+		const conversionAppPath = app.isPackaged
+			? path.join(process.resourcesPath, 'app.asar.unpacked')
+			: app.getAppPath();
+		const runtime = resolveConversionRuntime(
+			conversionAppPath,
+			process.resourcesPath,
+			app.isPackaged,
+		);
+		const heapLimitMiB = getConversionHeapLimitMiB();
+		console.info(
+			`Starting conversion process with a ${heapLimitMiB} MiB V8 heap ceiling using ${runtime.nodeExecutable}.`,
+		);
+		worker = spawn(runtime.nodeExecutable, getConversionProcessArguments(runtime.workerScript), {
+			cwd: runtime.workingDirectory,
+			env: {
+				...process.env,
+				SCONE_WORKER_DATA: JSON.stringify(workerInput),
+			},
+			serialization: 'advanced',
+			stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
+			windowsHide: true,
 		});
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
@@ -213,7 +245,7 @@ async function startNextTask(): Promise<void> {
 		finalizeTask(trackedTask, 'failed', `Conversion failed: ${error.message}`, error.message);
 	});
 
-	worker.on('exit', (code) => {
+	worker.on('exit', (code, signal) => {
 		const trackedTask = tasks.get(trackedTaskId);
 		if (!trackedTask) {
 			return;
@@ -231,7 +263,9 @@ async function startNextTask(): Promise<void> {
 				? 'Conversion cancelled.'
 				: code === 0
 					? 'Conversion worker exited unexpectedly.'
-					: `Conversion worker exited with code ${code}.`;
+					: signal
+						? `Conversion worker was terminated by ${signal}.`
+						: `Conversion worker exited with code ${code ?? 'unknown'}.`;
 			const phase = trackedTask.phase === 'cancelling' ? 'cancelled' : 'failed';
 			finalizeTask(trackedTask, phase, status, phase === 'failed' ? status : null);
 		}
@@ -336,9 +370,7 @@ function registerIpcHandlers(): void {
 			task.worker = undefined;
 			if (worker) {
 				worker.removeAllListeners();
-				await worker.terminate().catch((error: unknown) => {
-					console.warn('Unable to terminate the cancelled conversion worker cleanly.', error);
-				});
+				terminateConversionProcess(worker);
 			}
 			finalizeTask(task, 'cancelled', 'Conversion cancelled entirely.');
 			return toTaskDto(task);
@@ -347,7 +379,24 @@ function registerIpcHandlers(): void {
 		task.phase = 'cancelling';
 		task.status = 'Cancellation requested. Saving progress and stopping...';
 		task.error = null;
-		task.worker?.postMessage({ type: 'cancel', mode });
+		if (!task.worker?.connected) {
+			throw new Error('The conversion process is no longer connected.');
+		}
+		task.worker.send({ type: 'cancel', mode }, (error) => {
+			if (!error) {
+				return;
+			}
+
+			const currentTask = tasks.get(task.id);
+			if (currentTask && !terminalPhases.has(currentTask.phase)) {
+				finalizeTask(
+					currentTask,
+					'failed',
+					`Unable to cancel conversion: ${error.message}`,
+					error.message,
+				);
+			}
+		});
 		broadcastTasks();
 		return toTaskDto(task);
 	});
@@ -399,6 +448,17 @@ app.on('activate', () => {
 	if (BrowserWindow.getAllWindows().length === 0) {
 		createWindow();
 	}
+});
+
+app.on('before-quit', () => {
+	for (const task of tasks.values()) {
+		if (task.worker) {
+			task.worker.removeAllListeners();
+			terminateConversionProcess(task.worker);
+			task.worker = undefined;
+		}
+	}
+	activeTaskId = null;
 });
 
 app.on('window-all-closed', () => {

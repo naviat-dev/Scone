@@ -6,7 +6,7 @@ Scone turns Microsoft Flight Simulator (MSFS) scenery packages into addons that 
 
 - **Scenery source folder** containing the `scenery` subdirectory MSFS ships (BGLs, textures, etc.). If you extracted a package, point Scone at the folder that contains the `*.bgl` files.
 - **Output directory** with enough free space for meshes and copied DDS textures.
-- **Scone build** for your OS (download from the Releases tab or build locally using `dotnet publish`).
+- **Scone build** for your OS. Release packages include the standalone Node.js conversion runtime, so no separate Node.js installation is required.
 
 ## 2. Prepare the Scenery Folder
 
@@ -16,17 +16,16 @@ Scone turns Microsoft Flight Simulator (MSFS) scenery packages into addons that 
 
 ## 3. Launch Scone & Configure Output
 
-1. Start the app (`dotnet run --project Scone/Scone.csproj` or double-click the packaged binary).
-2. Click **Settings** (top-right) and set your preferred output folder. This becomes the base path for every conversion job.
-3. Close the settings dialog; the main dashboard lists active conversions.
+1. Start the packaged app, or run `npm start` from a development checkout.
+2. Select **Settings** in the sidebar and set your preferred output folder. This path is suggested when creating new conversions, but can be changed per task.
+3. Select **Current Conversions** to return to the active queue.
 
 ## 4. Create a Conversion Task
 
-1. Hit the **+** floating button.
-2. **Scenery Folder Path** – browse to the root folder you prepared.
-3. **Task Name** – optional; defaults to the folder name.
-4. **Output Format** – toggle **glTF** or **AC3D**.
-5. Click **Add Task** to queue it.
+1. Select **Start a new conversion** to expand the task form.
+2. Set **Input path** to the scenery root you prepared.
+3. Set **Output path** to the destination for the converted scenery.
+4. Click **Run conversion** to queue it, or **Cancel** to collapse the form.
 
 Tasks appear as cards showing status, current step, and cancellation options.
 
@@ -37,7 +36,7 @@ Scone processes each BGL twice:
 1. **Placement pass** – records every `LibraryObject` placement and determines which tiles need exports.
 2. **Model pass** – pulls each GUID’s model, converts the embedded GLB, and merges it into per-tile scenes.
 
-During conversion, the task card shows log snippets (e.g., “Processing GLBD chunk for model …”). You can:
+During conversion, the task card shows the current operation and a progress bar weighted by the source size of each model. You can:
 
 - **Cancel & Save Progress** – stop after finishing the current tile and keep produced output.
 - **Cancel Entirely** – abort immediately without writing more files.
@@ -70,10 +69,11 @@ Each tile ends up under `Objects/<lonBucket>/<latBucket>/<lon>/<lat>/`. Inside t
 - **Textures missing in exports** – ensure the source folder contains the referenced DDS files. Scone logs each missing texture in the console/terminal.
 - **AC3D looks mirrored** – check that you’re viewing with a left-handed coordinate system. The exporter already mirrors to match Blender; no manual flips should be required.
 - **Large exports stall** – conversions run per tile; if a huge tile appears stuck, watch the log for progress. Use “Cancel & Save” to stop after the current tile, then re-run with a smaller scenery subset.
+- **Large conversions and memory** – packaged builds run conversions in a bundled standalone Node.js process. Its V8 heap ceiling is set above the machine's physical RAM so Electron's per-isolate heap limit does not terminate otherwise viable conversions.
 
 ## 9. Getting the App
 
 - **Download** – grab the latest release artifact (`scone-<platform>-<arch>.zip`) from the GitHub Releases page.
-- **Build yourself** – clone the repo and run `dotnet publish Scone/Scone.csproj -c Release -r <RID>`. The published folder contains the executable and assets.
+- **Build yourself** – install Node.js 24, run `npm ci`, then run `npm run package`. The packaging step embeds the correct standalone Node.js runtime for the current OS and architecture.
 
 Happy converting! Open an issue if you hit problems or have ideas to streamline the workflow further.
