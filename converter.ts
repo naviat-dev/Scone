@@ -13,13 +13,16 @@ import { dedup, flatten, weld, resample, prune, unpartition, mergeDocuments } fr
 import { DOMParser } from "@xmldom/xmldom";
 // @ts-expect-error gltf-validator does not provide TypeScript declarations.
 import validator from 'gltf-validator';
+import type { ConversionProgressItem, ConversionProgressState } from './task-types.js';
 
 
 export type ConversionAbortMode = 'save' | 'discard';
 
 export type ConversionControl = {
+	conversionId?: string;
 	shouldAbort?: () => ConversionAbortMode | null;
 	onStatus?: (status: string) => void;
+	onProgress?: (progressItems: ConversionProgressItem[]) => void;
 };
 
 export class ConversionAbortedError extends Error {
@@ -30,11 +33,6 @@ export class ConversionAbortedError extends Error {
 		this.name = 'ConversionAbortedError';
 		this.mode = mode;
 	}
-}
-
-interface ConversionProgressItem {
-	readonly size: number;
-	state: 'pending' | 'running' | 'completed' | 'failed';
 }
 
 // progressItems holds the state of every model being repaired and added
@@ -51,6 +49,60 @@ interface ConversionInformation {
 }
 
 export const conversions: Record<string, ConversionInformation> = {};
+
+function getConversion(id: string): ConversionInformation {
+	const conversion = conversions[id];
+	if (!conversion) {
+		throw new Error(`Conversion ${id} is not registered.`);
+	}
+	return conversion;
+}
+
+function reportStatus(id: string, control: ConversionControl | undefined, status: string): void {
+	getConversion(id).status = status;
+	control?.onStatus?.(status);
+}
+
+function reportProgress(id: string, control: ConversionControl | undefined): void {
+	if (!control?.onProgress) {
+		return;
+	}
+
+	control.onProgress(getConversion(id).progressItems.map((item) => ({ ...item })));
+}
+
+function setProgressState(
+	id: string,
+	control: ConversionControl | undefined,
+	index: number,
+	state: ConversionProgressState,
+): void {
+	if (index < 0) {
+		return;
+	}
+
+	getConversion(id).progressItems[index].state = state;
+	reportProgress(id, control);
+}
+
+function getProgressSize(filePath: string, description: string): number {
+	if (!filePath) {
+		console.warn(`Unable to determine progress size for ${description}: no source file was resolved.`);
+		return 1;
+	}
+
+	try {
+		const fileStats = fs.statSync(filePath);
+		if (!fileStats.isFile()) {
+			console.warn(`Unable to determine progress size for ${description}: ${filePath} is not a file.`);
+			return 1;
+		}
+		return Math.max(fileStats.size, 1);
+	} catch (error) {
+		console.warn(`Unable to determine progress size for ${description}: ${filePath}`, error);
+		return 1;
+	}
+}
 
 function checkAbort(control: ConversionControl | undefined): void {
 	const mode = control?.shouldAbort?.() ?? null;
@@ -132,6 +184,10 @@ async function buildSimObject(fileView: DataView, address: number, inputPath: st
 	}
 
 	// Fill in additional helper properties for progress indication
+	if (!fs.existsSync(containerPath)) {
+		console.warn(`Container path does not exist: ${containerPath}`);
+		return simObj;
+	}
 	const containerFolder: string = path.dirname(containerPath);
 	const containerText: string = fs.readFileSync(containerPath, 'utf-8');
 	const simObjRegex: RegExp = new RegExp(`title=${containerTitle}(?:\r\n|\r|\n)model=(.*)(?:\r\n|\r|\n)texture=(.*)`, 'i');
@@ -303,11 +359,9 @@ async function assembleModel(id: string, inputPath: string, outputPath: string, 
 
 	try {
 		for (let modelRef of modelReferences) {
-			let taskIndex = conversions[id].progressItems.findIndex(item => item.state === 'pending');
+			const taskIndex = getConversion(id).progressItems.findIndex(item => item.state === 'pending');
 			try {
-				if (taskIndex !== -1) {
-					conversions[id].progressItems[taskIndex].state = 'running';
-				}
+				setProgressState(id, control, taskIndex, 'running');
 				let json: Record<string, unknown> = {};
 				let binary: Buffer<ArrayBuffer> = Buffer.alloc(0);
 				let name: string = '';
@@ -356,7 +410,7 @@ async function assembleModel(id: string, inputPath: string, outputPath: string, 
 								break;
 							}
 
-							conversions[id].status = `Converting ${name || modelRef.guid}...`;
+							reportStatus(id, control, `Converting ${name || modelRef.guid}...`);
 							console.info(`Processing GLBD chunk for model ${name} (${modelRef.guid}) in ${modelRef.file}`);
 							const size: number = fileView.getUint32(i + 4, true);
 							// Scan GLBD payload and skip past each GLB block once processed
@@ -548,7 +602,7 @@ async function assembleModel(id: string, inputPath: string, outputPath: string, 
 				const tempBinPath = path.join(tempTilePath, `temp-${guid}.bin`);
 				const tempGltfPath = path.join(tempTilePath, `temp-${guid}.gltf`);
 				checkAbort(control);
-				conversions[id].status = `Processing model source ${name}...`;
+				reportStatus(id, control, `Processing model source ${name}...`);
 
 				const meshes = Array.isArray(json.meshes) ? json.meshes : [];
 				const accessors = Array.isArray(json.accessors) ? json.accessors : [];
@@ -720,13 +774,13 @@ async function assembleModel(id: string, inputPath: string, outputPath: string, 
 						sceneB.dispose();
 					}
 				}
-				if (taskIndex !== -1) {
-					conversions[id].progressItems[taskIndex].state = 'completed';
-				}
+				setProgressState(id, control, taskIndex, 'completed');
 			} catch (error) {
 				console.error(`Error processing library objects for model: ${error}`);
-				if (taskIndex !== -1) {
-					conversions[id].progressItems[taskIndex].state = 'failed';
+				setProgressState(id, control, taskIndex, 'failed');
+			} finally {
+				if (taskIndex !== -1 && getConversion(id).progressItems[taskIndex].state === 'running') {
+					setProgressState(id, control, taskIndex, 'completed');
 				}
 			}
 		}
@@ -737,37 +791,37 @@ async function assembleModel(id: string, inputPath: string, outputPath: string, 
 	const tileOutputPath = path.join(outputPath, 'Objects', getFilePathFromTileIndex(tileIndex));
 	fs.mkdirSync(tileOutputPath, { recursive: true });
 	// Skin dedup compares joint Nodes recursively; deeply-nested jetway/skeleton hierarchies can overflow the call stack, so skip it.
-	conversions[id].status = 'Running dedup...';
+	reportStatus(id, control, 'Running dedup...');
 	try {
 		await tileDocument.transform(dedup({ propertyTypes: [PropertyType.ACCESSOR, PropertyType.MESH, PropertyType.TEXTURE, PropertyType.MATERIAL] }));
 	} catch (error) {
 		console.error(`Dedup failed: ${error}`);
 	}
-	conversions[id].status = 'Running weld...';
+	reportStatus(id, control, 'Running weld...');
 	try {
 		await tileDocument.transform(weld());
 	} catch (error) {
 		console.error(`Weld failed: ${error}`);
 	}
-	conversions[id].status = 'Running flatten...';
+	reportStatus(id, control, 'Running flatten...');
 	try {
 		await tileDocument.transform(flatten());
 	} catch (error) {
 		console.error(`Flatten failed: ${error}`);
 	}
-	conversions[id].status = 'Running resample...';
+	reportStatus(id, control, 'Running resample...');
 	try {
 		await tileDocument.transform(resample());
 	} catch (error) {
 		console.error(`Resample failed: ${error}`);
 	}
-	conversions[id].status = 'Running prune...';
+	reportStatus(id, control, 'Running prune...');
 	try {
 		await tileDocument.transform(prune({ keepAttributes: true }));
 	} catch (error) {
 		console.error(`Prune failed: ${error}`);
 	}
-	conversions[id].status = 'Running unpartition...';
+	reportStatus(id, control, 'Running unpartition...');
 	try {
 		await tileDocument.transform(unpartition());
 	} catch (error) {
@@ -784,7 +838,7 @@ async function assembleModel(id: string, inputPath: string, outputPath: string, 
 		}
 	}
 
-	conversions[id].status = 'Writing to disk...';
+	reportStatus(id, control, 'Writing to disk...');
 	await new NodeIO().write(path.join(tileOutputPath, `${tileIndex}.gltf`), tileDocument);
 	// Reread JSON and copy texture files
 	const jsonPath = path.join(tileOutputPath, `${tileIndex}.gltf`);
@@ -814,7 +868,7 @@ async function assembleModel(id: string, inputPath: string, outputPath: string, 
 
 
 export async function convertScenery(inputPath: string, outputPath: string, control?: ConversionControl): Promise<void> {
-	const id = Date.now().toString(36);
+	const id = control?.conversionId ?? Date.now().toString(36);
 	conversions[id] = {
 		id,
 		inputPath,
@@ -828,7 +882,8 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 		size: 1,
 		state: 'running'
 	});
-	const progressItems = [];
+	reportProgress(id, control);
+	const progressItems: ConversionProgressItem[] = [];
 	if (!fs.existsSync(inputPath)) {
 		throw new Error(`Input path does not exist: ${inputPath}`);
 	}
@@ -838,9 +893,9 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 	const airports: Airport[] = [];
 	const guidsWithModels: Set<string> = new Set();
 	const modelReferencesByTile: Map<number, ModelReference[]> = new Map();
-	conversions[id].status = 'Scanning scenery files...';
+	reportStatus(id, control, 'Scanning scenery files...');
 	const allBglFiles: string[] = getFilesRecursive(inputPath, '.bgl', false);
-	conversions[id].status = 'Scanning config files...';
+	reportStatus(id, control, 'Scanning config files...');
 	const configPathsByTitle = new Map<string, string[]>();
 	for (const file of getFilesRecursive(inputPath, '.cfg', false)) {
 		for (const line of fs.readFileSync(file, 'utf-8').split(/\r?\n/)) {
@@ -858,7 +913,7 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 
 	for (const file of allBglFiles) {
 		checkAbort(control);
-		conversions[id].status = `Looking for placements in ${path.basename(file)}...`;
+		reportStatus(id, control, `Looking for placements in ${path.basename(file)}...`);
 		console.log(`Processing file: ${file}`);
 		const fileBuffer = fs.readFileSync(file);
 		const fileView: DataView = new DataView(fileBuffer.buffer, fileBuffer.byteOffset, fileBuffer.byteLength);
@@ -906,11 +961,11 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 			let bytesRead = 0;
 			while (bytesRead < subrecord[1]) {
 				address = subrecord[0] + bytesRead;
-				const id = fileView.getUint16(address, true);
+				const recordType = fileView.getUint16(address, true);
 				address += 2;
 				const size = fileView.getUint16(address, true);
 				address += 2;
-				if (id === 0x0B) { // LibraryObject
+				if (recordType === 0x0B) { // LibraryObject
 					address -= 4; // Reverse back to get all of the bytes
 					const libObj = await buildLibraryObject(fileView, address);
 					if (!libraryObjects.has(libObj.guid)) {
@@ -918,7 +973,7 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 					}
 					libraryObjects.get(libObj.guid)!.push(libObj);
 					conversions[id].placements.push(libObj);
-				} else if (id === 0x19) { //SimObject
+				} else if (recordType === 0x19) { //SimObject
 					address -= 4; // Reverse back to get all of the bytes
 					const simObj = await buildSimObject(fileView, address, file, configPathsByTitle);
 					if (!simObjects.has(simObj.containerTitle)) {
@@ -927,18 +982,18 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 					simObjects.get(simObj.containerTitle)!.push(simObj);
 					conversions[id].placements.push(simObj);
 					progressItems.push({
-						size: fs.statSync(simObj.binPath).size,
+						size: getProgressSize(simObj.binPath, `sim object ${simObj.containerTitle}`),
 						state: 'pending'
 					});
 				} else {
-					console.warn(`Unexpected subrecord type at offset 0x${(subrecord[0] + bytesRead).toString(16)}: 0x${id.toString(16)}, skipping ${size} bytes`);
+					console.warn(`Unexpected subrecord type at offset 0x${(subrecord[0] + bytesRead).toString(16)}: 0x${recordType.toString(16)}, skipping ${size} bytes`);
 					bytesRead += size;
 					// AI says this should be bytesRead instead of size
 					address = subrecord[0] + size;
 					continue;
 				}
 				totalLibraryObjects++;
-				conversions[id].status = `Looking for placements in ${path.basename(file)}... found ${totalLibraryObjects}`;
+				reportStatus(id, control, `Looking for placements in ${path.basename(file)}... found ${totalLibraryObjects}`);
 				bytesRead += size;
 			}
 		}
@@ -954,11 +1009,11 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 			let bytesRead = 0;
 			while (bytesRead < subrecord[1]) {
 				address = subrecord[0] + bytesRead;
-				const id = fileView.getUint16(address, true);
+				const recordType = fileView.getUint16(address, true);
 				address += 2;
-				if (id !== 0x0056) { // Airport subrecord type
+				if (recordType !== 0x0056) { // Airport subrecord type
 					const skip = fileView.getUint32(address, true);
-					console.warn(`Unexpected airport subrecord type at offset 0x${(subrecord[0] + bytesRead).toString(16)}: 0x${id.toString(16)}, skipping ${skip} bytes`);
+					console.warn(`Unexpected airport subrecord type at offset 0x${(subrecord[0] + bytesRead).toString(16)}: 0x${recordType.toString(16)}, skipping ${skip} bytes`);
 					bytesRead += skip;
 					continue;
 				}
@@ -1548,7 +1603,7 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 										simObjects.set(simObj.containerTitle, [simObj]);
 									}
 									progressItems.push({
-										size: fs.statSync(simObj.binPath).size,
+										size: getProgressSize(simObj.binPath, `sim object ${simObj.containerTitle}`),
 										state: 'pending'
 									});
 								}
@@ -1577,7 +1632,7 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 										simObjects.set(simObj.containerTitle, [simObj]);
 									}
 									progressItems.push({
-										size: fs.statSync(simObj.binPath).size,
+										size: getProgressSize(simObj.binPath, `sim object ${simObj.containerTitle}`),
 										state: 'pending'
 									});
 								}
@@ -1711,7 +1766,7 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 	// Look for models after placements have been gathered
 	for (const file of allBglFiles) {
 		checkAbort(control);
-		conversions[id].status = `Looking for models in ${path.basename(file)}...`;
+		reportStatus(id, control, `Looking for models in ${path.basename(file)}...`);
 		console.log(`Processing file: ${file}`);
 		const fileBuffer = fs.readFileSync(file);
 		const fileView: DataView = new DataView(fileBuffer.buffer, fileBuffer.byteOffset, fileBuffer.byteLength);
@@ -1788,12 +1843,17 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 					});
 				}
 				totalModelCount++;
-				conversions[id].status = `Looking for models in ${path.basename(file)}... found ${totalModelCount}`;
+				reportStatus(id, control, `Looking for models in ${path.basename(file)}... found ${totalModelCount}`);
 				address = subrecord[0] + startModelDataOffset + modelDataSize;
 				bytesRead += modelDataSize + 24;
 				objectsRead++;
 			}
 		}
+	}
+
+	if (progressItems.length > 0) {
+		getConversion(id).progressItems.splice(0, getConversion(id).progressItems.length, ...progressItems);
+		reportProgress(id, control);
 	}
 
 	totalModelCount = Array.from(modelReferencesByTile.values()).reduce((sum, l) => sum + l.length, 0);
@@ -1804,7 +1864,7 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 
 	for (const [tileIndex, modelReferences] of modelReferencesByTile.entries()) {
 		checkAbort(control);
-		conversions[id].status = `Converting tile ${tileIndex}...`;
+		reportStatus(id, control, `Converting tile ${tileIndex}...`);
 		const simObjectsForTile: SimObject[] = [];
 		let center: vec3 = [0, 0, 0];
 		for (const simObject of simObjects) {

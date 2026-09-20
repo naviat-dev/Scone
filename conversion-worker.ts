@@ -1,24 +1,12 @@
 import { parentPort, workerData } from 'node:worker_threads';
 import { config, initializeRuntimeConfig, loadConfig } from './config.js';
 import { ConversionAbortedError, type ConversionAbortMode, convertScenery } from './converter.js';
-
-type WorkerInput = {
-	taskId: string;
-	taskPath: string;
-	taskName: string;
-	outputPath: string;
-};
+import type { WorkerInput, WorkerStatusMessage } from './task-types.js';
 
 type WorkerControlMessage = {
 	type: 'cancel';
 	mode: ConversionAbortMode;
 };
-
-type WorkerStatusMessage =
-	| { type: 'status'; status: string }
-	| { type: 'completed' }
-	| { type: 'failed'; error: string }
-	| { type: 'cancelled'; mode: ConversionAbortMode };
 
 const payload = workerData as WorkerInput;
 let abortMode: ConversionAbortMode | null = null;
@@ -43,11 +31,13 @@ async function runConversion(): Promise<void> {
 	config.outputDir = payload.outputPath;
 
 	await convertScenery(
-		payload.taskPath,
+		payload.inputPath,
 		payload.outputPath,
 		{
+			conversionId: payload.taskId,
 			shouldAbort: () => abortMode,
 			onStatus: (status) => postMessage({ type: 'status', status }),
+			onProgress: (progressItems) => postMessage({ type: 'progress', progressItems }),
 		}
 	);
 }
