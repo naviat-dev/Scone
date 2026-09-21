@@ -287,19 +287,24 @@ async function buildSimObject(fileView: DataView, address: number, inputPath: st
 			maxLod = lodLevel;
 			gltfPath = lod.getAttribute('ModelFile') || '';
 		}
+		if (maxLod === 0) {
+			break;
+		}
 	}
 	const gltfJsonPath: string = path.resolve(path.join(path.dirname(xmlPath), gltfPath));
 	if (!fs.existsSync(gltfJsonPath) || gltfPath === '') {
 		console.warn(`GLTF JSON file does not exist for model ${containerTitle}: ${gltfJsonPath}`);
 		return simObj;
 	}
+	simObj.gltfPath = gltfJsonPath;
 	const json = JSON.parse(fs.readFileSync(gltfJsonPath, 'utf-8'));
 	const binaryBufferName: string = (json.buffers as Array<{ uri: string }>)[0].uri;
-	const binaryBufferPath: string = path.resolve(path.join(path.dirname(gltfJsonPath), binaryBufferName));
-	if (!fs.existsSync(binaryBufferPath) || binaryBufferName === '') {
-		console.warn(`Binary buffer file does not exist for model ${containerTitle}: ${binaryBufferPath}`);
+	const binBufferPath: string = path.resolve(path.join(path.dirname(gltfJsonPath), binaryBufferName));
+	if (!fs.existsSync(binBufferPath) || binaryBufferName === '') {
+		console.warn(`Binary buffer file does not exist for model ${containerTitle}: ${binBufferPath}`);
 		return simObj;
 	}
+	simObj.binPath = binBufferPath;
 	return simObj;
 }
 
@@ -521,88 +526,11 @@ async function assembleModel(id: string, inputPath: string, outputPath: string, 
 						}
 					}
 					libraryObjectsForModel.push(...libraryObjects.get(guid) || []);
-				} else if (modelRef.position !== undefined && modelRef.flags !== undefined && modelRef.orientation !== undefined && modelRef.imageComplexity !== undefined && modelRef.containerTitle !== undefined && modelRef.containerPath !== undefined && modelRef.scale !== undefined) {
+				} else if (fs.existsSync(modelRef.gltfPath) && fs.existsSync(modelRef.binPath)) {
 					modelRef = modelRef as SimObject;
 					name = modelRef.containerTitle;
-					if (!fs.existsSync(modelRef.containerPath)) {
-						console.warn(`Container path does not exist for model ${modelRef.containerTitle}: ${modelRef.containerPath}`);
-						continue;
-					}
-					const containerFolder: string = path.dirname(modelRef.containerPath);
-					const containerText: string = fs.readFileSync(modelRef.containerPath, 'utf-8');
-					const simObjRegex: RegExp = new RegExp(`title=${modelRef.containerTitle}(?:\r\n|\r|\n)model=(.*)(?:\r\n|\r|\n)texture=(.*)`, 'i');
-					const simObjMatch: RegExpExecArray | null = simObjRegex.exec(containerText);
-					if (!simObjMatch) {
-						console.warn(`Unable to find model/texture for sim object ${modelRef.containerTitle} in ${modelRef.containerPath}`);
-						continue;
-					}
-					let modelIndex: string = simObjMatch[1].trim();
-					if (modelIndex !== '') {
-						modelIndex = `.${modelIndex}`
-					}
-					let textureIndex: string = simObjMatch[2].trim();
-					if (textureIndex !== '') {
-						textureIndex = `.${textureIndex}`
-					}
-					const modelCfgPath: string = path.join(containerFolder, `model${modelIndex}`, 'model.CFG');
-					if (!fs.existsSync(modelCfgPath)) {
-						console.warn(`Model CFG does not exist for model ${modelRef.containerTitle}: ${modelCfgPath}`);
-						continue;
-					}
-					const xmlNames = fs.readFileSync(modelCfgPath, 'utf-8').split('\n').filter(line => line.trim().startsWith('normal=') && line.trim().endsWith('.xml'));
-					if (xmlNames.length === 0) {
-						console.warn(`No XML name found in model CFG for model ${modelRef.containerTitle}: ${modelCfgPath}`);
-						continue;
-					}
-					const xmlName = xmlNames[0].split('=')[1].trim();
-					const xmlPath = path.resolve(path.join(containerFolder, `model${modelIndex}`, xmlName).replace(/\\/g, path.sep).replace(/\//g, path.sep));
-					if (!fs.existsSync(xmlPath)) {
-						console.warn(`XML file does not exist for model ${modelRef.containerTitle}: ${xmlPath}`);
-						continue;
-					}
-					let xmlDoc = null;
-					try {
-						xmlDoc = new DOMParser().parseFromString(fs.readFileSync(xmlPath, 'utf-8').trim(), 'application/xml');
-					} catch (error) {
-						console.warn(`Failed to parse XML for model ${modelRef.containerTitle}: ${xmlPath}`);
-						continue;
-					}
-					const lodsRoot = xmlDoc.getElementsByTagName('LODS')[0];
-					if (!lodsRoot) {
-						console.warn(`No LODS section found for model ${modelRef.containerTitle}: ${xmlPath}`);
-						continue;
-					}
-					const lods = lodsRoot.getElementsByTagName('LOD');
-					if (!lods || lods.length === 0) {
-						console.warn(`No LOD entries found for model ${modelRef.containerTitle}: ${xmlPath}`);
-						continue;
-					}
-					let maxLod: number = -1;
-					let gltfPath: string = '';
-					for (let lodIndex = 0; lodIndex < lods.length; lodIndex++) {
-						const lod = lods.item(lodIndex);
-						if (!lod) {
-							continue;
-						}
-						const lodLevel = parseInt(lod.getAttribute('MinSize') || '0', 10);
-						if (lodLevel > maxLod) {
-							maxLod = lodLevel;
-							gltfPath = lod.getAttribute('ModelFile') || '';
-						}
-					}
-					const gltfJsonPath: string = path.resolve(path.join(path.dirname(xmlPath), gltfPath));
-					if (!fs.existsSync(gltfJsonPath) || gltfPath === '') {
-						console.warn(`GLTF JSON file does not exist for model ${modelRef.containerTitle}: ${gltfJsonPath}`);
-						continue;
-					}
-					json = JSON.parse(fs.readFileSync(gltfJsonPath, 'utf-8'));
-					const binaryBufferName: string = (json.buffers as Array<{ uri: string }>)[0].uri;
-					const binaryBufferPath: string = path.resolve(path.join(path.dirname(gltfJsonPath), binaryBufferName));
-					if (!fs.existsSync(binaryBufferPath) || binaryBufferName === '') {
-						console.warn(`Binary buffer file does not exist for model ${modelRef.containerTitle}: ${binaryBufferPath}`);
-						continue;
-					}
-					binary = fs.readFileSync(binaryBufferPath);
+					json = JSON.parse(fs.readFileSync(modelRef.gltfPath, 'utf-8').trim());
+					binary = fs.readFileSync(modelRef.binPath);
 					for (const image of (json.images || []) as Array<any>) {
 						// Look for the texture files in either possible texture directory
 						if (!image || typeof image !== 'object') {
@@ -619,13 +547,13 @@ async function assembleModel(id: string, inputPath: string, outputPath: string, 
 							uri = uri.replace(`texture${path.sep}`, '');
 						}
 
-						const texturePathCandidates = [findCaseInsensitive(path.resolve(path.join(containerFolder, `texture${textureIndex}`, uri))), findCaseInsensitive(path.resolve(path.join(containerFolder, `texture`, uri)))];
+						const texturePathCandidates = [findCaseInsensitive(path.resolve(path.join(modelRef.containerFolder, `texture${modelRef.textureIndex}`, uri))), findCaseInsensitive(path.resolve(path.join(modelRef.containerFolder, `texture`, uri)))];
 						if (fs.existsSync(texturePathCandidates[0] || '')) {
 							image.extras = { absolutePath: texturePathCandidates[0] };
-							image.uri = `${path.basename(image.uri, path.extname(image.uri))}${textureIndex}${path.extname(image.uri)}`;
+							image.uri = `${path.basename(image.uri, path.extname(image.uri))}${modelRef.textureIndex}${path.extname(image.uri)}`;
 						} else if (fs.existsSync(texturePathCandidates[1] || '')) {
 							image.extras = { absolutePath: texturePathCandidates[1] };
-							image.uri = `${path.basename(image.uri, path.extname(image.uri))}${textureIndex}${path.extname(image.uri)}`;
+							image.uri = `${path.basename(image.uri, path.extname(image.uri))}${modelRef.textureIndex}${path.extname(image.uri)}`;
 						} else {
 							console.warn(`Texture file does not exist for model ${modelRef.containerTitle}: ${uri}`);
 						}
@@ -1013,15 +941,17 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 				} else if (recordType === 0x19) { //SimObject
 					address -= 4; // Reverse back to get all of the bytes
 					const simObj = await buildSimObject(fileView, address, file, configPathsByTitle);
-					if (!simObjects.has(simObj.containerTitle)) {
-						simObjects.set(simObj.containerTitle, []);
+					if (simObj.containerPath !== '') {
+						if (!simObjects.has(simObj.containerTitle)) {
+							simObjects.set(simObj.containerTitle, []);
+						}
+						simObjects.get(simObj.containerTitle)!.push(simObj);
+						conversions[id].placements.push(simObj);
+						progressItems.push({
+							size: getProgressSize(simObj.binPath, `sim object ${simObj.containerTitle}`),
+							state: 'pending'
+						});
 					}
-					simObjects.get(simObj.containerTitle)!.push(simObj);
-					conversions[id].placements.push(simObj);
-					progressItems.push({
-						size: getProgressSize(simObj.binPath, `sim object ${simObj.containerTitle}`),
-						state: 'pending'
-					});
 				} else {
 					console.warn(`Unexpected subrecord type at offset 0x${(subrecord[0] + bytesRead).toString(16)}: 0x${recordType.toString(16)}, skipping ${size} bytes`);
 					bytesRead += size;
@@ -1618,16 +1548,18 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 								}
 								else if (new DataView(sceneryObjectBytes.buffer, sceneryObjectBytes.byteOffset, sceneryObjectBytes.byteLength).getUint16(0, true) == 0x0019) {
 									const simObj = await buildSimObject(fileView, address, file, configPathsByTitle);
-									if (simObjects.has(simObj.containerTitle)) {
-										simObjects.get(simObj.containerTitle)!.push(simObj);
+									if (simObj.containerPath !== '') {
+										if (simObjects.has(simObj.containerTitle)) {
+											simObjects.get(simObj.containerTitle)!.push(simObj);
+										}
+										else {
+											simObjects.set(simObj.containerTitle, [simObj]);
+										}
+										progressItems.push({
+											size: getProgressSize(simObj.binPath, `sim object ${simObj.containerTitle}`),
+											state: 'pending'
+										});
 									}
-									else {
-										simObjects.set(simObj.containerTitle, [simObj]);
-									}
-									progressItems.push({
-										size: getProgressSize(simObj.binPath, `sim object ${simObj.containerTitle}`),
-										state: 'pending'
-									});
 								}
 								else {
 									console.warn(`Unexpected scenery object type in jetway record at offset 0x${(subrecord[0] + bytesRead + airportBytesRead).toString(16)}: 0x${new DataView(sceneryObjectBytes.buffer, sceneryObjectBytes.byteOffset, sceneryObjectBytes.byteLength).getUint16(0, true).toString(16).padStart(4, '0')}`);
@@ -1647,16 +1579,18 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 								}
 								else if (new DataView(sceneryObjectBytes.buffer, sceneryObjectBytes.byteOffset, sceneryObjectBytes.byteLength).getUint16(0, true) == 0x0019) {
 									const simObj = await buildSimObject(fileView, address, file, configPathsByTitle);
-									if (simObjects.has(simObj.containerTitle)) {
-										simObjects.get(simObj.containerTitle)!.push(simObj);
+									if (simObj.containerPath !== '') {
+										if (simObjects.has(simObj.containerTitle)) {
+											simObjects.get(simObj.containerTitle)!.push(simObj);
+										}
+										else {
+											simObjects.set(simObj.containerTitle, [simObj]);
+										}
+										progressItems.push({
+											size: getProgressSize(simObj.binPath, `sim object ${simObj.containerTitle}`),
+											state: 'pending'
+										});
 									}
-									else {
-										simObjects.set(simObj.containerTitle, [simObj]);
-									}
-									progressItems.push({
-										size: getProgressSize(simObj.binPath, `sim object ${simObj.containerTitle}`),
-										state: 'pending'
-									});
 								}
 								else {
 									console.warn(`Unexpected scenery object type in jetway record at offset 0x${(subrecord[0] + bytesRead + airportBytesRead).toString(16)}: 0x${new DataView(sceneryObjectBytes.buffer, sceneryObjectBytes.byteOffset, sceneryObjectBytes.byteLength).getUint16(0, true).toString(16).padStart(4, '0')}`);
@@ -1887,8 +1821,7 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 				}
 			}
 		}
-		const modelRefs: ModelReference[] = modelReferences.sort((a, b) => b.size - a.size);
-		console.info(`Tile ${tileIndex} has ${modelRefs.length} model references and ${simObjectsForTile.length} sim objects`);
+		console.info(`Tile ${tileIndex} has ${modelReferences.length} model references and ${simObjectsForTile.length} sim objects`);
 		const libraryObjectsForTile: LibraryObject[] = [];
 		for (const guid of guidsWithModels) {
 			const objects = libraryObjects.get(guid);
@@ -1913,7 +1846,7 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 			center = [coord.lon, coord.lat, 0];
 		}
 
-		await assembleModel(id, inputPath, outputPath, tileIndex, [...modelRefs, ...simObjectsForTile], center, libraryObjects, control);
+		await assembleModel(id, inputPath, outputPath, tileIndex, [...modelReferences, ...simObjectsForTile], center, libraryObjects, control);
 		collectConversionGarbageIfNeeded(true);
 	}
 }
