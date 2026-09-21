@@ -15,6 +15,7 @@ import { DOMParser } from "@xmldom/xmldom";
 // @ts-expect-error gltf-validator does not provide TypeScript declarations.
 import validator from 'gltf-validator';
 import type { ConversionProgressItem, ConversionProgressState } from './task-types.js';
+import { decompress } from 'fzstd';
 
 
 export type ConversionAbortMode = 'save' | 'discard';
@@ -517,6 +518,21 @@ async function assembleModel(id: string, inputPath: string, outputPath: string, 
 									binary = glbBytes.subarray(binStart, binEnd);
 									j += 8 + glbSize;
 									break;
+								} else if (sig === 'GLBZ') {
+									if (glbIndex >= 1) {
+										console.info(`More than one LOD present for ${name}; skipping remaining GLB in chunk.`);
+										glbIndex = 0;
+										// The highest LOD is the first GLB; break after processing it
+										break;
+									}
+
+									reportStatus(id, control, `Converting ${name || modelRef.guid}...`);
+									console.info(`Processing GLBZ chunk for model ${name} (${modelRef.guid}) in ${modelRef.file}`);
+									const size: number = fileView.getUint32(i + 4, true);
+									const compressedData = fileView.buffer.slice(i + 8, i + 8 + size);
+									console.log(Buffer.from(compressedData).toString('utf-8'));
+									const decompressedData: Uint8Array = decompress(Buffer.from(compressedData));
+									console.log(decompressedData.toString());
 								} else {
 									j += 4;
 								}
