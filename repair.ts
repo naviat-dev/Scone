@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { Document } from '@gltf-transform/core';
-import { dedup, instance, flatten, join, weld, resample, prune, unpartition} from '@gltf-transform/functions';
+import { dedup, weld, prune} from '@gltf-transform/functions';
 
 interface RepairIssue {
     code: string;
@@ -649,18 +649,5 @@ export async function repairDocument(document: Document, modelPath: string, issu
             scene.dispose();
         }
     }
-    return document;
-}
-
-export async function optimizeDocument(document: Document, modelPath: string): Promise<Document> {
-    const patchedTextureCount = normalizeMsftTextureSources(modelPath);
-    if (patchedTextureCount > 0) {
-        console.log(`Patched ${patchedTextureCount} texture source references from MSFT_texture_dds.`);
-    }
-    const sourceUvContext: SourceUvContext = loadSourceUvContext(modelPath);
-    restoreTexCoordsFromOriginalModel(document, sourceUvContext);
-
-    // Apply optimization transforms.
-    await document.transform(dedup(), instance(), flatten(), join(), weld(), resample(), prune({ keepAttributes: true }), unpartition());
     return document;
 }

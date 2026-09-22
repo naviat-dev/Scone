@@ -522,7 +522,6 @@ async function assembleModel(id: string, inputPath: string, outputPath: string, 
 									reportStatus(id, control, `Converting ${name || modelRef.guid}...`);
 									console.info(`Processing GLBZ chunk for model ${name} (${modelRef.guid}) in ${modelRef.file}`);
 									const size: number = fileView.getUint32(j + 4, true) - 4;
-									let compressedData = new Uint8Array(fileBuffer.subarray(j + 12, j + 12 + size));
 									if (size < 4) {
 										throw new Error('GLBZ missing uncompressed size');
 									}
@@ -933,6 +932,7 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 	const simObjects: Map<string, SimObject[]> = new Map();
 	const guidsWithModels: Set<string> = new Set();
 	const modelReferencesByTile: Map<number, ModelReference[]> = new Map();
+	const airports: Airport[] = [];
 	reportStatus(id, control, 'Scanning scenery files...');
 	const allBglFiles: string[] = getFilesRecursive(inputPath, '.bgl', false);
 	reportStatus(id, control, 'Scanning config files...');
@@ -1053,7 +1053,7 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 				address = subrecord[0] + bytesRead;
 				const recordType = fileView.getUint16(address, true);
 				address += 2;
-				if (recordType !== 0x0056) { // Airport subrecord type
+				if (recordType !== 0x0056 && recordType !== 0x0013) { // Airport subrecord type
 					const skip = fileView.getUint32(address, true);
 					console.warn(`Unexpected airport subrecord type at offset 0x${(subrecord[0] + bytesRead).toString(16)}: 0x${recordType.toString(16)}, skipping ${skip} bytes`);
 					bytesRead += skip;
@@ -1129,7 +1129,7 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 					address += 4; // Move past the record size
 					switch (recordId) {
 						case 0x0019: // Airport Name
-							airport.name = new TextDecoder('utf-8').decode(getViewBytes(fileView, address, recordSize));
+							airport.name = new TextDecoder('utf-8').decode(getViewBytes(fileView, address, recordSize - 6));
 							break;
 						case 0x00ce: // Runway
 							address += 2;
@@ -1777,6 +1777,7 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 					collectConversionGarbageIfNeeded();
 				}
 				bytesRead += size;
+				airports.push(airport);
 				collectConversionGarbageIfNeeded(true);
 			}
 		}
