@@ -224,7 +224,9 @@ async function buildSimObject(fileView: DataView, address: number, inputPath: st
 
 	// Fill in additional helper properties for progress indication
 	if (!fs.existsSync(containerPath)) {
-		console.warn(`Container path does not exist: ${containerPath}`);
+		if (containerPath !== '') {
+			console.warn(`Container path does not exist: ${containerPath}`);
+		}
 		return simObj;
 	}
 	const containerFolder: string = path.dirname(containerPath);
@@ -396,6 +398,40 @@ function findCaseInsensitive(inputPath: string): string | null {
 	return current;
 }
 
+function requireRange(data: Buffer, offset: number, length: number, label: string) {
+	if (!Number.isSafeInteger(offset) || !Number.isSafeInteger(length) || offset < 0 || length < 0 || offset + length > data.length) {
+		throw new Error(`Truncated ${label}`);
+	}
+}
+
+function zstdFrameLength(data: Buffer) {
+	requireRange(data, 0, 5, 'Zstandard frame header');
+	if (data.readUInt32LE(0) !== 0xfd2fb528) throw new Error('Not a Zstandard frame');
+	const descriptor = data[4];
+	if (descriptor & 8) throw new Error('Reserved Zstandard header bit set');
+	const singleSegment = (descriptor & 32) !== 0;
+	const contentSizeBytes = [singleSegment ? 1 : 0, 2, 4, 8][descriptor >>> 6];
+	let cursor = 5 + (singleSegment ? 0 : 1) + [0, 1, 2, 4][descriptor & 3] + contentSizeBytes;
+	requireRange(data, 0, cursor, 'Zstandard frame header');
+	let last = false;
+	while (!last) {
+		requireRange(data, cursor, 3, 'Zstandard block header');
+		const header = data.readUIntLE(cursor, 3);
+		cursor += 3;
+		last = (header & 1) !== 0;
+		const type = (header >>> 1) & 3;
+		if (type === 3) throw new Error('Reserved Zstandard block type');
+		const blockBytes = type === 1 ? 1 : header >>> 3;
+		requireRange(data, cursor, blockBytes, 'Zstandard block');
+		cursor += blockBytes;
+	}
+	if (descriptor & 4) {
+		requireRange(data, cursor, 4, 'Zstandard checksum');
+		cursor += 4;
+	}
+	return cursor;
+}
+
 async function assembleModel(id: string, inputPath: string, outputPath: string, tileIndex: number, modelReferences: any[], center: vec3, libraryObjects: Map<string, LibraryObject[]>, control?: ConversionControl) {
 	const tempTilePath = path.join(config.tempDir, `tile_${tileIndex}_${Date.now()}`);
 	fs.mkdirSync(tempTilePath, { recursive: true });
@@ -466,14 +502,51 @@ async function assembleModel(id: string, inputPath: string, outputPath: string, 
 								}
 
 								const sig: string = readFourCC(fileBuffer, j);
+								let glbBytes: Buffer = Buffer.alloc(0);
+								let glbSize: number = 0;
 								if (sig === 'GLB\0') {
-									const glbSize: number = fileView.getUint32(j + 4, true);
+									glbSize = fileView.getUint32(j + 4, true);
 									if (j + 8 + glbSize > fileBuffer.byteLength) {
 										console.warn(`Invalid GLB payload size ${glbSize} for model ${modelRef.guid}`);
 										break;
 									}
+									glbBytes = fileBuffer.subarray(j + 8, j + 8 + glbSize);
+								} else if (sig === 'GLBZ') {
+									if (glbIndex >= 1) {
+										console.info(`More than one LOD present for ${name}; skipping remaining GLB in chunk.`);
+										glbIndex = 0;
+										// The highest LOD is the first GLB; break after processing it
+										break;
+									}
 
-									const glbBytes = fileBuffer.subarray(j + 8, j + 8 + glbSize);
+									reportStatus(id, control, `Converting ${name || modelRef.guid}...`);
+									console.info(`Processing GLBZ chunk for model ${name} (${modelRef.guid}) in ${modelRef.file}`);
+									const size: number = fileView.getUint32(j + 4, true) - 4;
+									let compressedData = new Uint8Array(fileBuffer.subarray(j + 12, j + 12 + size));
+									if (size < 4) {
+										throw new Error('GLBZ missing uncompressed size');
+									}
+									const expectedLength = fileView.getUint32(j + 8, true);
+									// Prototype limit; a production implementation should use project policy.
+									if (expectedLength < 20 || expectedLength > 256 * 1024 * 1024) {
+										throw new Error('Invalid GLBZ uncompressed size');
+									}
+									const frameAndPadding = fileBuffer.subarray(j + 12, j + 12 + size);
+									const frameLength = zstdFrameLength(frameAndPadding);
+									let padding = frameAndPadding.length - frameLength;
+									if (padding > 3 || frameAndPadding.subarray(frameLength).some(byte => byte !== 0)) {
+										throw new Error('Unexpected data after Zstandard frame');
+									}
+									const decompressedData: Uint8Array = decompress(frameAndPadding.subarray(0, frameLength));
+									if (decompressedData.length !== expectedLength) {
+										throw new Error('GLBZ uncompressed size mismatch');
+									}
+									glbBytes = Buffer.from(decompressedData);
+									glbSize = glbBytes.length;
+								} else {
+									j += 4;
+								}
+								if (glbBytes.length !== 0) {
 									const glbView = new DataView(glbBytes.buffer, glbBytes.byteOffset, glbBytes.byteLength);
 
 									if (glbBytes.byteLength < 0x14) {
@@ -515,26 +588,9 @@ async function assembleModel(id: string, inputPath: string, outputPath: string, 
 									}
 
 									json = JSON.parse(Buffer.from(jsonBytes).toString('utf-8').trim());
-									binary = glbBytes.subarray(binStart, binEnd);
+									binary = Buffer.from(glbBytes.subarray(binStart, binEnd));
 									j += 8 + glbSize;
 									break;
-								} else if (sig === 'GLBZ') {
-									if (glbIndex >= 1) {
-										console.info(`More than one LOD present for ${name}; skipping remaining GLB in chunk.`);
-										glbIndex = 0;
-										// The highest LOD is the first GLB; break after processing it
-										break;
-									}
-
-									reportStatus(id, control, `Converting ${name || modelRef.guid}...`);
-									console.info(`Processing GLBZ chunk for model ${name} (${modelRef.guid}) in ${modelRef.file}`);
-									const size: number = fileView.getUint32(i + 4, true);
-									const compressedData = fileView.buffer.slice(i + 8, i + 8 + size);
-									console.log(Buffer.from(compressedData).toString('utf-8'));
-									const decompressedData: Uint8Array = decompress(Buffer.from(compressedData));
-									console.log(decompressedData.toString());
-								} else {
-									j += 4;
 								}
 							}
 							glbIndex++;
@@ -547,6 +603,7 @@ async function assembleModel(id: string, inputPath: string, outputPath: string, 
 					name = modelRef.containerTitle;
 					json = JSON.parse(fs.readFileSync(modelRef.gltfPath, 'utf-8').trim());
 					binary = fs.readFileSync(modelRef.binPath);
+					const containerFolder = path.dirname(modelRef.containerPath);
 					for (const image of (json.images || []) as Array<any>) {
 						// Look for the texture files in either possible texture directory
 						if (!image || typeof image !== 'object') {
@@ -563,7 +620,7 @@ async function assembleModel(id: string, inputPath: string, outputPath: string, 
 							uri = uri.replace(`texture${path.sep}`, '');
 						}
 
-						const texturePathCandidates = [findCaseInsensitive(path.resolve(path.join(modelRef.containerFolder, `texture${modelRef.textureIndex}`, uri))), findCaseInsensitive(path.resolve(path.join(modelRef.containerFolder, `texture`, uri)))];
+						const texturePathCandidates = [findCaseInsensitive(path.resolve(path.join(containerFolder, `texture${modelRef.textureIndex}`, uri))), findCaseInsensitive(path.resolve(path.join(containerFolder, `texture`, uri)))];
 						if (fs.existsSync(texturePathCandidates[0] || '')) {
 							image.extras = { absolutePath: texturePathCandidates[0] };
 							image.uri = `${path.basename(image.uri, path.extname(image.uri))}${modelRef.textureIndex}${path.extname(image.uri)}`;
@@ -840,7 +897,9 @@ async function assembleModel(id: string, inputPath: string, outputPath: string, 
 		path.join(tileOutputPath, json.buffers[0].uri),
 		path.join(tileOutputPath, `${tileIndex}.bin`)
 	);
-	json.buffers[0].uri = `${tileIndex}.bin`;
+	if (json.buffers && json.buffers[0]) {
+		json.buffers[0].uri = `${tileIndex}.bin`;
+	}
 	fs.writeFileSync(jsonPath, JSON.stringify(json, null, 4));
 	fs.writeFileSync(
 		path.join(tileOutputPath, `${tileIndex}.stg`),
@@ -1862,7 +1921,7 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 			center = [coord.lon, coord.lat, 0];
 		}
 
-		await assembleModel(id, inputPath, outputPath, tileIndex, [...modelReferences, ...simObjectsForTile], center, libraryObjects, control);
+		await assembleModel(id, inputPath, outputPath, tileIndex, [...simObjectsForTile, ...modelReferences], center, libraryObjects, control);
 		collectConversionGarbageIfNeeded(true);
 	}
 }
