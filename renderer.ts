@@ -42,18 +42,15 @@ const progressStateLabels: Record<ConversionProgressState, string> = {
 	failed: 'Failed',
 };
 
-const sectionTitles: Record<SectionName, { title: string; description: string }> = {
+const sectionTitles: Record<SectionName, { title: string }> = {
 	current: {
-		title: 'Current conversions',
-		description: 'Create conversions and monitor work that is queued or running.',
+		title: 'Current conversions'
 	},
 	history: {
-		title: 'Previous conversions',
-		description: 'Review completed, failed, and cancelled conversions from this session.',
+		title: 'Previous conversions'
 	},
 	settings: {
-		title: 'Settings',
-		description: 'Choose defaults used when creating new conversion tasks.',
+		title: 'Settings'
 	},
 };
 
@@ -138,7 +135,6 @@ function createSectionHeading(section: SectionName, summary: string): HTMLElemen
 	const copy = createElement('div');
 	const title = createElement('h2', undefined, sectionTitles[section].title);
 	title.id = `${section}-section-title`;
-	copy.append(title, createElement('p', undefined, sectionTitles[section].description));
 	const summaryElement = createElement('span', 'section-summary', summary);
 	summaryElement.id = `${section}-section-summary`;
 	heading.append(copy, summaryElement);
@@ -229,8 +225,7 @@ function createNewTaskCard(): HTMLElement {
 	icon.setAttribute('aria-hidden', 'true');
 	const copy = createElement('span', 'new-task-copy');
 	copy.append(
-		createElement('h3', undefined, 'Start a new conversion'),
-		createElement('p', undefined, 'Choose source and destination folders.'),
+		createElement('h3', undefined, 'Start a new conversion')
 	);
 	toggle.append(icon, copy, createChevron());
 
