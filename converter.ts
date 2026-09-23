@@ -1,6 +1,6 @@
 import { dummyTexturePath } from './assets.js';
 import { getTileIndexFromCoord, getCoordFromTileIndex, getFilePathFromTileIndex, getAltitude } from './terrain.js';
-import { PlacementObject, LibraryObject, SimObject, Flags, Airport, Tower, Runway, RunwayStart, TaxiwayPoint, TaxiwayParking, TaxiwayPath, TaxiwayPathType, Apron, TaxiwaySign, PaintedLine, PaintedHatchedArea, ApronEdgeLights, Helipad, ProjectedMesh, ModelReference } from './structures.js'
+import { PlacementObject, LibraryObject, SimObject, Flags, Airport, Tower, Runway, RunwayStart, TaxiwayPoint, TaxiwayParking, TaxiwayPath, TaxiwayPathType, Apron, TaxiwaySign, PaintedLine, PaintedHatchedArea, ApronEdgeLights, Helipad, ProjectedMesh, Jetway, ModelReference } from './structures.js'
 import { config } from './config.js';
 import { applyAsoboGeometryRepair, repairDocument } from './repair.js';
 import { convertToDDS } from './texconv.js'
@@ -1053,7 +1053,7 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 				address = subrecord[0] + bytesRead;
 				const recordType = fileView.getUint16(address, true);
 				address += 2;
-				if (recordType !== 0x0056 && recordType !== 0x0013) { // Airport subrecord type
+				if (recordType !== 0x0056) { // Airport subrecord type
 					const skip = fileView.getUint32(address, true);
 					console.warn(`Unexpected airport subrecord type at offset 0x${(subrecord[0] + bytesRead).toString(16)}: 0x${recordType.toString(16)}, skipping ${skip} bytes`);
 					bytesRead += skip;
@@ -1086,13 +1086,7 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 					projectedMeshes: []
 				};
 				const size = fileView.getUint32(address, true);
-				address += 4;
-				address += 1;
-				address += 1;
-				address += 1;
-				address += 1;
-				address += 1;
-				address += 1;
+				address += 10;
 				airport.longitude = (fileView.getUint32(address, true) * (360.0 / 805306368.0)) - 180.0;
 				address += 4;
 				airport.latitude = 90.0 - (fileView.getUint32(address, true) * (180.0 / 536870912.0));
@@ -1100,8 +1094,8 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 				airport.altitude = fileView.getInt32(address, true) / 1000.0;
 				address += 4;
 				airport.tower = {
-					latitude: 90.0 - (fileView.getUint32(address, true) * (180.0 / 536870912.0)),
-					longitude: (fileView.getUint32(address + 4, true) * (360.0 / 805306368.0)) - 180.0,
+					longitude: (fileView.getUint32(address, true) * (360.0 / 805306368.0)) - 180.0,
+					latitude: 90.0 - (fileView.getUint32(address + 4, true) * (180.0 / 536870912.0)),
 					altitude: fileView.getInt32(address + 8, true) / 1000.0
 				};
 				address += 12;
@@ -1113,10 +1107,7 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 				address = subrecord[0] + bytesRead + 0x37; // Skip ahead to departure count
 				address = subrecord[0] + bytesRead + 0x39; // Skip ahead to arrival count
 				address = subrecord[0] + bytesRead + 0x3c; // Skip ahead to remaining useful records
-				address += 2;
-				address += 2;
-				address += 2;
-				address += 2;
+				address += 8;
 				let airportBytesRead = 0x44; // Start with 0x44 bytes we've already read
 
 				while (airportBytesRead < size) {
@@ -1313,6 +1304,9 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 									};
 									address += 37;
 								}
+								if (!airport.runways.includes(runway)) {
+									airport.runways.push(runway);
+								}
 								runwayBytesRead += runwayRecordSize;
 							}
 							break;
@@ -1339,6 +1333,7 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 							address += 4;
 							runwayStart.heading = fileView.getFloat32(address, true) * (360.0 / 65536.0);
 							address += 4;
+							airport.runwayStarts.push(runwayStart);
 							break;
 						case 0x001a: // TaxiwayPoint
 							const taxiwayPointCount = fileView.getUint16(address, true);
@@ -1355,6 +1350,7 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 								address += 4;
 								taxiwayPoint.latitude = 90.0 - (fileView.getUint32(address, true) * (180.0 / 536870912.0));
 								address += 4;
+								airport.taxiwayPoints.push(taxiwayPoint);
 							}
 							break;
 						case 0x00e7: // TaxiwayParking
@@ -1399,6 +1395,7 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 								address += 4;
 								taxiwayParking.numberHeading = fileView.getFloat32(address, true) * (360.0 / 65536.0);
 								address += 4;
+								airport.taxiwayParkings.push(taxiwayParking);
 							}
 							break;
 						case 0x00d4: // TaxiwayPath
@@ -1498,12 +1495,14 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 										address += 38;
 									}
 								}
+								airport.taxiwayPaths.push(taxiwayPath);
 							}
 							break;
 						case 0x001d: // TaxiName
 							const taxiNameCount = fileView.getUint16(address, true);
 							address += 2;
 							for (let j = 0; j < taxiNameCount; j++) {
+								airport.taxiNames.push(new TextDecoder('utf-8').decode(getViewBytes(fileView, address, 8)));
 								address += 8;
 							}
 							break;
@@ -1548,6 +1547,7 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 								]);
 								address += 6;
 							}
+							airport.aprons.push(apron);
 							break;
 						case 0x00d9: // TaxiwaySign
 							address += 2; // Skip record size, it's always the same
@@ -1559,6 +1559,7 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 								justificationRight: (fileView.getUint8(address + 13) & 0b1) == 1,
 								label: new TextDecoder().decode(getViewBytes(fileView, address + 14, 0x3e)),
 							};
+							airport.taxiwaySigns.push(taxiwaySign);
 							address += 14 + 0x3e;
 							break;
 						case 0x00cf: // PaintedLine
@@ -1580,6 +1581,7 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 								]);
 								address += 8;
 							}
+							airport.paintedLines.push(paintedLine);
 							break;
 						case 0x00d8: // PaintedHatchedArea
 							const paintedHatchedArea: PaintedHatchedArea = {
@@ -1603,8 +1605,14 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 								]);
 								address += 8;
 							}
+							airport.paintedHatchedAreas.push(paintedHatchedArea);
 							break;
 						case 0x00de: // Jetway
+							const jetway: Jetway = {
+								parkingNumber: fileView.getUint16(address, true),
+								gateName: fileView.getUint16(address, true),
+								suffix: fileView.getUint16(address, true)
+							};
 							address += 8; // Skip unknown field
 							const sceneryObjectLength1 = fileView.getUint16(address, true);
 							address += 2;
@@ -1672,6 +1680,7 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 								}
 								address += sceneryObjectLength2;
 							}
+							airport.jetways.push(jetway);
 							break;
 						case 0x0057: // LightSupport
 							address += 30; // Skip the unknown field and LightSupport structure.
@@ -1709,6 +1718,7 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 								]);
 								address += 8;
 							}
+							airport.apronEdgeLights.push(apronEdgeLights);
 							break;
 						case 0x0026: // Helipad
 							const helipad: Helipad = {
@@ -1749,6 +1759,7 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 							address += 4;
 							helipad.heading = fileView.getFloat32(address, true) * (360.0 / 65536.0);
 							address += 4;
+							airport.helipads.push(helipad);
 							break;
 						case 0x00e8: // ProjectedMesh
 							const projectedMesh: ProjectedMesh = {
@@ -1766,6 +1777,7 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 								projectedMesh.libraryObject = await buildLibraryObject(fileView, address);
 							}
 							address += subRecordSize;
+							airport.projectedMeshes.push(projectedMesh);
 							break;
 						default:
 							console.warn(`Unexpected airport record type at offset 0x${(subrecord[0] + bytesRead + airportBytesRead).toString(16)}: 0x${recordId.toString(16).padStart(4, '0')}, skipping ${recordSize} bytes`);
