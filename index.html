@@ -12,6 +12,29 @@
 		<link rel="stylesheet" href="renderer.css" />
 	</head>
 	<body>
+		<div
+			id="launch-disclaimer"
+			class="launch-disclaimer"
+			role="dialog"
+			aria-modal="true"
+			aria-labelledby="launch-disclaimer-title"
+			aria-describedby="launch-disclaimer-text"
+		>
+			<div class="launch-disclaimer-panel">
+				<p class="launch-disclaimer-eyebrow">Disclaimer</p>
+				<h2 id="launch-disclaimer-title">Piracy Is Not A Victimless Crime</h2>
+				<p id="launch-disclaimer-text">
+					Scone is a tool that reads, analyzes, and reformats scenery designed for Microsoft Flight Simulator.<br />
+					It is intended for use only with legally obtained scenery and should not be used to circumvent copyright protections.<br />
+					If you are not sure whether your scenery is legally obtained, you should not use Scone with it.<br />
+					If the creator of the scenery has not granted permission for modifications, you should not use Scone with it.<br />
+				</p>
+				<button id="dismiss-disclaimer" class="button button-primary launch-disclaimer-button" type="button">
+					I Understand
+				</button>
+			</div>
+		</div>
+
 		<div class="app-shell">
 			<header class="title-bar">
 				<div class="title-bar-content">

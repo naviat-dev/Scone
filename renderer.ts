@@ -58,6 +58,8 @@ const terminalPhases = new Set<TaskPhase>(['completed', 'failed', 'cancelled']);
 const sectionHost = requireElement<HTMLDivElement>('section-host');
 const appMessage = requireElement<HTMLDivElement>('app-message');
 const navigationButtons = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-section]'));
+const launchDisclaimer = document.getElementById('launch-disclaimer') as HTMLDivElement | null;
+const dismissDisclaimerButton = document.getElementById('dismiss-disclaimer') as HTMLButtonElement | null;
 
 let tasks: ConversionTaskDto[] = [];
 let settings: SettingsPayload = {
@@ -730,6 +732,24 @@ function registerNavigation(): void {
 	});
 }
 
+function initializeLaunchDisclaimer(): void {
+	if (!launchDisclaimer || !dismissDisclaimerButton) {
+		return;
+	}
+
+	document.body.classList.add('has-launch-disclaimer');
+	launchDisclaimer.setAttribute('aria-hidden', 'false');
+
+	const dismiss = () => {
+		launchDisclaimer.classList.add('is-hidden');
+		launchDisclaimer.setAttribute('aria-hidden', 'true');
+		document.body.classList.remove('has-launch-disclaimer');
+	};
+
+	dismissDisclaimerButton.addEventListener('click', dismiss, { once: true });
+	window.setTimeout(() => dismissDisclaimerButton.focus(), 0);
+}
+
 function upsertTask(updatedTask: ConversionTaskDto): void {
 	const existingIndex = tasks.findIndex((task) => task.id === updatedTask.id);
 	if (existingIndex === -1) {
@@ -785,6 +805,7 @@ async function requestCancellation(taskId: string, mode: CancelMode): Promise<vo
 }
 
 async function initialize(): Promise<void> {
+	initializeLaunchDisclaimer();
 	registerNavigation();
 	renderSectionImmediately('current');
 	updateCounts();
