@@ -524,7 +524,6 @@ export async function repairDocument(document: Document, modelPath: string, issu
     for (const issue of issues.filter((issue) => issue.severity === 0)) {
         switch (issue.code) {
             case 'MESH_PRIMITIVE_ATTRIBUTES_ACCESSOR_INVALID_FORMAT': {
-                console.log(`Repairing issue: ${issue.code} at ${issue.pointer}`);
                 const pointerParts = issue.pointer.split('/');
                 const primitive = document.getRoot().listMeshes()[Number(pointerParts[2])].listPrimitives()[Number(pointerParts[4])];
                 const attribute = primitive.getAttribute(pointerParts[6]);
@@ -581,7 +580,6 @@ export async function repairDocument(document: Document, modelPath: string, issu
                 break;
             }
             case 'MESH_PRIMITIVE_UNEQUAL_ACCESSOR_COUNT': {
-                console.log(`Repairing issue: ${issue.code} at ${issue.pointer}`);
                 const pointerPartsCount = issue.pointer.split('/');
                 const primitive = document.getRoot().listMeshes()[Number(pointerPartsCount[2])].listPrimitives()[Number(pointerPartsCount[4])];
                 const positionAccessor = primitive.getAttribute('POSITION');
@@ -601,12 +599,10 @@ export async function repairDocument(document: Document, modelPath: string, issu
                 break;
             }
             case 'EMPTY_ENTITY': {
-                console.log(`Repairing issue: ${issue.code} at ${issue.pointer}`);
                 // TODO: Implement repair logic for EMPTY_ENTITY if needed. For now, we just log the issue.
                 break;
             }
             case 'VALUE_NOT_IN_RANGE': {
-                console.log(`Repairing issue: ${issue.code} at ${issue.pointer}`);
                 const pointerPartsRange = issue.pointer.split('/');
                 const material = document.getRoot().listMaterials()[Number(pointerPartsRange[2])];
                 if (material) {
