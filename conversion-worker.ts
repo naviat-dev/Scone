@@ -21,8 +21,12 @@ function parseWorkerInput(value: unknown): WorkerInput {
 		|| typeof input.inputPath !== 'string'
 		|| typeof input.taskName !== 'string'
 		|| typeof input.outputPath !== 'string'
+		|| typeof input.version !== 'number'
 	) {
 		throw new Error('Conversion worker input is invalid.');
+	}
+	if (input.version !== 2 && input.version !== 3) {
+		throw new Error('Conversion worker input terrain version is invalid.');
 	}
 
 	return input as WorkerInput;
@@ -117,6 +121,7 @@ async function runConversion(): Promise<void> {
 	await convertScenery(
 		payload.inputPath,
 		payload.outputPath,
+		payload.version,
 		{
 			conversionId: payload.taskId,
 			shouldAbort: () => abortMode,

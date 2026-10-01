@@ -17,6 +17,7 @@ import type {
 	ConversionTaskDto,
 	SettingsPayload,
 	TaskPhase,
+	TerrainVersion,
 	WorkerInput,
 	WorkerStatusMessage,
 } from './task-types.js';
@@ -38,6 +39,7 @@ function toTaskDto(task: ConversionTask): ConversionTaskDto {
 		taskName: task.taskName,
 		inputPath: task.inputPath,
 		outputPath: task.outputPath,
+		version: task.version,
 		status: task.status,
 		phase: task.phase,
 		isRunning: task.phase === 'running' || task.phase === 'cancelling',
@@ -195,6 +197,7 @@ async function startNextTask(): Promise<void> {
 		inputPath: nextTask.inputPath,
 		taskName: nextTask.taskName,
 		outputPath: nextTask.outputPath,
+		version: nextTask.version,
 	};
 
 	let worker: ChildProcess;
@@ -286,6 +289,35 @@ function requireString(value: unknown, fieldName: string): string {
 	return value.trim();
 }
 
+function requireTerrainVersion(value: unknown, fieldName: string): TerrainVersion {
+	if (value !== 2 && value !== 3) {
+		throw new Error(`${fieldName} must be 2 or 3.`);
+	}
+	return value;
+}
+
+function requireSceneryDirectories(value: unknown): string[] {
+	if (!Array.isArray(value)) {
+		throw new Error('Scenery directories must be an array of folder paths.');
+	}
+	const seen = new Set<string>();
+	const directories: string[] = [];
+	for (const entry of value) {
+		if (typeof entry !== 'string' || entry.trim().length === 0) {
+			throw new Error('Scenery directories must be an array of folder paths.');
+		}
+		const resolved = path.resolve(entry);
+		if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) {
+			throw new Error(`Scenery directory does not exist: ${resolved}`);
+		}
+		if (!seen.has(resolved)) {
+			seen.add(resolved);
+			directories.push(resolved);
+		}
+	}
+	return directories;
+}
+
 function requireInputDirectory(inputPath: unknown): string {
 	const resolved = path.resolve(requireString(inputPath, 'Input path'));
 	if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) {
@@ -324,11 +356,15 @@ function registerIpcHandlers(): void {
 		const payload = requireObject(value, 'Conversion task');
 		const inputPath = requireInputDirectory(payload.inputPath);
 		const outputPath = prepareOutputDirectory(payload.outputPath);
+		const version = payload.version === undefined
+			? config.terrainVersion
+			: requireTerrainVersion(payload.version, 'Terrain version');
 		const task: ConversionTask = {
 			id: randomUUID(),
 			taskName: path.basename(inputPath) || inputPath,
 			inputPath,
 			outputPath,
+			version,
 			status: 'Queued',
 			phase: 'queued',
 			progressItems: [],
@@ -404,22 +440,30 @@ function registerIpcHandlers(): void {
 	ipcMain.handle('settings:get', (): SettingsPayload => ({
 		outputDir: config.outputDir,
 		maxRepairRetries: config.maxRepairRetries,
+		sceneryDirectories: [...config.sceneryDirectories],
+		terrainVersion: config.terrainVersion,
 	}));
 
 	ipcMain.handle('settings:save', async (_event, value: unknown): Promise<SettingsPayload> => {
 		const payload = requireObject(value, 'Settings');
 		const outputDir = prepareOutputDirectory(payload.outputDir);
 		const maxRepairRetries = payload.maxRepairRetries;
+		const sceneryDirectories = requireSceneryDirectories(payload.sceneryDirectories);
+		const terrainVersion = requireTerrainVersion(payload.terrainVersion, 'Terrain version');
 		if (!Number.isInteger(maxRepairRetries) || (maxRepairRetries as number) < 0 || (maxRepairRetries as number) > 100) {
 			throw new Error('Maximum repair retries must be a whole number from 0 to 100.');
 		}
 
 		config.outputDir = outputDir;
 		config.maxRepairRetries = maxRepairRetries as number;
+		config.sceneryDirectories = sceneryDirectories;
+		config.terrainVersion = terrainVersion;
 		await saveConfig();
 		return {
 			outputDir: config.outputDir,
 			maxRepairRetries: config.maxRepairRetries,
+			sceneryDirectories: [...config.sceneryDirectories],
+			terrainVersion: config.terrainVersion,
 		};
 	});
 

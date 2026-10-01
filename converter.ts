@@ -1,5 +1,5 @@
 import { dummyTexturePath } from './assets.js';
-import { getTileIndexFromCoord, getCoordFromTileIndex, getFilePathFromTileIndex, getAltitude } from './terrain.js';
+import { getTileIndexFromCoord, getCoordFromTileIndex, getFilePathFromTileIndex, getAltitudeWS2 } from './terrain.js';
 import { PlacementObject, LibraryObject, SimObject, Flags, Airport, Tower, Runway, RunwayStart, TaxiwayPoint, TaxiwayParking, TaxiwayPath, TaxiwayPathType, Apron, TaxiwaySign, PaintedLine, PaintedHatchedArea, ApronEdgeLights, Helipad, ProjectedMesh, Jetway, ModelReference } from './structures.js'
 import { config } from './config.js';
 import { applyAsoboGeometryRepair, repairDocument } from './repair.js';
@@ -41,6 +41,7 @@ export class ConversionAbortedError extends Error {
 // When a model begins processing, it finds the first task that is pending and makes that one its own
 // When it has finished processing, or fails processing, it adjusts the status of its task and exits
 interface ConversionInformation {
+	readonly version: number;
 	readonly id: string;
 	readonly inputPath: string;
 	readonly outputPath: string;
@@ -213,7 +214,7 @@ function isLikelyLibraryObjectRecord(fileView: DataView, address: number): boole
 	return true;
 }
 
-async function buildLibraryObject(fileView: DataView, address: number): Promise<LibraryObject> {
+async function buildLibraryObject(fileView: DataView, address: number, version: number): Promise<LibraryObject> {
 	const recordSize = fileView.getUint16(address + 2, true);
 	const { guidOffset, scaleOffset } = getLibraryObjectLayout(recordSize);
 	const longitude = (fileView.getInt32(address + 4, true) * (360.0 / 805306368.0)) - 180.0;
@@ -229,12 +230,15 @@ async function buildLibraryObject(fileView: DataView, address: number): Promise<
 	const guid = getGuidFromBytes(getViewBytes(fileView, address + guidOffset, 16));
 	const scale = fileView.getFloat32(address + scaleOffset, true);
 	if (flags.includes(Flags.IsAboveAGL)) {
-		altitude += await getAltitude(latitude, longitude, 2);
+		const terrainAltitude = await getAltitudeWS2(latitude, longitude, version);
+		if (terrainAltitude !== null) {
+			altitude += terrainAltitude;
+		}
 	}
 	return { position: [longitude, latitude, altitude], flags, orientation: [pitch, bank, heading], imageComplexity, guid, scale };
 }
 
-async function buildSimObject(fileView: DataView, address: number, inputPath: string, configPathsByTitle: Map<string, string[]>): Promise<SimObject> {
+async function buildSimObject(fileView: DataView, address: number, inputPath: string, configPathsByTitle: Map<string, string[]>, version: number): Promise<SimObject> {
 	const longitude = (fileView.getInt32(address + 4, true) * (360.0 / 805306368.0)) - 180.0;
 	const latitude = 90.0 - (fileView.getInt32(address + 8, true) * (180.0 / 536870912.0));
 	let altitude = fileView.getInt32(address + 12, true) / 1000;
@@ -251,7 +255,10 @@ async function buildSimObject(fileView: DataView, address: number, inputPath: st
 	const containerTitle = new TextDecoder().decode(getViewBytes(fileView, address + 52, containerTitleLength));
 	let containerPath = new TextDecoder().decode(getViewBytes(fileView, address + 52 + containerTitleLength, containerPathLength));
 	if (flags.includes(Flags.IsAboveAGL)) {
-		altitude += await getAltitude(latitude, longitude, 2);
+		const terrainAltitude = await getAltitudeWS2(latitude, longitude, version);
+		if (terrainAltitude !== null) {
+			altitude += terrainAltitude;
+		}
 	}
 	// Attempt to resolve the absolute path of the sim.cfg file
 	const matches = configPathsByTitle.get(containerTitle) ?? [];
@@ -975,12 +982,13 @@ async function assembleModel(id: string, inputPath: string, outputPath: string, 
 }
 
 
-export async function convertScenery(inputPath: string, outputPath: string, control?: ConversionControl): Promise<void> {
+export async function convertScenery(inputPath: string, outputPath: string, version: number, control?: ConversionControl): Promise<void> {
 	const id = control?.conversionId ?? Date.now().toString(36);
 	conversions[id] = {
 		id,
 		inputPath,
 		outputPath,
+		version,
 		logPath: path.join(config.storeDir, 'logs', `${id}.log`),
 		progressItems: [],
 		placements: [],
@@ -1034,7 +1042,7 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 		const fileView: DataView = new DataView(fileBuffer.buffer, fileBuffer.byteOffset, fileBuffer.byteLength);
 		const parsedLibraryObjectOffsets = new Set<number>();
 		const storeLibraryObjectAt = async (objectAddress: number): Promise<LibraryObject> => {
-			const libObj = await buildLibraryObject(fileView, objectAddress);
+			const libObj = await buildLibraryObject(fileView, objectAddress, version);
 			if (!parsedLibraryObjectOffsets.has(objectAddress)) {
 				parsedLibraryObjectOffsets.add(objectAddress);
 				registerLibraryObject(libObj);
@@ -1097,7 +1105,7 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 					await storeLibraryObjectAt(address);
 				} else if (recordType === 0x19) { //SimObject
 					address -= 4; // Reverse back to get all of the bytes
-					const simObj = await buildSimObject(fileView, address, file, configPathsByTitle);
+					const simObj = await buildSimObject(fileView, address, file, configPathsByTitle, version);
 					if (simObj.containerPath !== '') {
 						if (!simObjects.has(simObj.containerTitle)) {
 							simObjects.set(simObj.containerTitle, []);
@@ -1765,7 +1773,7 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 									await storeLibraryObjectAt(address);
 								}
 								else if (new DataView(sceneryObjectBytes.buffer, sceneryObjectBytes.byteOffset, sceneryObjectBytes.byteLength).getUint16(0, true) == 0x0019) {
-									const simObj = await buildSimObject(fileView, address, file, configPathsByTitle);
+									const simObj = await buildSimObject(fileView, address, file, configPathsByTitle, version);
 									if (simObj.containerPath !== '') {
 										if (simObjects.has(simObj.containerTitle)) {
 											simObjects.get(simObj.containerTitle)!.push(simObj);
@@ -1790,7 +1798,7 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 									await storeLibraryObjectAt(address);
 								}
 								else if (new DataView(sceneryObjectBytes.buffer, sceneryObjectBytes.byteOffset, sceneryObjectBytes.byteLength).getUint16(0, true) == 0x0019) {
-									const simObj = await buildSimObject(fileView, address, file, configPathsByTitle);
+									const simObj = await buildSimObject(fileView, address, file, configPathsByTitle, version);
 									if (simObj.containerPath !== '') {
 										if (simObjects.has(simObj.containerTitle)) {
 											simObjects.get(simObj.containerTitle)!.push(simObj);

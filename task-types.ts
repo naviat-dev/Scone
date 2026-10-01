@@ -1,4 +1,5 @@
 export type CancelMode = 'save' | 'discard';
+export type TerrainVersion = 2 | 3;
 
 export type TaskPhase = 'queued' | 'running' | 'cancelling' | 'completed' | 'failed' | 'cancelled';
 
@@ -14,6 +15,7 @@ export type ConversionTaskDto = {
 	taskName: string;
 	inputPath: string;
 	outputPath: string;
+	version: TerrainVersion;
 	status: string;
 	phase: TaskPhase;
 	isRunning: boolean;
@@ -27,11 +29,14 @@ export type ConversionTaskDto = {
 export type AddTaskPayload = {
 	inputPath: string;
 	outputPath: string;
+	version: TerrainVersion;
 };
 
 export type SettingsPayload = {
 	outputDir: string;
 	maxRepairRetries: number;
+	sceneryDirectories: string[];
+	terrainVersion: TerrainVersion;
 };
 
 export type WorkerInput = {
@@ -39,6 +44,7 @@ export type WorkerInput = {
 	inputPath: string;
 	taskName: string;
 	outputPath: string;
+	version: TerrainVersion;
 };
 
 export type WorkerStatusMessage =

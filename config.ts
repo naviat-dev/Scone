@@ -5,10 +5,13 @@ import * as path from 'path';
 export let config = {
 	tempDir: path.join(os.tmpdir(), 'scone'),
 	storeDir: path.join(os.homedir(), '.scone'),
-	deadTiles: [] as number[],
+	deadTilesWS2: [] as number[],
+	deadTilesTerrWS3: [] as number[],
+	deadTilesVpbWS3: [] as string[],
 	outputDir: path.join(os.homedir(), 'SconeOutput'),
 	fgPath: '',
 	sceneryDirectories: [] as string[],
+	terrainVersion: 2 as 2 | 3,
 	maxRepairRetries: 3,
 	maxTileRetries: 3,
 }
@@ -37,11 +40,33 @@ function normalizeMaxRepairRetries(value: unknown): number {
 	return normalized;
 }
 
+function normalizeTerrainVersion(value: unknown): 2 | 3 {
+	return value === 3 ? 3 : 2;
+}
+
+function normalizeSceneryDirectories(value: unknown): string[] {
+	if (!Array.isArray(value)) {
+		return [];
+	}
+	const seen = new Set<string>();
+	const directories: string[] = [];
+	for (const directory of value) {
+		if (typeof directory !== 'string' || directory.trim().length === 0) {
+			continue;
+		}
+		const normalized = path.resolve(directory);
+		if (!seen.has(normalized)) {
+			seen.add(normalized);
+			directories.push(normalized);
+		}
+	}
+	return directories;
+}
+
 function sanitizeConfigValues(): void {
 	config.outputDir = normalizeOutputDir(config.outputDir);
-	config.sceneryDirectories = Array.isArray(config.sceneryDirectories)
-		? config.sceneryDirectories.filter((directory): directory is string => typeof directory === 'string' && directory.trim().length > 0).map((directory) => path.resolve(directory))
-		: [];
+	config.sceneryDirectories = normalizeSceneryDirectories(config.sceneryDirectories);
+	config.terrainVersion = normalizeTerrainVersion(config.terrainVersion);
 	config.maxRepairRetries = normalizeMaxRepairRetries(config.maxRepairRetries);
 }
 

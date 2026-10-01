@@ -6,6 +6,7 @@ import type {
 	ConversionTaskDto,
 	SettingsPayload,
 	TaskPhase,
+	TerrainVersion,
 } from './task-types.js';
 
 type SectionName = 'current' | 'history' | 'settings';
@@ -65,6 +66,8 @@ let tasks: ConversionTaskDto[] = [];
 let settings: SettingsPayload = {
 	outputDir: '',
 	maxRepairRetries: 3,
+	sceneryDirectories: [],
+	terrainVersion: 2,
 };
 let activeSection: SectionName = 'current';
 let requestedSection: SectionName = 'current';
@@ -180,8 +183,44 @@ function createPathField(
 	return { field, input, browseButton };
 }
 
+function createTerrainVersionField(
+	id: string,
+	labelText: string,
+	initialValue: TerrainVersion,
+): { field: HTMLLabelElement; select: HTMLSelectElement } {
+	const field = createElement('label', 'field');
+	field.htmlFor = id;
+	field.append(createElement('span', undefined, labelText));
+
+	const select = createElement('select');
+	select.id = id;
+	select.name = id;
+
+	const ws2Option = createElement('option');
+	ws2Option.value = '2';
+	ws2Option.textContent = 'WS2';
+	const ws3Option = createElement('option');
+	ws3Option.value = '3';
+	ws3Option.textContent = 'WS3';
+	select.append(ws2Option, ws3Option);
+	select.value = String(initialValue);
+
+	field.append(select);
+	return { field, select };
+}
+
+function parseTerrainVersion(value: string): TerrainVersion | null {
+	if (value === '2') {
+		return 2;
+	}
+	if (value === '3') {
+		return 3;
+	}
+	return null;
+}
+
 function setFormBusy(form: HTMLFormElement, busy: boolean): void {
-	for (const control of form.querySelectorAll<HTMLButtonElement | HTMLInputElement>('button, input')) {
+	for (const control of form.querySelectorAll<HTMLButtonElement | HTMLInputElement | HTMLSelectElement>('button, input, select')) {
 		control.disabled = busy;
 	}
 }
@@ -250,6 +289,11 @@ function createNewTaskCard(): HTMLElement {
 		'Folder where converted scenery will be written',
 		settings.outputDir,
 	);
+	const terrainVersion = createTerrainVersionField(
+		'terrain-version',
+		'Terrain version',
+		settings.terrainVersion,
+	);
 	const formMessage = createElement('p', 'form-message');
 	formMessage.setAttribute('role', 'alert');
 
@@ -259,7 +303,7 @@ function createNewTaskCard(): HTMLElement {
 	const runButton = createElement('button', 'button button-primary', 'Run conversion');
 	runButton.type = 'submit';
 	actions.append(cancelButton, runButton);
-	form.append(inputPath.field, outputPath.field, formMessage, actions);
+	form.append(inputPath.field, outputPath.field, terrainVersion.field, formMessage, actions);
 	expansionInner.append(form);
 	expansion.append(expansionInner);
 	card.append(toggle, expansion);
@@ -275,6 +319,7 @@ function createNewTaskCard(): HTMLElement {
 	cancelButton.addEventListener('click', () => {
 		inputPath.input.value = '';
 		outputPath.input.value = settings.outputDir;
+		terrainVersion.select.value = String(settings.terrainVersion);
 		formMessage.textContent = '';
 		setNewTaskExpanded(card, toggle, expansion, false);
 		toggle.focus();
@@ -292,9 +337,15 @@ function createNewTaskCard(): HTMLElement {
 		void (async () => {
 			const source = inputPath.input.value.trim();
 			const destination = outputPath.input.value.trim();
+			const selectedTerrainVersion = parseTerrainVersion(terrainVersion.select.value);
 			if (!source || !destination) {
 				formMessage.textContent = 'Both input and output paths are required.';
 				(!source ? inputPath.input : outputPath.input).focus();
+				return;
+			}
+			if (selectedTerrainVersion === null) {
+				formMessage.textContent = 'Terrain version must be WS2 or WS3.';
+				terrainVersion.select.focus();
 				return;
 			}
 
@@ -309,10 +360,15 @@ function createNewTaskCard(): HTMLElement {
 			setFormBusy(form, true);
 			runButton.textContent = 'Starting...';
 			try {
-				const task = await api.addTask({ inputPath: source, outputPath: destination });
+				const task = await api.addTask({
+					inputPath: source,
+					outputPath: destination,
+					version: selectedTerrainVersion,
+				});
 				upsertTask(task);
 				inputPath.input.value = '';
 				outputPath.input.value = settings.outputDir;
+				terrainVersion.select.value = String(settings.terrainVersion);
 				setNewTaskExpanded(card, toggle, expansion, false);
 				showMessage(`${task.taskName} was added to the conversion queue.`);
 			} catch (error) {
@@ -402,7 +458,11 @@ function createProgress(task: ConversionTaskDto): HTMLElement {
 
 function createPathDetails(task: ConversionTaskDto): HTMLElement {
 	const list = createElement('dl', 'task-paths');
-	for (const [label, value] of [['Input', task.inputPath], ['Output', task.outputPath]] as const) {
+	for (const [label, value] of [
+		['Input', task.inputPath],
+		['Output', task.outputPath],
+		['Terrain', `WS${task.version}`],
+	] as const) {
 		const detail = createElement('div', 'path-detail');
 		const term = createElement('dt', undefined, label);
 		const description = createElement('dd', undefined, value);
@@ -535,12 +595,20 @@ function buildSettingsSection(): HTMLElement {
 	const card = createElement('article', 'settings-card');
 	const form = createElement('form', 'settings-form');
 	form.noValidate = true;
+
 	const outputPath = createPathField(
 		'default-output-path',
 		'Default output path',
 		'Folder suggested for new conversions',
 		settings.outputDir,
 	);
+
+	const defaultTerrainVersion = createTerrainVersionField(
+		'default-terrain-version',
+		'Default terrain version',
+		settings.terrainVersion,
+	);
+
 	const retryField = createElement('label', 'field');
 	retryField.htmlFor = 'max-repair-retries';
 	retryField.append(createElement('span', undefined, 'Maximum repair retries'));
@@ -554,10 +622,77 @@ function buildSettingsSection(): HTMLElement {
 	retryInput.value = String(settings.maxRepairRetries);
 	retryField.append(retryInput);
 
+	const sceneryField = createElement('div', 'field');
+	sceneryField.append(createElement('span', undefined, 'Local scenery paths (shared by all conversions)'));
+	const sceneryEditorRow = createElement('div', 'scenery-editor-row');
+	const sceneryInput = createElement('input');
+	sceneryInput.id = 'scenery-path';
+	sceneryInput.name = 'scenery-path';
+	sceneryInput.type = 'text';
+	sceneryInput.placeholder = 'Add a local scenery folder';
+	sceneryInput.autocomplete = 'off';
+	const sceneryBrowseButton = createElement('button', 'button', 'Browse');
+	sceneryBrowseButton.type = 'button';
+	const sceneryAddButton = createElement('button', 'button button-primary', 'Add path');
+	sceneryAddButton.type = 'button';
+	sceneryEditorRow.append(sceneryInput, sceneryBrowseButton, sceneryAddButton);
+
+	const sceneryList = createElement('div', 'scenery-list');
+	sceneryList.setAttribute('role', 'list');
+	sceneryField.append(sceneryEditorRow, sceneryList);
+
+	let sceneryDirectories = [...settings.sceneryDirectories];
+	const renderSceneryDirectories = (): void => {
+		sceneryList.replaceChildren();
+		if (sceneryDirectories.length === 0) {
+			sceneryList.append(createElement('p', 'settings-note', 'No local scenery paths configured.'));
+			return;
+		}
+
+		sceneryDirectories.forEach((directory, index) => {
+			const item = createElement('article', 'scenery-item');
+			item.setAttribute('role', 'listitem');
+			const pathCopy = createElement('p', 'scenery-item-path', directory);
+			pathCopy.title = directory;
+			const actions = createElement('div', 'scenery-item-actions');
+
+			const moveUpButton = createElement('button', 'button', 'Up');
+			moveUpButton.type = 'button';
+			moveUpButton.disabled = index === 0;
+			moveUpButton.addEventListener('click', () => {
+				const previous = sceneryDirectories[index - 1];
+				sceneryDirectories[index - 1] = sceneryDirectories[index];
+				sceneryDirectories[index] = previous;
+				renderSceneryDirectories();
+			});
+
+			const moveDownButton = createElement('button', 'button', 'Down');
+			moveDownButton.type = 'button';
+			moveDownButton.disabled = index === sceneryDirectories.length - 1;
+			moveDownButton.addEventListener('click', () => {
+				const next = sceneryDirectories[index + 1];
+				sceneryDirectories[index + 1] = sceneryDirectories[index];
+				sceneryDirectories[index] = next;
+				renderSceneryDirectories();
+			});
+
+			const removeButton = createElement('button', 'button button-danger', 'Remove');
+			removeButton.type = 'button';
+			removeButton.addEventListener('click', () => {
+				sceneryDirectories = sceneryDirectories.filter((_value, listIndex) => listIndex !== index);
+				renderSceneryDirectories();
+			});
+
+			actions.append(moveUpButton, moveDownButton, removeButton);
+			item.append(pathCopy, actions);
+			sceneryList.append(item);
+		});
+	};
+	renderSceneryDirectories();
+
 	const note = createElement(
 		'p',
 		'settings-note',
-		'The default output path pre-fills new tasks; each conversion can still use a different destination.',
 	);
 	const formMessage = createElement('p', 'form-message');
 	formMessage.setAttribute('role', 'alert');
@@ -567,16 +702,48 @@ function buildSettingsSection(): HTMLElement {
 	const saveButton = createElement('button', 'button button-primary', 'Save settings');
 	saveButton.type = 'submit';
 	actions.append(resetButton, saveButton);
-	form.append(outputPath.field, retryField, note, formMessage, actions);
+	form.append(
+		outputPath.field,
+		defaultTerrainVersion.field,
+		retryField,
+		sceneryField,
+		note,
+		formMessage,
+		actions,
+	);
 	card.append(form);
 	section.append(card);
 
 	outputPath.browseButton.addEventListener('click', () => {
 		void browseForDirectory(outputPath.input);
 	});
+	sceneryBrowseButton.addEventListener('click', () => {
+		void browseForDirectory(sceneryInput);
+	});
+	sceneryAddButton.addEventListener('click', () => {
+		const directory = sceneryInput.value.trim();
+		if (!directory) {
+			formMessage.textContent = 'Scenery path cannot be empty.';
+			sceneryInput.focus();
+			return;
+		}
+		if (sceneryDirectories.includes(directory)) {
+			formMessage.textContent = 'That scenery path is already in the list.';
+			sceneryInput.focus();
+			return;
+		}
+		formMessage.textContent = '';
+		sceneryDirectories = [...sceneryDirectories, directory];
+		sceneryInput.value = '';
+		renderSceneryDirectories();
+	});
 	resetButton.addEventListener('click', () => {
 		outputPath.input.value = settings.outputDir;
+		defaultTerrainVersion.select.value = String(settings.terrainVersion);
 		retryInput.value = String(settings.maxRepairRetries);
+		sceneryInput.value = '';
+		sceneryDirectories = [...settings.sceneryDirectories];
+		renderSceneryDirectories();
 		formMessage.textContent = '';
 	});
 	form.addEventListener('submit', (event) => {
@@ -584,9 +751,15 @@ function buildSettingsSection(): HTMLElement {
 		void (async () => {
 			const outputDir = outputPath.input.value.trim();
 			const retriesText = retryInput.value.trim();
+			const selectedTerrainVersion = parseTerrainVersion(defaultTerrainVersion.select.value);
 			if (!outputDir) {
 				formMessage.textContent = 'A default output path is required.';
 				outputPath.input.focus();
+				return;
+			}
+			if (selectedTerrainVersion === null) {
+				formMessage.textContent = 'Default terrain version must be WS2 or WS3.';
+				defaultTerrainVersion.select.focus();
 				return;
 			}
 			if (!/^\d+$/.test(retriesText)) {
@@ -612,9 +785,18 @@ function buildSettingsSection(): HTMLElement {
 			setFormBusy(form, true);
 			saveButton.textContent = 'Saving...';
 			try {
-				settings = await api.saveSettings({ outputDir, maxRepairRetries });
+				settings = await api.saveSettings({
+					outputDir,
+					maxRepairRetries,
+					sceneryDirectories,
+					terrainVersion: selectedTerrainVersion,
+				});
 				outputPath.input.value = settings.outputDir;
+				defaultTerrainVersion.select.value = String(settings.terrainVersion);
 				retryInput.value = String(settings.maxRepairRetries);
+				sceneryInput.value = '';
+				sceneryDirectories = [...settings.sceneryDirectories];
+				renderSceneryDirectories();
 				showMessage('Settings saved.');
 			} catch (error) {
 				formMessage.textContent = normalizeError(error);
