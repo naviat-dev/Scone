@@ -154,7 +154,68 @@ function getViewBytes(fileView: DataView, address: number, length: number): Uint
 	return new Uint8Array(fileView.buffer, fileView.byteOffset + address, length);
 }
 
+function getLibraryObjectLayout(recordSize: number): { guidOffset: number; scaleOffset: number } {
+	if (recordSize >= 0x5c) {
+		// Newer airport/projected-mesh records append an extra placement payload before GUID/scale.
+		return { guidOffset: 72, scaleOffset: 88 };
+	}
+	return { guidOffset: 44, scaleOffset: 60 };
+}
+
+function getAirportRecordPayloadOffset(recordType: number): number | null {
+	if (recordType === 0x0056) { // Legacy Airport record
+		return 0x44;
+	}
+	if (recordType === 0x0113) { // New Airport record wrapper
+		return 0x68;
+	}
+	return null;
+}
+
+function isLikelyLibraryObjectRecord(fileView: DataView, address: number): boolean {
+	if (address < 0 || address + 0x40 > fileView.byteLength) {
+		return false;
+	}
+	if (fileView.getUint16(address, true) !== 0x000b) {
+		return false;
+	}
+
+	const recordSize = fileView.getUint16(address + 2, true);
+	if (recordSize !== 0x40 && recordSize !== 0x5c) {
+		return false;
+	}
+	if (address + recordSize > fileView.byteLength) {
+		return false;
+	}
+
+	const longitude = (fileView.getInt32(address + 4, true) * (360.0 / 805306368.0)) - 180.0;
+	const latitude = 90.0 - (fileView.getInt32(address + 8, true) * (180.0 / 536870912.0));
+	if (!Number.isFinite(longitude) || !Number.isFinite(latitude) || longitude < -180 || longitude > 180 || latitude < -90 || latitude > 90) {
+		return false;
+	}
+
+	const flagMask = fileView.getUint16(address + 16, true);
+	if ((flagMask & ~0x007f) !== 0) {
+		return false;
+	}
+
+	const { guidOffset, scaleOffset } = getLibraryObjectLayout(recordSize);
+	const guidBytes = getViewBytes(fileView, address + guidOffset, 16);
+	if (guidBytes.every((byte) => byte === 0)) {
+		return false;
+	}
+
+	const scale = fileView.getFloat32(address + scaleOffset, true);
+	if (!Number.isFinite(scale) || scale <= 0 || scale > 1000) {
+		return false;
+	}
+
+	return true;
+}
+
 async function buildLibraryObject(fileView: DataView, address: number): Promise<LibraryObject> {
+	const recordSize = fileView.getUint16(address + 2, true);
+	const { guidOffset, scaleOffset } = getLibraryObjectLayout(recordSize);
 	const longitude = (fileView.getInt32(address + 4, true) * (360.0 / 805306368.0)) - 180.0;
 	const latitude = 90.0 - (fileView.getInt32(address + 8, true) * (180.0 / 536870912.0));
 	let altitude = fileView.getInt32(address + 12, true) / 1000;
@@ -165,8 +226,8 @@ async function buildLibraryObject(fileView: DataView, address: number): Promise<
 	const bank = fileView.getInt16(address + 20, true) * (360.0 / 65536.0);
 	const heading = fileView.getInt16(address + 22, true) * (360.0 / 65536.0);
 	const imageComplexity = fileView.getUint16(address + 24, true);
-	const guid = getGuidFromBytes(getViewBytes(fileView, address + 44, 16));
-	const scale = fileView.getFloat32(address + 60, true);
+	const guid = getGuidFromBytes(getViewBytes(fileView, address + guidOffset, 16));
+	const scale = fileView.getFloat32(address + scaleOffset, true);
 	if (flags.includes(Flags.IsAboveAGL)) {
 		altitude += await getAltitude(latitude, longitude, 2);
 	}
@@ -436,6 +497,7 @@ async function assembleModel(id: string, inputPath: string, outputPath: string, 
 	const tempTilePath = path.join(config.tempDir, `tile_${tileIndex}_${Date.now()}`);
 	fs.mkdirSync(tempTilePath, { recursive: true });
 	const tileDocument: Document = new Document();
+	const processedSimObjects: Set<string> = new Set();
 
 	try {
 		for (let modelRef of modelReferences) {
@@ -598,6 +660,10 @@ async function assembleModel(id: string, inputPath: string, outputPath: string, 
 					}
 					libraryObjectsForModel.push(...libraryObjects.get(guid) || []);
 				} else if (fs.existsSync(modelRef.gltfPath) && fs.existsSync(modelRef.binPath)) {
+					if (processedSimObjects.has(modelRef.gltfPath)) {
+						continue;
+					}
+					processedSimObjects.add(modelRef.gltfPath);
 					modelRef = modelRef as SimObject;
 					name = modelRef.containerTitle;
 					json = JSON.parse(fs.readFileSync(modelRef.gltfPath, 'utf-8').trim());
@@ -630,9 +696,11 @@ async function assembleModel(id: string, inputPath: string, outputPath: string, 
 							console.warn(`Texture file does not exist for model ${modelRef.containerTitle}: ${uri}`);
 						}
 					}
-					// This seems wasteful as we'll end up processing SimObjects over and over again
-					// Currently though, it makes things like different liveries much simpler to handle.
-					libraryObjectsForModel.push(modelRef);
+					for (const simObject of modelReferences) {
+						if (simObject.gltfPath === modelRef.gltfPath) {
+							libraryObjectsForModel.push(modelRef);
+						}
+					}
 				} else {
 					console.warn(`Model ${guid} is missing required properties.`);
 				}
@@ -933,6 +1001,13 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 	const guidsWithModels: Set<string> = new Set();
 	const modelReferencesByTile: Map<number, ModelReference[]> = new Map();
 	const airports: Airport[] = [];
+	const registerLibraryObject = (libObj: LibraryObject): void => {
+		if (!libraryObjects.has(libObj.guid)) {
+			libraryObjects.set(libObj.guid, []);
+		}
+		libraryObjects.get(libObj.guid)!.push(libObj);
+		conversions[id].placements.push(libObj);
+	};
 	reportStatus(id, control, 'Scanning scenery files...');
 	const allBglFiles: string[] = getFilesRecursive(inputPath, '.bgl', false);
 	reportStatus(id, control, 'Scanning config files...');
@@ -957,6 +1032,15 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 		console.log(`Processing file: ${file}`);
 		const fileBuffer = fs.readFileSync(file);
 		const fileView: DataView = new DataView(fileBuffer.buffer, fileBuffer.byteOffset, fileBuffer.byteLength);
+		const parsedLibraryObjectOffsets = new Set<number>();
+		const storeLibraryObjectAt = async (objectAddress: number): Promise<LibraryObject> => {
+			const libObj = await buildLibraryObject(fileView, objectAddress);
+			if (!parsedLibraryObjectOffsets.has(objectAddress)) {
+				parsedLibraryObjectOffsets.add(objectAddress);
+				registerLibraryObject(libObj);
+			}
+			return libObj;
+		};
 		let address: number = 0; // all binary indexing should use this variable
 		const magicNumber1: number = fileView.getUint32(address, true);
 		address = 0x10;
@@ -970,6 +1054,7 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 
 		const sceneryObjectOffsets: number[] = [];
 		const airportOffsets: number[] = [];
+		let hasWrappedSceneryRecords = false;
 		address = 0x38;
 		for (let i = 0; i < recordCt; i++) {
 			const recType = fileView.getUint32(address, true);
@@ -986,6 +1071,8 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 				for (let j = 0; j < subrecordCount; j++) {
 					airportOffsets.push(startSubsection + j * 16);
 				}
+			} else if (recType === 0x00f4 || recType === 0x04c4) {
+				hasWrappedSceneryRecords = true;
 			}
 		}
 
@@ -1007,12 +1094,7 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 				address += 2;
 				if (recordType === 0x0B) { // LibraryObject
 					address -= 4; // Reverse back to get all of the bytes
-					const libObj = await buildLibraryObject(fileView, address);
-					if (!libraryObjects.has(libObj.guid)) {
-						libraryObjects.set(libObj.guid, []);
-					}
-					libraryObjects.get(libObj.guid)!.push(libObj);
-					conversions[id].placements.push(libObj);
+					await storeLibraryObjectAt(address);
 				} else if (recordType === 0x19) { //SimObject
 					address -= 4; // Reverse back to get all of the bytes
 					const simObj = await buildSimObject(fileView, address, file, configPathsByTitle);
@@ -1052,11 +1134,64 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 			while (bytesRead < subrecord[1]) {
 				address = subrecord[0] + bytesRead;
 				const recordType = fileView.getUint16(address, true);
+				const airportRecordPayloadOffset = getAirportRecordPayloadOffset(recordType);
 				address += 2;
-				if (recordType !== 0x0056) { // Airport subrecord type
+				if (airportRecordPayloadOffset === null) { // Airport subrecord type
 					const skip = fileView.getUint32(address, true);
 					console.warn(`Unexpected airport subrecord type at offset 0x${(subrecord[0] + bytesRead).toString(16)}: 0x${recordType.toString(16)}, skipping ${skip} bytes`);
+					if (skip <= 0) {
+						console.warn(`Unable to advance past airport subrecord type 0x${recordType.toString(16)} because skip size is ${skip}.`);
+						break;
+					}
 					bytesRead += skip;
+					continue;
+				}
+				const size = fileView.getUint32(address, true);
+				const isWrappedAirportRecord = recordType === 0x0113;
+				if (size < airportRecordPayloadOffset || bytesRead + size > subrecord[1]) {
+					console.warn(`Invalid airport record size ${size} for record type 0x${recordType.toString(16)} at offset 0x${(subrecord[0] + bytesRead).toString(16)}.`);
+					break;
+				}
+				if (isWrappedAirportRecord) {
+					let airportBytesRead = airportRecordPayloadOffset;
+					while (airportBytesRead < size) {
+						const airportRecordStart = subrecord[0] + bytesRead + airportBytesRead;
+						if (airportRecordStart + 6 > fileView.byteLength) {
+							console.warn(`Airport record at offset 0x${airportRecordStart.toString(16)} is truncated; stopping this airport parse.`);
+							break;
+						}
+
+						const recordId = fileView.getUint16(airportRecordStart, true);
+						const recordSize = fileView.getUint32(airportRecordStart + 2, true);
+						if (recordSize < 6 || airportBytesRead + recordSize > size) {
+							console.warn(`Invalid airport record size ${recordSize} at offset 0x${airportRecordStart.toString(16)}; stopping this airport parse.`);
+							break;
+						}
+
+						if (recordId === 0x000b) {
+							if (isLikelyLibraryObjectRecord(fileView, airportRecordStart)) {
+								await storeLibraryObjectAt(airportRecordStart);
+							}
+						} else if (recordId === 0x00e8) {
+							const projectedMeshPayloadAddress = airportRecordStart + 6;
+							if (projectedMeshPayloadAddress + 10 <= fileView.byteLength) {
+								const projectedMeshSubRecordSize = fileView.getUint16(projectedMeshPayloadAddress + 6, true);
+								const projectedMeshSubRecordAddress = projectedMeshPayloadAddress + 8;
+								if (
+									projectedMeshSubRecordSize >= 0x40
+									&& projectedMeshSubRecordAddress + projectedMeshSubRecordSize <= fileView.byteLength
+									&& isLikelyLibraryObjectRecord(fileView, projectedMeshSubRecordAddress)
+								) {
+									await storeLibraryObjectAt(projectedMeshSubRecordAddress);
+								}
+							}
+						}
+
+						airportBytesRead += recordSize;
+						collectConversionGarbageIfNeeded();
+					}
+
+					bytesRead += size;
 					continue;
 				}
 				let airport: Airport = {
@@ -1085,7 +1220,6 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 					helipads: [],
 					projectedMeshes: []
 				};
-				const size = fileView.getUint32(address, true);
 				address += 10;
 				airport.longitude = (fileView.getUint32(address, true) * (360.0 / 805306368.0)) - 180.0;
 				address += 4;
@@ -1104,21 +1238,28 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 				airport.icao = convertIcaoBytesToString(fileView.getUint32(address, true));
 				address += 4;
 				airport.regIdent = convertIcaoBytesToString(fileView.getUint32(address, true));
-				address = subrecord[0] + bytesRead + 0x37; // Skip ahead to departure count
-				address = subrecord[0] + bytesRead + 0x39; // Skip ahead to arrival count
-				address = subrecord[0] + bytesRead + 0x3c; // Skip ahead to remaining useful records
-				address += 8;
-				let airportBytesRead = 0x44; // Start with 0x44 bytes we've already read
+				let airportBytesRead = airportRecordPayloadOffset;
 
 				while (airportBytesRead < size) {
 					// This shouldn't be necessary, but it puts you back on the straight and narrow if something goes wrong in the parsing and we get off-track
-					address = subrecord[0] + bytesRead + airportBytesRead;
-
+					const airportRecordStart = subrecord[0] + bytesRead + airportBytesRead;
+					address = airportRecordStart;
+					if (address + 6 > fileView.byteLength) {
+						console.warn(`Airport record at offset 0x${airportRecordStart.toString(16)} is truncated; stopping this airport parse.`);
+						break;
+					}
 					const recordId = fileView.getUint16(address, true);
 					address += 2; // Move past the record ID
 					const recordSize = fileView.getUint32(address, true);
 					address += 4; // Move past the record size
+					if (recordSize < 6 || airportBytesRead + recordSize > size) {
+						console.warn(`Invalid airport record size ${recordSize} at offset 0x${airportRecordStart.toString(16)}; stopping this airport parse.`);
+						break;
+					}
 					switch (recordId) {
+						case 0x000b: // LibraryObject
+							await storeLibraryObjectAt(airportRecordStart);
+							break;
 						case 0x0019: // Airport Name
 							airport.name = new TextDecoder('utf-8').decode(getViewBytes(fileView, address, recordSize - 6));
 							break;
@@ -1621,13 +1762,7 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 							if (sceneryObjectLength1 > 0) {
 								const sceneryObjectBytes = getViewBytes(fileView, address, sceneryObjectLength1);
 								if (new DataView(sceneryObjectBytes.buffer, sceneryObjectBytes.byteOffset, sceneryObjectBytes.byteLength).getUint16(0, true) == 0x000b) {
-									const libObj: LibraryObject = await buildLibraryObject(fileView, address);
-									if (libraryObjects.has(libObj.guid)) {
-										libraryObjects.get(libObj.guid)!.push(libObj);
-									}
-									else {
-										libraryObjects.set(libObj.guid, [libObj]);
-									}
+									await storeLibraryObjectAt(address);
 								}
 								else if (new DataView(sceneryObjectBytes.buffer, sceneryObjectBytes.byteOffset, sceneryObjectBytes.byteLength).getUint16(0, true) == 0x0019) {
 									const simObj = await buildSimObject(fileView, address, file, configPathsByTitle);
@@ -1652,13 +1787,7 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 							if (sceneryObjectLength2 > 0) {
 								const sceneryObjectBytes = getViewBytes(fileView, address, sceneryObjectLength2);
 								if (new DataView(sceneryObjectBytes.buffer, sceneryObjectBytes.byteOffset, sceneryObjectBytes.byteLength).getUint16(0, true) == 0x000b) {
-									const libObj: LibraryObject = await buildLibraryObject(fileView, address);
-									if (libraryObjects.has(libObj.guid)) {
-										libraryObjects.get(libObj.guid)!.push(libObj);
-									}
-									else {
-										libraryObjects.set(libObj.guid, [libObj]);
-									}
+									await storeLibraryObjectAt(address);
 								}
 								else if (new DataView(sceneryObjectBytes.buffer, sceneryObjectBytes.byteOffset, sceneryObjectBytes.byteLength).getUint16(0, true) == 0x0019) {
 									const simObj = await buildSimObject(fileView, address, file, configPathsByTitle);
@@ -1774,7 +1903,7 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 							const subRecordSize = fileView.getUint16(address, true);
 							address += 2;
 							if (fileView.getInt16(address, true) == 0x000b) {
-								projectedMesh.libraryObject = await buildLibraryObject(fileView, address);
+								projectedMesh.libraryObject = await storeLibraryObjectAt(address);
 							}
 							address += subRecordSize;
 							airport.projectedMeshes.push(projectedMesh);
@@ -1791,6 +1920,20 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 				bytesRead += size;
 				airports.push(airport);
 				collectConversionGarbageIfNeeded(true);
+			}
+		}
+
+		if (hasWrappedSceneryRecords) {
+			reportStatus(id, control, `Scanning wrapped placements in ${path.basename(file)}...`);
+			for (let scanAddress = 0; scanAddress + 0x40 <= fileView.byteLength; scanAddress++) {
+				if ((scanAddress & 0x1fff) === 0) {
+					checkAbort(control);
+				}
+				if (parsedLibraryObjectOffsets.has(scanAddress) || !isLikelyLibraryObjectRecord(fileView, scanAddress)) {
+					continue;
+				}
+				await storeLibraryObjectAt(scanAddress);
+				collectConversionGarbageIfNeeded();
 			}
 		}
 	}
@@ -1848,6 +1991,7 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 				const startModelDataOffset: number = fileView.getInt32(address, true);
 				address += 4;
 				const modelDataSize: number = fileView.getInt32(address, true);
+				const absoluteModelDataOffset = subrecord[0] + startModelDataOffset;
 				if (!libraryObjects.has(guid)) {
 					console.info(`Model GUID ${guid}, size ${modelDataSize} at offset 0x${startModelDataOffset.toString(16)} not found in placements; skipping.`);
 					bytesRead += modelDataSize + 24;
@@ -1866,7 +2010,7 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 					modelReferencesByTile.get(tileIndex)!.push({
 						guid: guid,
 						file: file,
-						offset: startModelDataOffset + 0x80, // Why the 0x80-byte offset? Who knows?
+						offset: absoluteModelDataOffset,
 						size: modelDataSize
 					});
 					progressItems.push({
@@ -1876,7 +2020,7 @@ export async function convertScenery(inputPath: string, outputPath: string, cont
 				}
 				totalModelCount++;
 				reportStatus(id, control, `Looking for models in ${path.basename(file)}... found ${totalModelCount}`);
-				address = subrecord[0] + startModelDataOffset + modelDataSize;
+				address = absoluteModelDataOffset + modelDataSize;
 				bytesRead += modelDataSize + 24;
 				objectsRead++;
 			}
