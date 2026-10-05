@@ -20,6 +20,10 @@ Scone turns Microsoft Flight Simulator (MSFS) scenery packages into addons that 
 2. Select **Settings** in the sidebar and set your preferred output folder. This path is suggested when creating new conversions, but can be changed per task.
 3. Select **Current Conversions** to return to the active queue.
 
+**Maximum texture resolution** in Settings caps the longest texture edge (default: 2048 pixels; valid range: 1–16384). The saved value is applied when a conversion starts. DDS and KTX2 textures reuse smaller source mip levels where available; if the mip chain is too short, Scone decodes and downsizes the image while preserving its aspect ratio and generates a new mip chain. Textures are never upscaled.
+
+KTX2 BC1/BC2/BC3 textures are exported with legacy DXT1/DXT3/DXT5 DDS headers for FlightGear compatibility. BC7 and BC4/BC5 are decoded to legacy uncompressed RGBA DDS; BC5 normal maps retain the reconstructed blue channel. Decoded/resized textures may use more disk space than compressed originals. Unsupported formats or supercompression schemes report an error rather than silently exporting an incompatible texture.
+
 ## 4. Create a Conversion Task
 
 1. Select **Start a new conversion** to expand the task form.
@@ -67,6 +71,7 @@ Each tile ends up under `Objects/<lonBucket>/<latBucket>/<lon>/<lat>/`. Inside t
 
 - **“No models found”** – verify the scenery folder actually contains model BGLs (look for `modellib.BGL` equivalents). Scone now searches case-insensitively, but the files must still exist.
 - **Textures missing in exports** – ensure the source folder contains the referenced DDS files. Scone logs each missing texture in the console/terminal.
+- **FlightGear reports “unhandled DX10 pixel format”** – re-run the conversion with this version of Scone. Previously exported textures are not modified automatically; new exports use compatible legacy DDS headers for supported formats.
 - **AC3D looks mirrored** – check that you’re viewing with a left-handed coordinate system. The exporter already mirrors to match Blender; no manual flips should be required.
 - **Large exports stall** – conversions run per tile; if a huge tile appears stuck, watch the log for progress. Use “Cancel & Save” to stop after the current tile, then re-run with a smaller scenery subset.
 - **Large conversions and memory** – packaged builds run conversions in a bundled standalone Node.js process. Its V8 heap ceiling is set above the machine's physical RAM so Electron's per-isolate heap limit does not terminate otherwise viable conversions.

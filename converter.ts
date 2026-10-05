@@ -753,7 +753,7 @@ async function assembleModel(id: string, inputPath: string, outputPath: string, 
 					const outputTexturePath = path.join(tempTilePath, outputUri);
 					if (image.extras && fs.existsSync(image.extras.absolutePath || '')) {
 						// This is a SimObject whose custom textures have already been assigned earlier
-						convertToDDS(image.extras.absolutePath, outputTexturePath);
+						convertToDDS(image.extras.absolutePath, outputTexturePath, config.maxTextureSize);
 						continue;
 					}
 
@@ -962,7 +962,7 @@ async function assembleModel(id: string, inputPath: string, outputPath: string, 
 				const texturePath = path.join(tileOutputPath, image.uri);
 				if (fs.existsSync(texturePath)) {
 					fs.unlinkSync(texturePath);
-					convertToDDS(image.extras.absolutePath, texturePath);
+					convertToDDS(image.extras.absolutePath, texturePath, config.maxTextureSize);
 				}
 			}
 		}

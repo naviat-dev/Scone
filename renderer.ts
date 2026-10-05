@@ -66,6 +66,7 @@ let tasks: ConversionTaskDto[] = [];
 let settings: SettingsPayload = {
 	outputDir: '',
 	maxRepairRetries: 3,
+	maxTextureSize: 2048,
 	sceneryDirectories: [],
 	terrainVersion: 2,
 };
@@ -622,6 +623,20 @@ function buildSettingsSection(): HTMLElement {
 	retryInput.value = String(settings.maxRepairRetries);
 	retryField.append(retryInput);
 
+	const textureField = createElement('label', 'field');
+	textureField.htmlFor = 'max-texture-size';
+	textureField.append(createElement('span', undefined, 'Maximum texture resolution (pixels)'));
+	const textureInput = createElement('input');
+	textureInput.id = 'max-texture-size';
+	textureInput.name = 'max-texture-size';
+	textureInput.type = 'number';
+	textureInput.min = '1';
+	textureInput.max = '16384';
+	textureInput.step = '1';
+	textureInput.value = String(settings.maxTextureSize);
+	textureField.append(textureInput);
+	textureField.append(createElement('span', 'settings-note', 'Caps the longest edge, preserving aspect ratio. Default: 2048. Applied when a conversion starts.'));
+
 	const sceneryField = createElement('div', 'field');
 	sceneryField.append(createElement('span', undefined, 'Local scenery paths (shared by all conversions)'));
 	const sceneryEditorRow = createElement('div', 'scenery-editor-row');
@@ -706,6 +721,7 @@ function buildSettingsSection(): HTMLElement {
 		outputPath.field,
 		defaultTerrainVersion.field,
 		retryField,
+		textureField,
 		sceneryField,
 		note,
 		formMessage,
@@ -741,6 +757,7 @@ function buildSettingsSection(): HTMLElement {
 		outputPath.input.value = settings.outputDir;
 		defaultTerrainVersion.select.value = String(settings.terrainVersion);
 		retryInput.value = String(settings.maxRepairRetries);
+		textureInput.value = String(settings.maxTextureSize);
 		sceneryInput.value = '';
 		sceneryDirectories = [...settings.sceneryDirectories];
 		renderSceneryDirectories();
@@ -768,6 +785,12 @@ function buildSettingsSection(): HTMLElement {
 				return;
 			}
 			const maxRepairRetries = Number.parseInt(retriesText, 10);
+			const maxTextureSize = Number(textureInput.value);
+			if (!Number.isInteger(maxTextureSize) || maxTextureSize < 1 || maxTextureSize > 16384) {
+				formMessage.textContent = 'Maximum texture size must be a whole number from 1 to 16384.';
+				textureInput.focus();
+				return;
+			}
 			if (maxRepairRetries > 100) {
 				formMessage.textContent = 'Maximum repair retries must be a whole number from 0 to 100.';
 				retryInput.focus();
@@ -788,12 +811,14 @@ function buildSettingsSection(): HTMLElement {
 				settings = await api.saveSettings({
 					outputDir,
 					maxRepairRetries,
+					maxTextureSize,
 					sceneryDirectories,
 					terrainVersion: selectedTerrainVersion,
 				});
 				outputPath.input.value = settings.outputDir;
 				defaultTerrainVersion.select.value = String(settings.terrainVersion);
 				retryInput.value = String(settings.maxRepairRetries);
+				textureInput.value = String(settings.maxTextureSize);
 				sceneryInput.value = '';
 				sceneryDirectories = [...settings.sceneryDirectories];
 				renderSceneryDirectories();

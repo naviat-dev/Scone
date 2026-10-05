@@ -14,6 +14,7 @@ export let config = {
 	terrainVersion: 2 as 2 | 3,
 	maxRepairRetries: 3,
 	maxTileRetries: 3,
+	maxTextureSize: 2048,
 }
 
 const MAX_REPAIR_RETRY_LIMIT = 100;
@@ -68,6 +69,9 @@ function sanitizeConfigValues(): void {
 	config.sceneryDirectories = normalizeSceneryDirectories(config.sceneryDirectories);
 	config.terrainVersion = normalizeTerrainVersion(config.terrainVersion);
 	config.maxRepairRetries = normalizeMaxRepairRetries(config.maxRepairRetries);
+	if (!Number.isInteger(config.maxTextureSize) || config.maxTextureSize < 1 || config.maxTextureSize > 16384) {
+		config.maxTextureSize = 2048;
+	}
 }
 
 function resolveToolsExecutablePath(): string {

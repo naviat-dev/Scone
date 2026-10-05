@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { decodeBC1, decodeBC2, decodeBC3, decodeBC7, decodeDXT2, decodeDXT4 } from 'tex-decoder';
 
 const KTX2_IDENTIFIER = Buffer.from([0xAB, 0x4B, 0x54, 0x58, 0x20, 0x32, 0x30, 0xBB, 0x0D, 0x0A, 0x1A, 0x0A]);
 const KTX2_HEADER_SIZE = 80;
@@ -18,8 +19,6 @@ const DDS_CAPS_COMPLEX = 0x00000008;
 const DDS_CAPS_TEXTURE = 0x00001000;
 const DDS_CAPS_MIPMAP = 0x00400000;
 const DDS_RESOURCE_DIMENSION_TEXTURE_2D = 3;
-const DXGI_FORMAT_BC5_SNORM = 84;
-const VK_FORMAT_BC5_SNORM_BLOCK = 142;
 
 type DdsFormat = {
 	dxgiFormat: number;
@@ -48,10 +47,13 @@ const DDS_FORMATS = new Map<number, DdsFormat>([
 	[146, { dxgiFormat: 99, bytesPerBlock: 16 }], // BC7_UNORM_SRGB
 ]);
 
-export function convertToDDS(inputPath: string, outputPath: string): void {
+export function convertToDDS(inputPath: string, outputPath: string, maxSize: number = 2048): void {
+	if (!Number.isInteger(maxSize) || maxSize < 1 || maxSize > 16384) {
+		throw new Error('Maximum texture size must be a whole number from 1 to 16384.');
+	}
 	const extension = path.extname(inputPath).toLowerCase();
 	if (extension === '.dds') {
-		convertDds(inputPath, outputPath);
+		convertDds(inputPath, outputPath, maxSize);
 		return;
 	}
 	if (extension !== '.ktx2') {
@@ -115,13 +117,7 @@ export function convertToDDS(inputPath: string, outputPath: string): void {
 		const end = toSafeNumber(offset + length, 'mip end');
 		return input.subarray(start, end);
 	});
-	if (vkFormat === VK_FORMAT_BC5_SNORM_BLOCK) {
-		writeDecodedBc5Snorm(outputPath, width, height, mipData);
-		return;
-	}
-
-	const header = createCompressedDdsHeader(width, height, levelCount, format);
-	writeFileAtomically(outputPath, Buffer.concat([header, ...mipData]));
+	writeCompressedTexture(outputPath, width, height, mipData, format, maxSize);
 }
 
 function getMipSize(width: number, height: number, mip: number, bytesPerBlock: number): bigint {
@@ -133,7 +129,9 @@ function getMipSize(width: number, height: number, mip: number, bytesPerBlock: n
 }
 
 function createCompressedDdsHeader(width: number, height: number, mipCount: number, format: DdsFormat): Buffer {
-	const header = Buffer.alloc(DDS_HEADER_SIZE);
+	const fourCc = legacyFourCc(format.dxgiFormat);
+	if (!fourCc) throw new Error(`No legacy DDS header for DXGI format ${format.dxgiFormat}`);
+	const header = Buffer.alloc(LEGACY_DDS_HEADER_SIZE);
 	let offset = 0;
 	const write = (value: number): void => {
 		header.writeUInt32LE(value, offset);
@@ -151,20 +149,14 @@ function createCompressedDdsHeader(width: number, height: number, mipCount: numb
 	for (let index = 0; index < 11; index++) write(0);
 	write(32);
 	write(DDS_PIXEL_FORMAT_FOUR_CC);
-	write(0x30315844); // DX10
+	write(Buffer.from(fourCc).readUInt32LE(0));
 	for (let index = 0; index < 5; index++) write(0);
 	write(DDS_CAPS_TEXTURE | (mipCount > 1 ? DDS_CAPS_COMPLEX | DDS_CAPS_MIPMAP : 0));
 	for (let index = 0; index < 4; index++) write(0);
-	write(format.dxgiFormat);
-	write(DDS_RESOURCE_DIMENSION_TEXTURE_2D);
-	write(0);
-	write(1);
-	write(0);
-
 	return header;
 }
 
-function convertDds(inputPath: string, outputPath: string): void {
+function convertDds(inputPath: string, outputPath: string, maxSize: number): void {
 	const input = fs.readFileSync(inputPath);
 	if (input.length < LEGACY_DDS_HEADER_SIZE || input.readUInt32LE(0) !== DDS_MAGIC || input.readUInt32LE(4) !== 124) {
 		throw new Error(`Not a valid DDS file: ${inputPath}`);
@@ -175,62 +167,227 @@ function convertDds(inputPath: string, outputPath: string): void {
 	const mipCount = input.readUInt32LE(28) || 1;
 	const fourCc = input.toString('ascii', 84, 88);
 	const hasDx10Header = fourCc === 'DX10';
-	const isBc5Snorm = fourCc === 'BC5S'
-		|| (hasDx10Header && input.length >= DDS_HEADER_SIZE && input.readUInt32LE(128) === DXGI_FORMAT_BC5_SNORM);
-	if (!isBc5Snorm) {
-		copyFileAtomically(inputPath, outputPath);
-		return;
-	}
 	if (width === 0 || height === 0 || mipCount > 32) {
 		throw new Error(`DDS has invalid dimensions or mip count: ${inputPath}`);
 	}
-	if (input.readUInt32LE(112) !== 0) {
-		throw new Error(`Only single 2D BC5_SNORM DDS textures are supported: ${inputPath}`);
+	if (input.readUInt32LE(112) !== 0 || input.readUInt32LE(24) > 1) {
+		throw new Error(`Only single 2D DDS textures are supported: ${inputPath}`);
 	}
 	if (hasDx10Header) {
+		if (input.length < DDS_HEADER_SIZE) throw new Error(`Truncated DDS DX10 header: ${inputPath}`);
 		const resourceDimension = input.readUInt32LE(132);
 		const arraySize = input.readUInt32LE(140);
-		if (resourceDimension !== DDS_RESOURCE_DIMENSION_TEXTURE_2D || arraySize !== 1) {
-			throw new Error(`Only single 2D BC5_SNORM DDS textures are supported: ${inputPath}`);
+		if (resourceDimension !== DDS_RESOURCE_DIMENSION_TEXTURE_2D || arraySize !== 1 || (input.readUInt32LE(136) & 4)) {
+			throw new Error(`Only single 2D DDS textures are supported: ${inputPath}`);
 		}
+	}
+	const legacyFormats: Record<string, number> = {
+		DXT1: 71, DXT2: 74, DXT3: 74, DXT4: 77, DXT5: 77,
+		ATI1: 80, BC4U: 80, BC4S: 81, ATI2: 83, BC5U: 83, BC5S: 84,
+	};
+	const dxgiFormat = hasDx10Header ? input.readUInt32LE(128) : legacyFormats[fourCc];
+	const format = [...DDS_FORMATS.values()].find((candidate) => candidate.dxgiFormat === dxgiFormat);
+	if (!format) {
+		if (!hasDx10Header && Math.max(width, height) <= maxSize) {
+			copyFileAtomically(inputPath, outputPath);
+			return;
+		}
+		writeUncompressedDds(input, outputPath, width, height, mipCount, maxSize, hasDx10Header);
+		return;
 	}
 
 	let offset = hasDx10Header ? DDS_HEADER_SIZE : LEGACY_DDS_HEADER_SIZE;
 	const mipData: Buffer[] = [];
 	for (let mip = 0; mip < mipCount; mip++) {
-		const length = toSafeNumber(getMipSize(width, height, mip, 16), 'DDS mip length');
+		const length = toSafeNumber(getMipSize(width, height, mip, format.bytesPerBlock), 'DDS mip length');
 		if (offset + length > input.length) {
 			throw new Error(`DDS mip ${mip} extends beyond the file: ${inputPath}`);
 		}
 		mipData.push(input.subarray(offset, offset + length));
 		offset += length;
 	}
-	writeDecodedBc5Snorm(outputPath, width, height, mipData);
+	writeCompressedTexture(outputPath, width, height, mipData, format, maxSize, fourCc);
 }
 
-function writeDecodedBc5Snorm(outputPath: string, width: number, height: number, mipData: Buffer[]): void {
-	const decodedMips = mipData.map((data, mip) => {
-		const mipWidth = Math.max(1, Math.floor(width / (2 ** mip)));
-		const mipHeight = Math.max(1, Math.floor(height / (2 ** mip)));
-		return decodeBc5Snorm(data, mipWidth, mipHeight);
-	});
-	const header = createRgba8DdsHeader(width, height, mipData.length);
-	writeFileAtomically(outputPath, Buffer.concat([header, ...decodedMips]));
+function legacyFourCc(dxgiFormat: number): string | undefined {
+	if (dxgiFormat === 71 || dxgiFormat === 72) return 'DXT1';
+	if (dxgiFormat === 74 || dxgiFormat === 75) return 'DXT3';
+	if (dxgiFormat === 77 || dxgiFormat === 78) return 'DXT5';
+	return undefined;
 }
 
-function decodeBc5Snorm(data: Buffer, width: number, height: number): Buffer {
+function mipDimension(size: number, mip: number): number {
+	return Math.max(1, Math.floor(size / (2 ** mip)));
+}
+
+function firstCappedMip(width: number, height: number, count: number, maxSize: number): number {
+	let mip = 0;
+	while (mip < count - 1 && Math.max(mipDimension(width, mip), mipDimension(height, mip)) > maxSize) mip++;
+	return mip;
+}
+
+function writeCompressedTexture(
+	outputPath: string, width: number, height: number, mips: Buffer[], format: DdsFormat, maxSize: number, sourceFourCc?: string,
+): void {
+	const first = firstCappedMip(width, height, mips.length, maxSize);
+	width = mipDimension(width, first);
+	height = mipDimension(height, first);
+	mips = mips.slice(first);
+	const needsResize = Math.max(width, height) > maxSize;
+	if (legacyFourCc(format.dxgiFormat) && !needsResize) {
+		// Compressed blocks (including sRGB variants) are unchanged. Legacy DDS cannot encode the sRGB tag.
+		const header = createCompressedDdsHeader(width, height, mips.length, format);
+		if (sourceFourCc === 'DXT2' || sourceFourCc === 'DXT4') header.write(sourceFourCc, 84, 'ascii');
+		writeFileAtomically(outputPath, Buffer.concat([header, ...mips]));
+		return;
+	}
+	const decode = (data: Buffer, w: number, h: number): Buffer => decodeCompressedMip(data, w, h, format.dxgiFormat, sourceFourCc);
+	if (needsResize) {
+		writeResizedRgba(outputPath, decode(mips[0], width, height), width, height, maxSize);
+		return;
+	}
+	const decoded = mips.map((data, mip) => decode(data, mipDimension(width, mip), mipDimension(height, mip)));
+	writeFileAtomically(outputPath, Buffer.concat([createRgba8DdsHeader(width, height, decoded.length), ...decoded]));
+}
+
+function decodeCompressedMip(data: Buffer, width: number, height: number, format: number, fourCc?: string): Buffer {
+	if (format >= 80 && format <= 84) {
+		return decodeBcChannels(data, width, height, format === 81 || format === 84, format >= 83);
+	}
+	const decoder = fourCc === 'DXT2' ? decodeDXT2 : fourCc === 'DXT4' ? decodeDXT4
+		: format === 71 || format === 72 ? decodeBC1
+			: format === 74 || format === 75 ? decodeBC2
+				: format === 77 || format === 78 ? decodeBC3 : decodeBC7;
+	// Some decoders require complete 4x4 blocks, including the final sub-4x4 mip.
+	const paddedWidth = Math.ceil(width / 4) * 4;
+	const paddedHeight = Math.ceil(height / 4) * 4;
+	const rgba = decoder(data, paddedWidth, paddedHeight);
+	const bgra = Buffer.alloc(width * height * 4);
+	for (let y = 0; y < height; y++) {
+		for (let x = 0; x < width; x++) {
+			const source = (y * paddedWidth + x) * 4;
+			const target = (y * width + x) * 4;
+			bgra[target] = rgba[source + 2];
+			bgra[target + 1] = rgba[source + 1];
+			bgra[target + 2] = rgba[source];
+			bgra[target + 3] = rgba[source + 3];
+		}
+	}
+	return bgra;
+}
+
+function resizeBgra(data: Buffer, width: number, height: number, newWidth: number, newHeight: number): Buffer {
+	const output = Buffer.alloc(newWidth * newHeight * 4);
+	// Area averaging avoids aliasing and keeps all source pixels for non-power-of-two dimensions.
+	for (let y = 0; y < newHeight; y++) {
+		const top = y * height / newHeight;
+		const bottom = (y + 1) * height / newHeight;
+		for (let x = 0; x < newWidth; x++) {
+			const left = x * width / newWidth;
+			const right = (x + 1) * width / newWidth;
+			const sums = [0, 0, 0, 0];
+			let weight = 0;
+			for (let sy = Math.floor(top); sy < Math.ceil(bottom); sy++) {
+				for (let sx = Math.floor(left); sx < Math.ceil(right); sx++) {
+					const area = (Math.min(right, sx + 1) - Math.max(left, sx)) * (Math.min(bottom, sy + 1) - Math.max(top, sy));
+					const offset = (sy * width + sx) * 4;
+					for (let channel = 0; channel < 4; channel++) sums[channel] += data[offset + channel] * area;
+					weight += area;
+				}
+			}
+			for (let channel = 0; channel < 4; channel++) output[(y * newWidth + x) * 4 + channel] = Math.round(sums[channel] / weight);
+		}
+	}
+	return output;
+}
+
+function writeResizedRgba(outputPath: string, data: Buffer, width: number, height: number, maxSize: number): void {
+	const scale = Math.min(1, maxSize / Math.max(width, height));
+	const newWidth = Math.max(1, Math.floor(width * scale));
+	const newHeight = Math.max(1, Math.floor(height * scale));
+	const mips = [resizeBgra(data, width, height, newWidth, newHeight)];
+	width = newWidth;
+	height = newHeight;
+	while (width > 1 || height > 1) {
+		const nextWidth = mipDimension(width, 1);
+		const nextHeight = mipDimension(height, 1);
+		mips.push(resizeBgra(mips[mips.length - 1], width, height, nextWidth, nextHeight));
+		width = nextWidth;
+		height = nextHeight;
+	}
+	writeFileAtomically(outputPath, Buffer.concat([createRgba8DdsHeader(newWidth, newHeight, mips.length), ...mips]));
+}
+
+function writeUncompressedDds(
+	input: Buffer, outputPath: string, width: number, height: number, mipCount: number, maxSize: number, dx10: boolean,
+): void {
+	let bits = input.readUInt32LE(88);
+	let masks = [92, 96, 100, 104].map((offset) => input.readUInt32LE(offset));
+	if (dx10) {
+		const format = input.readUInt32LE(128);
+		if (![28, 29, 87, 88, 91, 93].includes(format)) throw new Error(`Unsupported DDS DXGI format ${format}`);
+		bits = 32;
+		masks = format === 28 || format === 29
+			? [0x000000FF, 0x0000FF00, 0x00FF0000, 0xFF000000]
+			: [0x00FF0000, 0x0000FF00, 0x000000FF, format === 88 || format === 93 ? 0 : 0xFF000000];
+	} else if ((input.readUInt32LE(80) & 0x40) === 0 || ![16, 24, 32].includes(bits)) {
+		throw new Error('Cannot resize unsupported DDS pixel format');
+	}
+	const bytes = bits / 8;
+	const first = firstCappedMip(width, height, mipCount, maxSize);
+	let offset = dx10 ? DDS_HEADER_SIZE : LEGACY_DDS_HEADER_SIZE;
+	const decoded: Buffer[] = [];
+	const extract = (pixel: number, mask: number, fallback: number): number => {
+		if (mask === 0) return fallback;
+		let shift = 0;
+		while (((mask >>> shift) & 1) === 0) shift++;
+		const maximum = mask >>> shift;
+		return Math.round(((pixel & mask) >>> shift) * 255 / maximum);
+	};
+	for (let mip = 0; mip < mipCount; mip++) {
+		const w = mipDimension(width, mip);
+		const h = mipDimension(height, mip);
+		const pitch = mip === 0 && (input.readUInt32LE(8) & DDS_HEADER_PITCH) ? input.readUInt32LE(20) : w * bytes;
+		if (pitch < w * bytes || offset + pitch * h > input.length) throw new Error(`Invalid DDS mip ${mip}`);
+		if (mip >= first) {
+			const data = Buffer.alloc(w * h * 4);
+			for (let y = 0; y < h; y++) {
+				for (let x = 0; x < w; x++) {
+					const pixel = input.readUIntLE(offset + y * pitch + x * bytes, bytes);
+					const target = (y * w + x) * 4;
+					data[target] = extract(pixel, masks[2], 0);
+					data[target + 1] = extract(pixel, masks[1], 0);
+					data[target + 2] = extract(pixel, masks[0], 0);
+					data[target + 3] = extract(pixel, masks[3], 255);
+				}
+			}
+			decoded.push(data);
+		}
+		offset += pitch * h;
+	}
+	width = mipDimension(width, first);
+	height = mipDimension(height, first);
+	if (Math.max(width, height) > maxSize) writeResizedRgba(outputPath, decoded[0], width, height, maxSize);
+	else writeFileAtomically(outputPath, Buffer.concat([createRgba8DdsHeader(width, height, decoded.length), ...decoded]));
+}
+
+function decodeBcChannels(data: Buffer, width: number, height: number, signed: boolean, twoChannels: boolean): Buffer {
 	const blocksWide = Math.max(1, Math.ceil(width / 4));
 	const blocksHigh = Math.max(1, Math.ceil(height / 4));
-	if (data.length !== blocksWide * blocksHigh * 16) {
-		throw new Error(`Invalid BC5_SNORM mip data for ${width}x${height}`);
+	const blockSize = twoChannels ? 16 : 8;
+	if (data.length !== blocksWide * blocksHigh * blockSize) {
+		throw new Error(`Invalid BC4/BC5 mip data for ${width}x${height}`);
 	}
 
 	const output = Buffer.alloc(width * height * 4);
 	let blockOffset = 0;
 	for (let blockY = 0; blockY < blocksHigh; blockY++) {
 		for (let blockX = 0; blockX < blocksWide; blockX++) {
-			const redPalette = createSnormPalette(data.readInt8(blockOffset), data.readInt8(blockOffset + 1));
-			const greenPalette = createSnormPalette(data.readInt8(blockOffset + 8), data.readInt8(blockOffset + 9));
+			const palette = (offset: number): number[] => signed
+				? createSnormPalette(data.readInt8(offset), data.readInt8(offset + 1))
+				: createUnormPalette(data[offset], data[offset + 1]);
+			const redPalette = palette(blockOffset);
+			const greenPalette = twoChannels ? palette(blockOffset + 8) : redPalette;
 			for (let pixel = 0; pixel < 16; pixel++) {
 				const x = blockX * 4 + (pixel % 4);
 				const y = blockY * 4 + Math.floor(pixel / 4);
@@ -239,17 +396,25 @@ function decodeBc5Snorm(data: Buffer, width: number, height: number): Buffer {
 				}
 
 				const redValue = redPalette[readBc4Index(data, blockOffset, pixel)];
-				const greenValue = greenPalette[readBc4Index(data, blockOffset + 8, pixel)];
+				const greenValue = twoChannels ? greenPalette[readBc4Index(data, blockOffset + 8, pixel)] : redValue;
 				const outputOffset = (y * width + x) * 4;
-				output[outputOffset] = reconstructBc5BlueChannel(redValue, greenValue);
+				output[outputOffset] = twoChannels ? reconstructBc5BlueChannel(redValue, greenValue) : redValue;
 				output[outputOffset + 1] = greenValue;
 				output[outputOffset + 2] = redValue;
 				output[outputOffset + 3] = 255;
 			}
-			blockOffset += 16;
+			blockOffset += blockSize;
 		}
 	}
 	return output;
+}
+
+function createUnormPalette(first: number, second: number): number[] {
+	const palette = [first, second];
+	const count = first > second ? 7 : 5;
+	for (let index = 1; index < count; index++) palette.push(Math.round(((count - index) * first + index * second) / count));
+	if (count === 5) palette.push(0, 255);
+	return palette;
 }
 
 function createSnormPalette(endpoint0: number, endpoint1: number): number[] {

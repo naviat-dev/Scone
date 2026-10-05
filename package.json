@@ -22,7 +22,7 @@
     "build:runtime": "node scripts/copy-node-runtime.cjs",
     "start": "npm run build && node dist/start.js",
     "package": "npm run build && npm run build:runtime && electron-builder --publish never",
-    "test": "npm run build:main && node --test dist/conversion-runtime.test.js"
+    "test": "npm run build:main && node --test dist/*.test.js"
   },
   "devDependencies": {
     "@types/node": "^24.13.3",
@@ -71,6 +71,7 @@
     "ktx-parse": "^2.0.0",
     "path": "^0.12.7",
     "pngjs": "^7.0.0",
+    "tex-decoder": "^2.0.0",
     "xmlbuilder2": "^4.0.3",
     "xmldom": "^0.6.0"
   },

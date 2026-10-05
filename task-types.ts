@@ -35,6 +35,7 @@ export type AddTaskPayload = {
 export type SettingsPayload = {
 	outputDir: string;
 	maxRepairRetries: number;
+	maxTextureSize: number;
 	sceneryDirectories: string[];
 	terrainVersion: TerrainVersion;
 };

@@ -440,6 +440,7 @@ function registerIpcHandlers(): void {
 	ipcMain.handle('settings:get', (): SettingsPayload => ({
 		outputDir: config.outputDir,
 		maxRepairRetries: config.maxRepairRetries,
+		maxTextureSize: config.maxTextureSize,
 		sceneryDirectories: [...config.sceneryDirectories],
 		terrainVersion: config.terrainVersion,
 	}));
@@ -448,13 +449,18 @@ function registerIpcHandlers(): void {
 		const payload = requireObject(value, 'Settings');
 		const outputDir = prepareOutputDirectory(payload.outputDir);
 		const maxRepairRetries = payload.maxRepairRetries;
+		const maxTextureSize = payload.maxTextureSize;
 		const sceneryDirectories = requireSceneryDirectories(payload.sceneryDirectories);
 		const terrainVersion = requireTerrainVersion(payload.terrainVersion, 'Terrain version');
 		if (!Number.isInteger(maxRepairRetries) || (maxRepairRetries as number) < 0 || (maxRepairRetries as number) > 100) {
 			throw new Error('Maximum repair retries must be a whole number from 0 to 100.');
 		}
 
+		if (!Number.isInteger(maxTextureSize) || (maxTextureSize as number) < 1 || (maxTextureSize as number) > 16384) {
+			throw new Error('Maximum texture size must be a whole number from 1 to 16384.');
+		}
 		config.outputDir = outputDir;
+		config.maxTextureSize = maxTextureSize as number;
 		config.maxRepairRetries = maxRepairRetries as number;
 		config.sceneryDirectories = sceneryDirectories;
 		config.terrainVersion = terrainVersion;
@@ -462,6 +468,7 @@ function registerIpcHandlers(): void {
 		return {
 			outputDir: config.outputDir,
 			maxRepairRetries: config.maxRepairRetries,
+			maxTextureSize: config.maxTextureSize,
 			sceneryDirectories: [...config.sceneryDirectories],
 			terrainVersion: config.terrainVersion,
 		};
