@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import zlib from 'node:zlib';
+import { Semaphore } from "async-mutex";
 import { findAltitudeMeters } from './terrain-elev.js';
 import { config } from './config.js';
 
@@ -8,6 +9,7 @@ const LATITUDE_INDEX = [[89, 12], [86, 4], [83, 2], [76, 1], [62, 0.5], [22, 0.2
 const TERRASYNC_WS2_URL = 'https://terrasync.b-cdn.net/Terrain';
 const TERRASYNC_VPB_WS3_URL = 'https://terrasync-ws3.b-cdn.net/vpb';
 const TERRASYNC_TERR_WS3_URL = 'https://terrasync-ws3.b-cdn.net/Terrain';
+const REQUEST_SEMAPHORE = new Semaphore(16);
 
 const ZIP_LOCAL_FILE_HEADER_SIGNATURE = 0x04034b50;
 const ZIP_CENTRAL_DIRECTORY_SIGNATURE = 0x02014b50;
@@ -93,6 +95,7 @@ function terrainMeshPathForEntry(tileDirectory: string, terrainFile: string): st
 }
 
 async function request(url: string, options?: RequestInit): Promise<Response> {
+	await REQUEST_SEMAPHORE.acquire();
 	let response = await fetch(url, options);
 	let tries = 1;
 	while (!response.ok && response.status !== 404 && tries < config.maxTileRetries) {
@@ -100,6 +103,7 @@ async function request(url: string, options?: RequestInit): Promise<Response> {
 		await new Promise((resolve) => setTimeout(resolve, 1000));
 		response = await fetch(url, options);
 	}
+	REQUEST_SEMAPHORE.release();
 	return response;
 }
 
