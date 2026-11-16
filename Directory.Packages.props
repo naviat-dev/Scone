@@ -10,6 +10,6 @@
   <ItemGroup>
     <PackageVersion Include="geometry3Sharp" Version="1.0.324" />
     <PackageVersion Include="Newtonsoft.Json" Version="13.0.4" />
-    <PackageVersion Include="SharpGLTF.Toolkit" Version="1.0.5" />
+    <PackageVersion Include="SharpGLTF.Toolkit" Version="1.0.7" />
   </ItemGroup>
 </Project>
