@@ -1,4 +1,4 @@
-# Scone Scenery Conversion Guide
+# Scone
 
 Scone turns Microsoft Flight Simulator (MSFS) scenery packages into addons that can be used in FlightGear. This README focuses on the conversion workflow—what you need, how to prepare scenery, how to run a conversion, and what files to expect afterward.
 
